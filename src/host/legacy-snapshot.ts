@@ -1,0 +1,23 @@
+import { ABILITIES } from '../../vendor/pet-plugins/behavior/core.mjs';
+import { BODY_ACTIONS } from '../../vendor/pet-plugins/behavior/embodiment.mjs';
+import { deriveAffect } from '../../vendor/pet-plugins/behavior/affect.mjs';
+import { SOFT_SCENES } from '../../vendor/pet-plugins/behavior/soft-tantrum.mjs';
+import { describeHumanity } from '../../vendor/dsh-pet/src/host/humanity.mjs';
+import type {CanonicalEnvelope} from '../storage/postgres.js';
+type Obj=Record<string,any>;
+/** Projects only the committed envelope. In particular it does not run the old
+ * snapshot's recovery, command advancement or labor settlement side effects. */
+export function projectLegacySnapshot(envelope:CanonicalEnvelope, providers:Record<string,boolean>={}, now=Date.now()) {
+  const p=structuredClone(envelope.legacy) as Obj,h=describeHumanity(structuredClone(envelope.humanity),now), events=Array.isArray(p.events)?p.events:[],facts=(p.facts||[]).filter((x:Obj)=>!x.deleted),growth=p.growth||{};
+  const sources=new Set<string>([...facts,...(growth.memories||[]),...(growth.persona?.versions||[])].flatMap((x:Obj)=>x.sources||[]));
+  const abilities=Object.fromEntries(Object.entries(p.abilities||{}).map(([key,value])=>[key,{...(value as Obj),title:(ABILITIES as Obj)[key]||key}]));
+  const config=p.config||{},wallet=p.wallet||{},services=p.services||{},inventory=Array.isArray(services.inventory)?services.inventory:[],costs=config.costs||{};
+  const service={menu:[{id:'rice',name:'大白饭',price:costs.feed,effects:{satiety:12,joy:12,stamina:2,comfort:3,love:3}}],inventory:inventory.filter((i:Obj)=>i.status!=='eaten'),eating:services.eating??null,balance:wallet.balance,frozen:wallet.frozen,phone:{price:costs.explore,networkOpen:!!config.networkLearning,searchGranted:p.abilities?.search?.status==='granted',dailyRuns:config.exploration?.dailyRuns},purchasing:{price:costs.feed,shortfall:wallet.frozen?0:Math.max(0,(costs.feed||0)-(wallet.balance||0)),canAfford:!!wallet.frozen||wallet.balance>=costs.feed},foodNeed:{satiety:h.stats?.satiety??null,desire:h.desires?.food??null,lastFedAt:h.lastFedAt??null,resting:!!h.resting,body:h.body??null,feedCooldownUntil:h.cooldowns?.feed??0},recent:Object.values(services.receipts||{}).sort((a:any,b:any)=>(a.at||0)-(b.at||0)).slice(-5)};
+  const contracts=p.labor?.contracts||[],current=contracts.find((c:Obj)=>['offered','working','paused','unpaid'].includes(c.status))||null,l=p.labor||{};
+  const labor={current,draft:l.draft||null,execution:l.execution||null,error:l.error||null,message:l.lastSpeech?.contractId===current?.id?l.lastSpeech:null,awaitingReply:l.awaitingReply===true,history:contracts.filter((c:Obj)=>['paid','declined'].includes(c.status)).slice(-12).reverse(),balance:wallet.balance};
+  const soft={scenes:Object.entries(SOFT_SCENES).map(([id,s])=>({id,label:s.label,pose:s.pose})),current:p.world?.soft?.current?.expires>now?p.world.soft.current:null};
+  const world={...(p.world||{}),command:null,soft,activity:null,body:h.body||null,sleeping:!!(h.sleeping||h.resting),confirmedSleep:envelope.humanity.sleeping===true,space:p.space||null,paused:envelope.life.constraints.paused,actions:BODY_ACTIONS,affect:deriveAffect(h),services:service,labor};
+  const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now));
+  const state={...p,world:{...(p.world||{}),command:null},facts,sources:Object.fromEntries(events.filter((e:Obj)=>sources.has(e.id)).map((e:Obj)=>[e.id,{ts:e.ts,text:String(e.text||'').slice(0,1000)}])),seen:undefined,forgotten:undefined,events:events.slice(-100),reactionError:null,providers:{search:!!providers.search,fetch:!!providers.fetch,image:!!providers.image,model:!!providers.model,bili:!!providers.bili},abilities,jobs:(p.jobs||[]).slice(-20),stats:{events:events.length,memories:facts.length},growth:{...growth,memories:(growth.memories||[]).filter((m:Obj)=>!m.deleted),strategies:(growth.strategies||[]).filter((m:Obj)=>!m.deleted),attempts:(growth.attempts||[]).slice(-60),goals:(growth.goals||[]).slice(-30)},learning:{day,used:p.usage?.[day]?.totalCalls||0,limit:config.learning?.dailyModelCalls,status:!config.networkLearning?'phone-closed':!p.abilities?.search||!Object.values(p.abilities||{}).some((a:any)=>a.status==='granted')?'permission-needed':'ready'},services:service};
+  return {state,world,labor,services:service};
+}

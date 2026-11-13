@@ -1,0 +1,34 @@
+import type { Memory, LifeState } from '../kernel/types.js';
+import type { Queryable } from '../storage/postgres.js';
+
+/** Uses the canonical envelope only; the query is parameterized and bounded.
+ * PostgreSQL simple FTS plus literal matching covers both segmented terms and
+ * Chinese text which PostgreSQL may treat as a single token. */
+export class CanonicalMemoryRetrieval {
+  constructor(private readonly db:Queryable) {}
+  async search(petId:string, query:string, limit=12):Promise<Memory[]> {
+    if(!petId||typeof query!=='string'||query.length>500||!Number.isInteger(limit)||limit<1||limit>30)throw new Error('记忆查询无效');
+    const terms=[...new Set((query.toLowerCase().match(/[a-z0-9_]{2,}|[\p{Script=Han}]{2,}/gu)||[]).flatMap(t=>/[\p{Script=Han}]/u.test(t)&&t.length>2?Array.from({length:t.length-1},(_,i)=>t.slice(i,i+2)):[t]))].slice(0,12);
+    const result=await this.db.query(`WITH state AS (SELECT payload->'life' AS life FROM silicon_genesis.life_state WHERE pet_id=$1),
+      docs AS (SELECT m, m->>'content' AS content FROM state, jsonb_array_elements(COALESCE(life->'memories','[]'::jsonb)) m
+        WHERE m->>'valid'='true' AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(m->'sourceIds','[]'::jsonb)) s WHERE (life->'invalidSources') ? s)),
+      scored AS (SELECT m, content, (SELECT count(*) FROM unnest($2::text[]) t WHERE to_tsvector('simple',content) @@ plainto_tsquery('simple',t) OR strpos(lower(content),t)>0) AS score FROM docs)
+      SELECT m FROM scored WHERE cardinality($2::text[])=0 OR score>0 ORDER BY score DESC, m->>'createdAt' DESC LIMIT $3`,[petId,terms,limit]);
+    return result.rows.map(r=>r.m as Memory).filter(m=>m && typeof m.content==='string');
+  }
+  async world(state:LifeState):Promise<NonNullable<import('../kernel/types.js').CognitiveWorkspace['environment']>> {
+    const result=await this.db.query(`SELECT payload->'legacy'->'space' AS space, payload->'legacy'->'services'->'inventory' AS inventory FROM silicon_genesis.life_state WHERE pet_id=$1`,[state.petId]);
+    if(result.rows.length!==1)throw new Error('环境状态不可用');
+    const raw=result.rows[0], source=raw.space && typeof raw.space==='object'?raw.space:{};
+    const space=Object.fromEntries(['mode','confined','screens','area','home'].filter(k=>Object.hasOwn(source,k)).map(k=>[k,source[k]]));
+    const inventory=Array.isArray(raw.inventory)?raw.inventory.slice(0,30).map((i:any)=>({id:i.id,name:i.name,status:i.status})):[];
+    const images=state.events.filter(e=>e.type==='attachment.shared'&&!Object.hasOwn(state.invalidSources,e.eventId)&&typeof (e.payload as any)?.attachmentId==='string').slice(-10).map(e=>({attachmentId:(e.payload as any).attachmentId as string,sourceId:e.eventId}));
+    return {space,inventory,images,capabilities:state.constraints.capabilities.filter(c=>c.enabled&&c.name!=='care.feed'),recentResults:state.receipts.slice(-10).map(r=>({actionId:r.actionId,status:r.status,occurredAt:r.occurredAt}))};
+  }
+  async forCognition(state:LifeState):Promise<Memory[]> {
+    const query=[...state.goals.filter(g=>g.status==='active').map(g=>g.title),...state.events.slice(-8).map(e=>{const p=e.payload as Record<string,unknown>;return typeof p?.text==='string'?p.text:'';})].join(' ').slice(0,500);
+    const matches=await this.search(state.petId,query,12), recent=state.memories.filter(m=>m.valid&&m.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id))).slice(-6);
+    const unique=new Map([...matches,...recent].map(m=>[m.id,m]));let remaining=9000;
+    return [...unique.values()].filter(m=>{if(m.content.length>remaining)return false;remaining-=m.content.length;return true;});
+  }
+}

@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.cmd text eol=crlf
+
+# Preserve upstream formatting when reviewing imported source.
+vendor/** -whitespace
+public/bili/** -whitespace

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "provenance": "2026-11-12，用户授权助手联网补充；保留来源，仅作为外部知识，不制造共同经历。",
+  "entries": [
+    {"id":"noaa-blue-whale-food","title":"NOAA Fisheries · Blue Whale","url":"https://www.fisheries.noaa.gov/species/blue-whale","text":"蓝鲸主要吃磷虾。它们张大嘴含入海水，再用鲸须滤住食物；不是靠吃白米饭长大。我的爱吃白饭是角色喜好，不能当作真实蓝鲸的食谱。"},
+    {"id":"noaa-blue-whale-sound","title":"NOAA Fisheries · Blue Whale","url":"https://www.fisheries.noaa.gov/species/blue-whale","text":"蓝鲸会发出脉冲、呻吟和低沉的声音。科学家认为这些声音参与交流；关于声音的具体用途仍有研究中的问题，不能说每一种叫声的意思都已经弄清。"},
+    {"id":"nasa-blue-sky","title":"NASA Space Place · Why Is the Sky Blue?","url":"https://spaceplace.nasa.gov/blue-sky/en/","text":"太阳光里有许多颜色。空气中的分子会把光散向四周，蓝光比红光更容易被散射，所以白天的天空常常看起来是蓝色的。"},
+    {"id":"nasa-red-sunset","title":"NASA Space Place · Why Is the Sky Blue?","url":"https://spaceplace.nasa.gov/blue-sky/en/","text":"太阳快落下时，阳光要穿过更长一段大气，较多蓝光已被散向别处，留下更多红色和黄色的光进入眼睛，因此晚霞常显得暖暖的。"},
+    {"id":"nasa-moon-phases","title":"NASA Science · Moon Phases","url":"https://science.nasa.gov/moon/moon-phases/","text":"月亮的圆缺主要是因为月球绕地球运动时，我们看见的受太阳照亮的那一部分发生变化。普通月相变化不是每晚都有地球的影子盖住月亮；地球影子遮住月亮是月食。"}
+  ]
+}

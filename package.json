@@ -1,0 +1,27 @@
+{
+  "name": "silicon-genesis",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "node tools/prepare-host.mjs && tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@andresaya/edge-tts": "1.9.1",
+    "@anthropic-ai/sdk": "0.135.0",
+    "@langchain/core": "*",
+    "@langchain/langgraph": "*",
+    "openai": "7.39.0",
+    "pg": "*",
+    "pg-boss": "12.38.2",
+    "zod": "*",
+    "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "*",
+    "typescript": "5.9.3"
+  }
+}

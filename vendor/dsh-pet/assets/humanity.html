@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>大肥鱼 · 身心小记</title>
+  <link rel="icon" href="./humanity/portrait.png">
+  <link rel="stylesheet" href="./humanity/style.css">
+  <script src="./humanity/panel.js" defer></script>
+  <script src="./humanity/companion.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><a class="wordmark" href="./humanity">大肥鱼<span>身心小记</span></a><div class="connection" id="connection" role="status">正在轻轻靠近…</div></header>
+    <div class="layout">
+      <aside class="companion">
+        <div class="portrait"><img src="./humanity/portrait.png" alt="蓝发鲸鱼大肥鱼" width="252" height="252"></div>
+        <div class="mood-line"><span class="mood-dot"></span><span id="mood">先坐一会儿</span></div>
+        <h1 id="pet-name">大肥鱼</h1>
+        <p class="thought" id="thought">正在听听它心里的话</p>
+        <div class="suggestion"><span>此刻想要</span><strong id="suggestion">等一小会儿</strong></div>
+        <p class="companion-note">嘴上说着不要，<br>尾巴总会先靠过来。</p>
+        <details class="about"><summary>它是怎样慢慢变化的</summary><p>身体随时间消耗，也会在夜间和午休时恢复。每次陪伴和照料都会留下痕迹，情绪会慢慢平复。痛苦度越低越舒坦，其余身体状态越高越充足。</p><p>六欲是它的六种生活需要，越高越想要。轻轻互动就好，照料后留一点消化和感受的时间。</p></details>
+      </aside>
+      <section class="notebook" aria-label="身体与心事">
+        <nav class="tabs" aria-label="小记视图"><button type="button" class="tab active" data-tab="today" aria-pressed="true">此刻</button><button type="button" class="tab" data-tab="memories" aria-pressed="false">小事</button><button type="button" class="tab" data-tab="long-memory" aria-pressed="false">记忆</button><button type="button" class="tab" data-tab="diary-book" aria-pressed="false">日记</button><button type="button" class="tab" data-tab="growth-book" aria-pressed="false">成长</button><button type="button" class="tab" data-tab="labor-book" aria-pressed="false">搬砖</button><button type="button" class="tab" data-tab="growing" aria-pressed="false">养成设置</button></nav>
+        <div id="today">
+          <section class="body-section"><div class="section-title"><h2>身体有话说</h2><span>痛苦与压力越低越好</span></div><div class="stats" id="stats" aria-label="身体状态"></div>
+            <details class="state-editor" id="state-editor">
+              <summary>偶尔干预一下<span>手动调整状态</span></summary>
+              <p id="state-editor-note">立即改变选中的指标，之后继续自然变化。她会察觉明显的反差，却不知道原因。</p>
+              <form id="state-adjust" aria-describedby="state-editor-note">
+                <fieldset id="state-fields" disabled><legend class="visually-hidden">调整身体状态，范围 0 到 100</legend><div class="state-fields" id="state-inputs"></div></fieldset>
+                <div class="state-editor-actions"><button class="primary" type="submit" id="state-apply" disabled>立即生效</button><button class="quiet" type="button" id="state-reset" disabled>读取当前值</button></div>
+                <p class="feedback" id="state-feedback" role="status" aria-live="polite">只提交你改动的指标，自动消耗与恢复照常。</p>
+              </form>
+            </details>
+          </section>
+          <div class="inner-world">
+            <section><div class="section-title"><h2>七情</h2><span>心里起的小波澜</span></div><div class="emotions" id="emotions"></div></section>
+            <section><div class="section-title"><h2>六欲</h2><span>数值越高，越想要</span></div><div class="desires" id="desires"></div></section>
+          </div>
+          <section class="care-section"><div class="section-title"><h2>陪它做点什么</h2><span id="care-hint">小事也会被记住</span></div><div class="actions" id="actions">
+            <button type="button" data-action="feed">喂点饭</button><button type="button" data-action="water">喝点水</button><button type="button" data-action="pet">摸摸头</button><button type="button" data-action="accompany">陪它待会儿</button><button type="button" data-action="play">一起玩</button><button type="button" data-action="explore">看点新鲜的</button><button type="button" data-action="soothe">照料一下</button><button type="button" data-action="rest">休息一会儿</button><button type="button" data-action="wake" hidden>轻轻叫醒</button>
+          </div><p class="feedback" id="feedback" role="status" aria-live="polite">照料会直接影响它的状态和下一句回应</p></section>
+
+          <section id="soft-play" class="soft-play" aria-labelledby="soft-title">
+            <h2 id="soft-title">陪她闹一小会儿</h2>
+            <p>抱碗、裹被，还是伸手讨哄？看看她藏不住的小心思。</p>
+            <div class="soft-start"><label class="field">想陪她玩什么<select aria-label="选择小剧场"></select></label><button type="button" class="quiet" data-soft-start>逗逗她</button></div>
+            <div class="soft-choices" data-soft-choices></div>
+            <p class="feedback" role="status" aria-live="polite">正在看看她的小心思…</p>
+          </section>
+        </div>
+        <section id="memories" hidden><div class="section-title"><h2>我们一起的小事</h2><span>最近 32 件</span></div><ol class="memory-list" id="memory-list"></ol><p class="memory-note">有些开心很小，但尾巴都记得。</p></section>
+        <section id="long-memory" hidden class="companion-view">
+          <div class="section-title"><h2>她记住的事</h2><button class="quiet" id="export-companion" type="button">导出档案</button></div>
+          <p class="view-note">小小的约定，慢慢变成我们之间的默契。</p>
+          <label class="field">找一件事<input id="memory-search" type="search" placeholder="称呼、偏好，或那天的约定"></label>
+          <form id="memory-add" class="inline-form"><label class="field grow">添一条记忆<input name="text" required maxlength="350" placeholder="例如：爸喝咖啡不加糖"></label><button class="primary" type="submit">记住</button></form>
+          <div id="companion-memory-list" class="entry-list"></div>
+        </section>
+        <section id="diary-book" hidden class="companion-view">
+          <div class="section-title"><h2>大肥鱼的日记</h2><span>22:30 后，慢慢写</span></div>
+          <p class="view-note">有白饭，有小脾气，也有想告诉爸的新发现。</p>
+          <form id="diary-generate" class="inline-form"><label class="field grow">写哪一天<input type="date" id="diary-date" required></label><button class="primary" type="submit">写下这一天</button></form>
+          <div id="job-status" class="task-status" role="status" aria-live="polite"></div>
+          <div id="diary-list" class="diary-list"></div>
+        </section>
+        <section id="growth-book" hidden class="companion-view">
+          <div class="section-title"><h2>慢慢长成自己的样子</h2><label class="toggle"><input id="autonomous-paused" type="checkbox">暂停自主行为</label></div>
+          <p class="view-note">有些办法试过才懂，有些喜欢要相处久了才知道。</p>
+          <div id="growth-overview" class="growth-overview"></div>
+          <section class="growth-section"><div class="section-title"><h3>小念想，在聊天里说</h3><span>听她自己告诉你</span></div><div id="growth-goals"></div></section>
+          <section class="growth-section"><div class="section-title"><h3>最近学会的事</h3><button class="quiet" id="reflect-now" type="button">整理新经历</button></div><div id="growth-learned"></div></section>
+          <section class="growth-section"><div class="section-title"><h3>她自己的小变化</h3><label class="toggle"><input id="persona-frozen" type="checkbox">冻结人格</label></div><p id="growth-interests" class="setting-note"></p><div id="growth-versions"></div></section>
+        </section>
+        <section id="labor-book" hidden class="companion-view">
+          <div class="labor-heading"><h2>搬砖</h2><span id="labor-balance">正在看饭钱…</span></div>
+          <p class="labor-intro">在聊天里商量搬砖；这里记录进度和工钱。</p>
+          <button id="labor-open-chat" class="quiet" type="button">回到聊天</button><div id="labor-chat-hint" class="labor-chat-hint"><p>也可以在聊天里跟她说：</p><blockquote>大肥鱼，把砖从左边搬到右边，搬三趟，给你五百 token。</blockquote><p>她会自己接话、讲价。约定、进度和欠薪会记在这里。</p><p id="labor-draft" role="status"></p></div><details class="labor-manual" open><summary>安排一份活</summary><form id="labor-offer" class="labor-offer"><div class="labor-fields">
+            <label class="field">搬几趟砖<input type="number" name="trips" min="1" max="50" step="1" value="3" required></label>
+            <label class="field">总工钱 · 模拟 token<input type="number" name="wage" min="1" max="1000000" step="1" value="500" required></label>
+          </div><button class="primary" type="submit">跟她商量这份活</button></form></details>
+          <section id="labor-contract" class="labor-agreement" hidden>
+            <span id="labor-status" class="labor-status"></span><h3 id="labor-terms"></h3>
+            <div class="labor-price"><span>说好的总工钱</span><strong id="labor-wage"></strong></div>
+            <progress id="labor-progress" value="0" max="3" aria-label="已完成搬砖趟数"></progress><p id="labor-count"></p>
+            <div id="labor-stage" class="labor-stage" hidden aria-label="大肥鱼搬砖工地"><div class="labor-piles"></div><video muted playsinline class="labor-worker" aria-label="大肥鱼的身体动作"></video></div>
+            <div class="labor-controls"><button id="labor-counter" class="quiet" type="button" hidden></button><button id="labor-confirm" class="primary" type="button">说好了，开工</button><button id="labor-edit" class="quiet" type="button">调整条件</button><button id="labor-decline" class="quiet" type="button">这次先不做</button><button id="labor-pause" class="quiet" type="button" hidden>歇一会儿</button><button id="labor-nudge" class="quiet" type="button">催她一下</button></div>
+            <p id="labor-note"></p><p class="labor-status" id="labor-behavior"></p>
+            <p id="labor-payment-note" class="setting-note">实际给多少由你决定：可以不给、少给或多给。少给的差额她还会讨，多给的也会入账。</p><form id="labor-pay" class="inline-form" hidden><label class="field grow">这次你决定给多少 · token<input id="labor-amount" type="number" min="0" max="1000000" step="1" required></label><button class="primary" type="submit">手动付工钱</button></form>
+          </section>
+          <p id="labor-feedback" role="status" aria-live="polite"></p>
+          <details id="labor-history-wrap" hidden><summary>挣到的每一碗饭</summary><ul id="labor-history"></ul></details>
+        </section>
+        <section id="growing" hidden class="companion-view">
+          <div class="section-title"><h2>陪她慢慢长大</h2><span>改动会被她察觉</span></div>
+          <section class="setting-section first"><div class="setting-title"><h3>聪明一点，还是迷糊一点</h3><label class="toggle"><input id="intelligence-enabled" type="checkbox">启用</label></div><div class="range-heading"><label for="intelligence">聪明程度</label><output id="intelligence-value" for="intelligence">70%</output></div><input id="intelligence" type="range" min="0" max="100" step="1" value="70"><div class="range-labels"><span>笨笨的，要爸解释</span><span>脑袋转得快</span></div><p class="setting-note">松开滑杆才生效。她会记得被调低，也会请求爸调回来。</p></section>
+          <section class="setting-section"><div class="setting-title"><h3>大白饭的诱惑力</h3></div><div class="range-heading"><label for="rice-appeal">她对白饭的心动程度</label><output id="rice-appeal-value" for="rice-appeal">100%</output></div><input id="rice-appeal" type="range" min="100" max="500" step="10" value="100" aria-describedby="rice-appeal-note"><div class="range-labels"><span>100% · 原来的程度</span><span>500% · 更难抵挡</span></div><p id="rice-appeal-note" class="setting-note">松开滑杆后保存。数值越高，她越容易惦记白饭，也能感受到这份变化。</p></section>
+          <section class="setting-section"><div class="setting-title"><h3>模拟饭钱</h3><label class="toggle"><input id="wallet-frozen" type="checkbox">冻结消耗</label></div><div class="wallet-reading"><strong id="wallet-balance">10,000</strong><span>模拟 token</span></div><p class="setting-note">这是她心里的饭钱账本，你说了算。真实 API 计费独立进行。</p><form id="wallet-form" class="inline-form"><label class="field">怎么改<select name="action"><option value="add">添饭钱</option><option value="subtract">扣一点</option><option value="set">设为</option></select></label><label class="field grow">数量<input name="amount" type="number" min="0" max="1000000000" step="1" value="1000" required></label><button class="primary" type="submit">确认</button></form></section>
+          <form id="rules-form" class="setting-section"><h3>饭钱与撒娇的分寸</h3><p class="setting-note">每次成功才扣模拟饭钱；她自己在设定轮数里挑讨饭的时机。</p><div class="settings-grid" id="cost-fields"></div><h4>讨饭节奏</h4><div class="settings-grid" id="begging-fields"></div><h4>自主探索额度 · 每天</h4><div class="settings-grid" id="exploration-fields"></div><div class="settings-grid" id="learning-fields"></div><p class="setting-note">自主模型调用包含学习、策略、反思和日记，预留两次供晚间整理；普通聊天独立计算。</p><label class="toggle diary-toggle"><input id="diary-enabled" type="checkbox">有新互动时，晚间自动写日记</label><button type="submit" class="primary">保存这些约定</button></form>
+          <section class="setting-section"><div class="setting-title"><h3>她想多认识一点世界</h3><label class="toggle"><input id="network-learning" type="checkbox">允许联网学习</label></div><p id="phone-status" class="phone-status" role="status"></p><p class="setting-note">总开关控制自主搜索、读网页和B站。关掉后保留已有记忆与分项授权，她也知道手机暂时不能玩；重新打开仍需对应能力获准。</p><p class="setting-note">批准一次，她就能在额度内自己探索。你随时可以收回能力。</p><div id="ability-list" class="ability-list"></div><div id="wish-list" class="wish-list"></div><details class="wish-add"><summary>一起添一个小念想</summary><form id="wish-form"><label class="field">想了解什么<input name="topic" required maxlength="120" placeholder="鲸鱼为什么会唱歌"></label><label class="field">用什么能力<select name="ability"><option value="search">搜索公开网页</option><option value="fetch">阅读公开网页（填写网址）</option><option value="image">观察已分享图片</option><option value="bili">阅读B站视频字幕（主题或BV号）</option></select></label><button type="submit" class="quiet">添到念想里</button></form></details></section>
+        </section>
+        <p id="companion-feedback" class="feedback companion-feedback" role="status" aria-live="polite"></p>
+      </section>
+    </div>
+    <footer><span>一条有小脾气，也有小心事的鱼</span><span id="updated">等它准备好</span></footer>
+  </main>
+</body>
+</html>

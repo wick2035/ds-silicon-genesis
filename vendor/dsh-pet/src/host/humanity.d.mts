@@ -1,0 +1,14 @@
+type PetRouteDeps = unknown;
+type RouteInput = unknown;
+type RouteResult = unknown;
+export function safeHumanityPrompt(id: string): string;
+export function observeHumanity(id: string, leaf: string, data: unknown): void;
+export function chatHumanity(id: string, text: string): void;
+export function handleHumanityRoute(deps: PetRouteDeps, input: RouteInput, readConfig: () => Record<string, Record<string, unknown>>, packageRoot: string): Promise<RouteResult | undefined>;
+export function createHumanity(now?: number): any;
+export function advanceHumanity(input: any, now?: number): any;
+export function describeHumanity(input: any, now?: number): any;
+export function actHumanity(input: any, action: string, now?: number): any;
+export function reactHumanity(input: any, event: string, now?: number, detail?: any): any;
+export function adjustHumanity(input: any, patch: Record<string, number>, requestId: string, expectedRevision: number, now?: number): any;
+export function humanityPrompt(input: any, now?: number): string;

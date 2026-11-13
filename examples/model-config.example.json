@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "defaultSelection": {"provider": "example", "model": "REPLACE_MODEL"},
+  "providers": {
+    "example": {
+      "api": "openai-completions",
+      "baseURL": "https://example.invalid/v1",
+      "apiKey": "REPLACE_WITH_PRIVATE_KEY",
+      "models": ["REPLACE_MODEL"]
+    }
+  },
+  "settings": {"automaticWhispers": false, "whisperIntervalSec": 300, "maxTokens": 1024, "timeoutMs": 60000, "balanceProvider": ""}
+}

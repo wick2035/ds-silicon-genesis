@@ -1,0 +1,78 @@
+/* Scales with the existing 640×360 stage; the pointer hitbox stays in place. */
+.pet-pain {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 180ms ease-out;
+}
+.pet-pain-portrait {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  transform: scale(.93);
+  transform-origin: 50% 92%;
+}
+.pet-stage.is-crying.has-pain-art[data-body-phase="curled"] .pet-pain { opacity: 1; }
+.pet-stage.is-crying.has-pain-art[data-body-phase="curled"] .pet-video { opacity: 0; }
+.pet-stage.is-crying.has-pain-art .pet-pain-portrait {
+  animation: pet-hurt-breathe 2600ms ease-in-out infinite;
+}
+.pet-stage[data-body-phase="startled"] .pet-pain-portrait { animation: pet-hurt-flinch 900ms ease-out both; }
+.pet-stage[data-body-phase="curled"] .pet-pain-portrait { animation: pet-hurt-breathe 2600ms ease-in-out infinite; }
+.pet-stage[data-body-phase="guarded"] .pet-pain-portrait { animation: pet-hurt-breathe 4200ms ease-in-out infinite; transform: scale(.97); }
+.pet-stage[data-body-phase="recovering"] .pet-pain { opacity: 0; transition: opacity 4000ms ease-out; }
+.pet-stage[data-body-phase="recovering"] .pet-video.is-front { opacity: 1; transition: opacity 4000ms ease-out; }
+.pet-stage[data-body-phase="guarded"] .pet-pain-drop,
+.pet-stage[data-body-phase="recovering"] .pet-pain-drop { display: none; }
+.pet-phone-art{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;transform-origin:50% 92%;opacity:0;pointer-events:none}
+.pet-stage.is-using-phone.has-phone-art:not(.is-crying) .pet-phone-art{opacity:1;animation:pet-phone-read 4.6s ease-in-out infinite}
+.pet-stage.is-using-phone.has-phone-art:not(.is-crying) .pet-video{opacity:0}
+@keyframes pet-phone-read{0%,100%{transform:scale(1)}36%{transform:scale(1.004,1.012) rotate(-.3deg)}52%{transform:scale(1.002,1.006)}70%{transform:rotate(.25deg)}}
+@keyframes pet-hurt-breathe {
+  0%,100% { transform: scale(.93, .925); }
+  40% { transform: scale(.935, .94) rotate(-.2deg); }
+  46% { transform: scale(.932, .936) rotate(.2deg); }
+  52% { transform: scale(.935, .94); }
+}
+@keyframes pet-hurt-flinch {
+  0% { transform: translateY(-4px) scale(.99); }
+  25% { transform: translateX(-2px) scale(.9,.88); }
+  50% { transform: translateX(2px) scale(.92,.91); }
+  100% { transform: scale(.93,.925); }
+}
+.pet-pain-drop {
+  position: absolute;
+  left: var(--drop-side);
+  top: 51%;
+  width: 1.05%;
+  height: 2.25%;
+  background: #9ee2ff;
+  border: 1px solid #ecfaff;
+  border-radius: 60% 40% 60% 40%;
+  opacity: 0;
+}
+.pet-stage.is-crying.has-pain-art .pet-pain-drop {
+  animation: pet-tear 1.15s cubic-bezier(.4, 0, .8, .4) infinite;
+  animation-delay: var(--drop-delay);
+}
+@keyframes pet-sob {
+  0%, 100% { transform: scale(.93); }
+  22% { transform: translateY(-1px) scale(.933, .923) rotate(-.35deg); }
+  44% { transform: translateY(1px) scale(.926, .935) rotate(.35deg); }
+  65% { transform: scale(.93); }
+}
+@keyframes pet-tear {
+  0% { opacity: 0; transform: translateY(0) scale(.65); }
+  18% { opacity: .9; }
+  80% { opacity: .8; }
+  100% { opacity: 0; transform: translateY(calc(var(--pet-size, 462px) * .1)) scale(.9); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pet-stage.is-crying.has-pain-art .pet-pain-portrait,
+  .pet-stage.is-crying.has-pain-art .pet-pain-drop,
+  .pet-stage.is-using-phone .pet-phone-art { animation: none; }
+  .pet-pain { transition-duration: 80ms; }
+}

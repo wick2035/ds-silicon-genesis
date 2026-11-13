@@ -1,0 +1,3 @@
+- insert:
+    - id: pet-local-behavior
+      name: "@local/dsh-pet-behavior"

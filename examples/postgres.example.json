@@ -1,0 +1,10 @@
+{
+  "namespace": "desktop-pet",
+  "connection": {
+    "host": "127.0.0.1",
+    "port": 5432,
+    "database": "REPLACE_DATABASE",
+    "user": "REPLACE_USER",
+    "password": "REPLACE_PASSWORD"
+  }
+}

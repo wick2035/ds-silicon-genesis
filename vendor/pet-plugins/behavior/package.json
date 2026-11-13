@@ -1,0 +1,13 @@
+{
+  "name": "@local/dsh-pet-behavior",
+  "version": "2.0.0",
+  "type": "module",
+  "main": "index.mjs",
+  "description": "大肥鱼本机角色行为、模拟饭钱、智力和能力申请",
+  "dsh": {
+    "bundle": {
+      "patch": "cordis.patch.yml"
+    }
+  },
+  "license": "UNLICENSED"
+}
