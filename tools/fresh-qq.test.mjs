@@ -62,3 +62,15 @@ test('successful bindings consume codes and startup cannot recreate them',async(
   await canonical.configurePairing('main',codes);
   assert.deepEqual(state.legacy.qq.pairing,{});
 });
+
+test('ordinary messages skip the pairing transaction but still require gateway authority',async()=>{
+  const ingress={},controller=new AbortController();let writes=0;
+  const canonical=new CanonicalQQ({loadEnvelope:async()=>{throw Error('unexpected read');}},
+    {apply:async()=>{writes++;}}, {signal:controller.signal,run:async(_id,fn)=>fn()},()=>({}),ingress);
+  for(const scene of ['c2c','group']) {
+    const message={messageId:'m',scene,actorOpenid:'owner',text:'你好',occurredAt:new Date().toISOString()};
+    assert.deepEqual(await canonical.pair('main',message,ingress),{paired:false});
+    await assert.rejects(canonical.pair('main',message,{}),/配对消息无效/);
+  }
+  assert.equal(writes,0);
+});

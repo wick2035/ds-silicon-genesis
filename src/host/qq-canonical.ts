@@ -67,11 +67,11 @@ export class CanonicalQQ {
   }
   async pair(petId:string, message:QQIncoming, authority:object):Promise<{paired:boolean;eventId?:string}> {
     if(authority!==this.#ingress || !message || !key(message.messageId) || !key(message.actorOpenid) || !['c2c','group'].includes(message.scene) || typeof message.text!=='string' || !Number.isFinite(Date.parse(message.occurredAt))) throw new Error('QQ 配对消息无效');
+    const kind=message.scene==='group'?'group':'owner';
+    const prefix=kind==='group'?'/绑定群 ':'/绑定 ';
+    if(!message.text.startsWith(prefix)) return {paired:false};
     return this.change<{paired:boolean;eventId?:string}>(petId,draft=>{
       const qq=(draft.legacy as Obj).qq; if(!qq?.identity || !qq.seen) throw new Error('QQ 尚未导入配置');
-      const kind=message.scene==='group'?'group':'owner';
-      const prefix=kind==='group'?'/绑定群 ':'/绑定 ';
-      if(!message.text.startsWith(prefix)) return {value:{paired:false}};
       const pairing=qq.pairing?.[kind]; const code=message.text.slice(prefix.length).trim();
       if(!pairing || pairing.expiresAt<Date.now() || pairing.digest!==hash(code)) return {value:{paired:false}};
       if(kind==='owner') { if(qq.identity.ownerOpenid) return {value:{paired:false}}; qq.identity.ownerOpenid=message.actorOpenid; }

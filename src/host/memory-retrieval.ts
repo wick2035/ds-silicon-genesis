@@ -9,10 +9,11 @@ export class CanonicalMemoryRetrieval {
   async search(petId:string, query:string, limit=12):Promise<Memory[]> {
     if(!petId||typeof query!=='string'||query.length>500||!Number.isInteger(limit)||limit<1||limit>30)throw new Error('记忆查询无效');
     const terms=[...new Set((query.toLowerCase().match(/[a-z0-9_]{2,}|[\p{Script=Han}]{2,}/gu)||[]).flatMap(t=>/[\p{Script=Han}]/u.test(t)&&t.length>2?Array.from({length:t.length-1},(_,i)=>t.slice(i,i+2)):[t]))].slice(0,12);
-    const result=await this.db.query(`WITH state AS (SELECT payload->'life' AS life FROM silicon_genesis.life_state WHERE pet_id=$1),
-      docs AS (SELECT m, m->>'content' AS content FROM state, jsonb_array_elements(COALESCE(life->'memories','[]'::jsonb)) m
-        WHERE m->>'valid'='true' AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(m->'sourceIds','[]'::jsonb)) s WHERE (life->'invalidSources') ? s)),
-      scored AS (SELECT m, content, (SELECT count(*) FROM unnest($2::text[]) t WHERE to_tsvector('simple',content) @@ plainto_tsquery('simple',t) OR strpos(lower(content),t)>0) AS score FROM docs)
+    const result=await this.db.query(`WITH state AS MATERIALIZED (SELECT payload->'life'->'memories' AS memories, payload->'life'->'invalidSources' AS invalid FROM silicon_genesis.life_state WHERE pet_id=$1),
+      terms AS MATERIALIZED (SELECT t, plainto_tsquery('simple',t) AS q FROM unnest($2::text[]) t),
+      docs AS MATERIALIZED (SELECT m, m->>'content' AS content FROM state, jsonb_array_elements(COALESCE(memories,'[]'::jsonb)) m
+        WHERE m->>'valid'='true' AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(m->'sourceIds','[]'::jsonb)) s WHERE invalid ? s)),
+      scored AS (SELECT m, (SELECT count(*) FROM terms WHERE to_tsvector('simple',docs.content) @@ q OR strpos(lower(docs.content),t)>0) AS score FROM docs)
       SELECT m FROM scored WHERE cardinality($2::text[])=0 OR score>0 ORDER BY score DESC, m->>'createdAt' DESC LIMIT $3`,[petId,terms,limit]);
     return result.rows.map(r=>r.m as Memory).filter(m=>m && typeof m.content==='string');
   }
