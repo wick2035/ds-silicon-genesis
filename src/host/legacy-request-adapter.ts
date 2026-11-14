@@ -47,15 +47,15 @@ export function createLegacyRequestAdapter({store,gate,domain,humanity,resolvePe
       let result:unknown;
       if(path==='humanity/care' && ['rest','wake'].includes(input.action)){
         if(!service)throw Error('休息服务尚未接入');const outcome:any=await service(petId,{key:requestId,command:input.action==='rest'?'/休息':'/醒来'});
-        if(!outcome.ok)throw Error(outcome.message||'休息状态未改变');return json({ok:true,text:outcome.message,state:await humanity.snapshot(petId)});
+        if(!outcome.ok)throw Error(outcome.message||'休息状态未改变');return json({ok:true,text:outcome.message,pending:outcome.status==='pending',state:await humanity.snapshot(petId)});
       }
       if(path==='humanity/care'&&input.action==='feed'){
         if(!service)throw Error('喂饭服务尚未接入');const outcome:any=await service(petId,{key:requestId,command:'/喂'});
-        if(!outcome.ok)throw Error(outcome.message||'喂饭未完成');return json({ok:true,text:outcome.message,state:await humanity.snapshot(petId)});
+        if(!outcome.ok)throw Error(outcome.message||'喂饭未完成');return json({ok:true,text:outcome.message,pending:outcome.status==='pending',state:await humanity.snapshot(petId)});
       }
       if(path==='humanity/care'&&input.action==='explore'){
         if(!service)throw Error('探索服务尚未接入');const outcome:any=await service(petId,{key:requestId,command:'/手机 想知道鲸鱼为什么会唱歌',careAction:'explore'});
-        if(!outcome.ok)throw Error(outcome.message||'探索未完成');return json({ok:true,text:outcome.message,state:await humanity.snapshot(petId)});
+        if(!outcome.ok)throw Error(outcome.message||'探索未完成');return json({ok:true,text:outcome.message,pending:outcome.status==='pending',state:await humanity.snapshot(petId)});
       }
       if(path==='humanity/companion/soft'){await domain.soft(petId,requestId,input);const state=await read();return json({ok:true,soft:projectLegacySnapshot(state,providers).world.soft});}
       if(path==='humanity/companion/world'&&input.action==='stop'){

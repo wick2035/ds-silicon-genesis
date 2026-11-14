@@ -27,5 +27,22 @@ window.lifeApi = Object.freeze({
   getSettings: () => request('settings'),
   getFinance: () => request('finance'),
   updateFinance: input => request('finance', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(input)}),
+  getCompanion: () => request('companion'),
+  updateCompanion: input => request('companion', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(input)}),
+  getModel: () => request('model'),
+  updateModel: input => request('model', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(input)}),
   manage: command => request('manage', { method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(command) })
 });
+
+// Establish the host's same-origin session cookie before importing modules.
+// Module requests cannot attach the token header themselves.
+void (async()=>{
+  try {
+    await window.lifeApi.getSnapshot();
+    await import('./app.js');
+  } catch(error) {
+    document.querySelector('#connection').textContent='连接不可用';
+    document.querySelector('#connection-detail').textContent='请重新从桌宠打开';
+    const notice=document.querySelector('#notice');notice.textContent=error?.message||'无法连接生命系统，请重新从桌宠打开。';notice.hidden=false;
+  }
+})();

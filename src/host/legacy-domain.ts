@@ -100,17 +100,26 @@ export class LegacyDomain {
     if (!methods.has(method)) throw new Error('不支持的旧领域操作');
     return this.mutate(petId, requestId, method, args, (store,draft) => {
       let old: Obj | undefined;
+      let factsBefore:Set<string>|undefined;
       if (method === 'memory' || method === 'growthControl') {
         const input = args[0] as Obj;
         const pet = store.read(petId) as Obj;
+        if(method==='memory' && input?.action==='add')factsBefore=new Set((pet.facts||[]).map((f:Obj)=>f.id));
         if (method === 'memory' && ['edit','delete'].includes(input?.action)) old = pet.facts?.find((x: Obj) => x.id === input.id && !x.deleted);
         if (method === 'growthControl' && ['edit-memory','delete-memory'].includes(input?.action)) old = pet.growth?.memories?.find((x: Obj) => x.id === input.id && !x.deleted);
       }
       const result = store[method](petId,...args);
+      if(factsBefore){
+        const pet=store.data.pets[petId] as Obj;
+        for(const fact of (pet.facts||[]).filter((f:Obj)=>!f.deleted && !factsBefore!.has(f.id))){
+          const id=namespaced('fact',fact.id),sources=(fact.sources||[]).map((source:string)=>namespaced('event',source));
+          if(!draft.life.memories.some(m=>m.id===id))draft.life.memories.push({id,kind:'semantic',content:fact.text,sourceIds:sources,evidenceLevel:'reported',valid:true,createdAt:new Date(fact.ts).toISOString()});
+        }
+      }
       if(method==='grant' && args[1]!=='grant') draft.life.constraints.permissions=draft.life.constraints.permissions.filter(p=>p!=='network');
       if(method==='configure' && typeof (args[0] as Obj)?.autonomousPaused==='boolean') draft.life.constraints.paused=(args[0] as Obj).autonomousPaused;
       if(method==='growthControl' && (args[0] as Obj)?.action==='pause' && typeof (args[0] as Obj).paused==='boolean')draft.life.constraints.paused=(args[0] as Obj).paused;
-      if(method==='configure' || method==='grant') {
+      if(method==='configure' || method==='grant' || method==='configureNetwork') {
         const pet=store.data.pets[petId] as Obj;
         const allowed=pet.config?.networkLearning===true && ['search','fetch','bili'].some(name=>pet.abilities?.[name]?.status==='granted');
         draft.life.constraints.permissions=draft.life.constraints.permissions.filter(p=>p!=='network');
@@ -144,6 +153,8 @@ export class LegacyDomain {
     return this.mutate(petId,requestId,'diary',input,(store,draft)=>store.update(petId,(pet:Obj)=>{
       const date=input.date;if(typeof date!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(date))throw Error('日期无效');
       const entry=pet.diaries?.[date];if(!entry)throw Error('没有这天的日记');
+      if(input.expectedText!==undefined && input.expectedText!==entry.text)throw Error('日记已变化，请刷新后重试');
+      if(input.expectedRevision!==undefined && (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision!==(Number(entry.revision)||0)))throw Error('日记已变化，请刷新后重试');
       const id=typeof entry.canonicalMemoryId==='string'?entry.canonicalMemoryId:namespaced('diary',date),memory=draft.life.memories.find(m=>m.id===id);if(memory){memory.valid=false;draft.life.invalidSources[id]='旧日记已删除或纠正';invalidateDependents(draft.life as unknown as LifeState);}
       if(input.action==='delete'){delete pet.diaries[date];pet.deletedDays ||= [];if(!pet.deletedDays.includes(date))pet.deletedDays.push(date);return {deleted:true};}
       if(input.action!=='edit'||typeof input.text!=='string'||!input.text.trim()||input.text.length>5000)throw Error('日记内容无效');

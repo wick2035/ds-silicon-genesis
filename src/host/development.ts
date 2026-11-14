@@ -19,16 +19,20 @@ export function createDevelopment(store:Reader,gate:PetGate,uow:UnitOfWork,budge
       const used=new Set<string>(Object.entries(pet.developmentClaims||{}).filter(([key,value]:[string,any])=>key.startsWith(kind+':')&&value?.status==='completed').flatMap(([,value]:[string,any])=>Array.isArray(value.sourceIds)?value.sourceIds:[]));
       const events=state.life.events.filter(e=>!used.has(e.eventId)&&!Object.hasOwn(state.life.invalidSources,e.eventId)&&['observed','verified','reported'].includes(e.evidenceLevel)&&!e.type.startsWith('development.')&&e.occurredAt.slice(0,10)<=date).slice(-30);
       if(!events.length)return null;
-      const key=kind+':'+date;if(pet.developmentClaims?.[key])return null;
+      const key=kind+':'+date,previous=pet.developmentClaims?.[key];
+      // An explicit retry may recover a failed attempt; an in-flight or
+      // completed claim is never repeated automatically.
+      if(previous && !(manual && previous.status==='failed'))return null;
       if(kind==='diary')checkSimulatedSpending(state,'diary');
-      await uow.apply(id,state.version,draft=>{const p=draft.legacy as Record<string,any>;p.developmentClaims||={};if(p.developmentClaims[key])throw Error('整理已领取');p.developmentClaims[key]={status:'running',at:Date.now()};return {};});
+      await uow.apply(id,state.version,draft=>{const p=draft.legacy as Record<string,any>;p.developmentClaims||={};const old=p.developmentClaims[key];if(old && !(manual && old.status==='failed'))throw Error('整理已领取');p.developmentClaims[key]={status:'running',at:Date.now(),attempt:(Number(old?.attempt)||0)+1};return {};});
       return {key,events:events.map(e=>({id:e.eventId,type:e.type,at:e.occurredAt,text:JSON.stringify(e.payload).slice(0,450)}))};
     });
     if(!claim)return false;
     try{
       const sel=model.agentDefaultModel.currentSelection(),system=kind==='diary'?'根据给出的真实事件写简短第一人称日记。不要编造未发生的事。只返回 JSON：{"text":"...","sources":["事件ID"]}。':'从真实事件中谨慎总结可能的兴趣与习惯，不要把一次经历当稳定性格。只返回 JSON：{"text":"...","sources":["事件ID"]}。';
       let text='';await budget.runAs(id,manual?'interactive':kind,async()=>{for await(const chunk of model.llm.stream({...sel,system,messages:[{role:'user',content:JSON.stringify(claim.events)}],signal:AbortSignal.any([signal,gate.signal]),maxTokens:800,temperature:.3})){if(chunk.type==='text'&&typeof chunk.text==='string'){text+=chunk.text;if(text.length>10000)throw Error('整理结果过长');}}});
-      const data=JSON.parse(text),available=new Set(claim.events.map(e=>e.id));
+      let data:any;try{data=JSON.parse(text.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''));}catch{throw Error('模型返回的整理内容格式无效，请重试');}
+      const available=new Set(claim.events.map(e=>e.id));
       if(typeof data.text!=='string'||!data.text.trim()||data.text.length>5000||!Array.isArray(data.sources)||!data.sources.length||data.sources.some((s:unknown)=>typeof s!=='string'||!available.has(s)))throw Error('整理结果缺少真实来源');
       await gate.run(id,async()=>{const state=await store.loadEnvelope(id);if(!state||signal.aborted||gate.signal.aborted)throw Error('整理已取消');
         await uow.apply(id,state.version,draft=>{const p=draft.legacy as Record<string,any>,record=p.developmentClaims?.[claim.key];if(!record||record.status!=='running'||(!manual && draft.life.constraints.paused)||data.sources.some((s:string)=>Object.hasOwn(draft.life.invalidSources,s)||!draft.life.events.some(e=>e.eventId===s)))throw Error('整理来源或状态已变化');

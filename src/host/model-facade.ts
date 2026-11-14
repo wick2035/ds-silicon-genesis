@@ -15,6 +15,7 @@ export interface ModelBudget { reserve(provider:string, model:string, signal:Abo
 export interface ModelFacadeOptions { leaseSignal:AbortSignal; budget:ModelBudget; resolveImage?:ImageResolver; timeoutMs?:number; persist?:(config:ImportedModelConfig)=>Promise<void> }
 const quiet = {debug() {}, info() {}, warn() {}, error() {}};
 const limit = 32768;
+class ModelResultError extends Error {}
 function fail(message: string): never { throw new Error(message); }
 function validProvider(p: Provider): boolean {
   if (!p || !['openai-completions','anthropic-messages'].includes(p.api) || typeof p.apiKey !== 'string' || !p.apiKey || /\s/.test(p.apiKey) || !Array.isArray(p.models)) return false;
@@ -75,7 +76,8 @@ export function createModelFacade(config: ImportedModelConfig, options: ModelFac
             if(controller.signal.aborted) throw new Error('cancelled');
             if(++events>4096) throw new Error('limit');
             const choice=chunk.choices.find(c=>c.index===0);
-            if(choice?.delta?.refusal || choice?.finish_reason==='length' || choice?.finish_reason==='content_filter') throw new Error('incomplete');
+            if(choice?.finish_reason==='length') throw new ModelResultError('模型输出被截断，请提高输出 token 上限后重试');
+            if(choice?.delta?.refusal || choice?.finish_reason==='content_filter') throw new ModelResultError('模型拒绝了本次请求');
             const text=choice?.delta?.content;
             if(text){chars+=text.length;if(chars>16384) throw new Error('limit');yield {type:'text-delta',index:0,text}; yield {type:'text',text};}
             for(const call of choice?.delta?.tool_calls ?? []) { if(call.id) toolIds.set(call.index,call.id); const id=toolIds.get(call.index) || ''; const name=call.function?.name; toolEvents++; const argumentsDelta=call.function?.arguments || ''; yield {type:'tool-call-delta',index:call.index+1,id,...(name?{name}:{}),argumentsDelta}; }
@@ -86,14 +88,19 @@ export function createModelFacade(config: ImportedModelConfig, options: ModelFac
           for await(const chunk of stream) {
             if(controller.signal.aborted) throw new Error('cancelled');
             if(++events>4096) throw new Error('limit');
-            if(chunk.type==='message_delta' && ['refusal','max_tokens'].includes(chunk.delta.stop_reason||'')) throw new Error('incomplete');
+            if(chunk.type==='message_delta' && chunk.delta.stop_reason==='max_tokens') throw new ModelResultError('模型输出被截断，请提高输出 token 上限后重试');
+            if(chunk.type==='message_delta' && chunk.delta.stop_reason==='refusal') throw new ModelResultError('模型拒绝了本次请求');
             if(chunk.type==='content_block_delta' && chunk.delta.type==='text_delta'){const text=chunk.delta.text;chars+=text.length;if(chars>16384) throw new Error('limit');yield {type:'text-delta',index:chunk.index,text}; yield {type:'text',text};}
             if(chunk.type==='content_block_start' && chunk.content_block.type==='tool_use') {toolIds.set(chunk.index,chunk.content_block.id); toolEvents++; yield {type:'tool-call-delta',index:chunk.index,id:chunk.content_block.id,name:chunk.content_block.name,argumentsDelta:''};}
             if(chunk.type==='content_block_delta' && chunk.delta.type==='input_json_delta') yield {type:'tool-call-delta',index:chunk.index,id:toolIds.get(chunk.index) || '',argumentsDelta:chunk.delta.partial_json};
           }
         }
         if(!chars && !toolEvents) throw new Error('empty');
-      } catch { throw new Error(controller.signal.aborted?'模型请求已取消或超时':'模型请求未能完整完成，请检查服务配置'); }
+      } catch (error) {
+        const status=typeof error==='object' && error!==null && 'status' in error ? Number(error.status) : 0;
+        const message=controller.signal.aborted?'模型请求已取消或超时':error instanceof ModelResultError?error.message:status===401||status===403?'模型服务认证失败，请检查 API 密钥和访问权限':status===429?'模型服务额度不足或请求过于频繁':status>=500?'模型服务暂时不可用，请稍后重试':'模型请求未能完整完成，请检查服务配置';
+        throw new Error(message);
+      }
       finally {clearTimeout(timer);leaseSignal.removeEventListener('abort',abort);o.signal?.removeEventListener('abort',abort);controller.abort();active.delete(controller);if(release) await release();}
     }
   };
@@ -114,7 +121,7 @@ export function createModelFacade(config: ImportedModelConfig, options: ModelFac
   const saveSettings=(input:Record<string,unknown>)=>{const task=saveQueue.then(()=>doSaveSettings(input));saveQueue=task.catch(()=>{});return task;};
   const matchesCurrent=(input:Record<string,unknown>)=>!input || ((!input.protocol||input.protocol===getSettings().protocol)&&(!input.baseUrl||input.baseUrl===getSettings().baseUrl)&&(!input.model||input.model===getSettings().model)&&!input.apiKey);
   const discoverModels=async(input:Record<string,unknown>={})=>matchesCurrent(input)?({ok:true,models:providers[selection.provider].models.map(id=>({id,name:id}))}):({ok:false,code:'input',message:'请先保存设置，再查看本地模型列表'});
-  const testConnection=async(input:Record<string,unknown>={})=>{if(!matchesCurrent(input))return {ok:false,message:'请先保存设置，再测试当前模型'};try{let text='';for await(const part of llm.stream({...selection,messages:[{role:'user',content:'Hi'}],maxTokens:16,signal:leaseSignal}))if(part.type==='text')text+=part.text;return {ok:!!text,message:text?'模型连接正常':'模型未返回内容'};}catch{return {ok:false,message:'模型连接失败或额度不足'};}};
+  const testConnection=async(input:Record<string,unknown>={})=>{if(!matchesCurrent(input))return {ok:false,message:'请先保存设置，再测试当前模型'};try{let text='';for await(const part of llm.stream({...selection,messages:[{role:'user',content:'Hi'}],maxTokens:512,signal:leaseSignal}))if(part.type==='text')text+=part.text;return {ok:!!text,message:text?'模型连接正常':'模型未返回内容'};}catch(error){return {ok:false,message:error instanceof Error?error.message:'模型连接失败'};}};
   const queryBalance=async()=>{if(!settings.balanceProvider)return {ok:false,provider:'',reason:'disabled'};const p=providers[selection.provider];if(p.api!=='openai-completions'||p.baseURL.replace(/\/+$/,'')!=='https://api.deepseek.com')return {ok:false,provider:'',reason:'unsupported'};try{const response=await fetch('https://api.deepseek.com/user/balance',{headers:{authorization:`Bearer ${p.apiKey}`},signal:AbortSignal.any([leaseSignal,AbortSignal.timeout(15000)]),redirect:'error'});if(!response.ok)throw Error('balance');const data:any=await response.json();if(!Array.isArray(data.balance_infos)||!data.balance_infos.length)throw Error('balance');const wallets=data.balance_infos.map((w:any)=>{if(typeof w.currency!=='string'||typeof w.total_balance!=='string'||typeof w.granted_balance!=='string'||typeof w.topped_up_balance!=='string')throw Error('balance');return {currency:w.currency,total:w.total_balance,granted:w.granted_balance,toppedUp:w.topped_up_balance};});return {ok:true,provider:'deepseek-official',shape:'money',data:{wallets}};}catch{return {ok:false,provider:'deepseek-official',reason:'fetch-error',message:'余额查询失败'};}};
   return {llm,getSettings,saveSettings,discoverModels,testConnection,queryBalance,agentDefaultModel:{currentSelection:()=>allowed(selection.provider,selection.model)?{...selection}:{provider:'',model:''}},dispose(){disposed=true;for(const c of active)c.abort();active.clear();}};
 }

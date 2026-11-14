@@ -31,6 +31,7 @@ import {createCognitiveModel} from './cognitive-model.js';
 import {CanonicalMemoryRetrieval} from './memory-retrieval.js';
 import {createPublicWeb,createBiliReader,createExplorationExecutor} from './network-services.js';
 import {createLifeApi,createLifeManagement} from './life-api.js';
+import {createCompanionManagement} from './companion-management.js';
 import {createFinanceManagement} from './finance-management.js';
 import {CanonicalChat,createChatHttp} from './chat-service.js';
 import {startStandalone} from './standalone.js';
@@ -119,7 +120,16 @@ export async function main():Promise<void> {
       if(!decision||!['accept','bargain','decline'].includes(decision.choice)||decision.choice==='bargain'&&(!Number.isInteger(decision.trips)||decision.trips<1||decision.trips>50||!Number.isInteger(decision.wage)||decision.wage<1||decision.wage>1000000))throw Error('她的回应无法确认，请重试');
       return domain.laborDecision(id,'labor-decision:'+createHash('sha256').update(requestId).digest('hex'),{id:contractId,trips:contract.trips,wage:contract.wage,choice:decision.choice,...(decision.choice==='bargain'?{counterTrips:decision.trips,counterWage:decision.wage}:{})});
     };
+    let companionManagement:ReturnType<typeof createCompanionManagement>;
     const lifeApi=createLifeApi({authorize:()=>true,petId:()=>petId,getState:id=>kernel.getState(id),shutdown:()=>requestShutdown(),attachments,finance:createFinanceManagement(store,lease,domain,decideLaborOffer),
+      companion:{read:(id,signal)=>companionManagement.read(id,signal),write:(id,input,signal)=>companionManagement.write(id,input,signal)},
+      model:{read:async()=>model!.getSettings(),write:async(id,input)=>{
+        if(input.operation==='save'){const {operation,...settings}=input;return model!.saveSettings(settings);}
+        if(input.operation==='test')return budget.runAs(id,'interactive',()=>model!.testConnection());
+        if(input.operation==='balance')return budget.runAs(id,'interactive',async()=>{const release=await budget.reserve('balance','balance',lease.signal);try{return await model!.queryBalance();}finally{await release();}});
+        if(input.operation==='models')return model!.discoverModels();
+        throw Error('模型操作无效');
+      }},
       manage:createLifeManagement(store,lease,unitOfWork,projectBody,id=>dispatcher.interrupt(id)),
       searchMemories:(id,q)=>retrieval.search(id,q),links:{play:`/dsh-pet-7340/humanity?pet=${encodeURIComponent(petId)}`}});
     const chatApi=createChatHttp(chat,()=>true,()=>petId);
@@ -132,6 +142,7 @@ export async function main():Promise<void> {
     semanticResponse=async(id,requestId,detail)=>{const d=detail as any;const descriptions:Record<string,string>={'drag-start':'爸爸开始拖动我','drag-end':'爸爸松开了我','flight-start':'我开始飞行，尚不知道是否发生碰撞','flight-end':'飞行结束','prop-take':'爸爸拿起我的饭碗','prop-release':'爸爸放下我的饭碗','menu-anim':'爸爸选择了一个动画','go-home':'爸爸选择回家','open-chat':'爸爸打开聊天','open-care':'爸爸打开照料面板','open-todo':'爸爸打开待办','show-balance':'爸爸查看余额'};const description=descriptions[d?.action];if(!description)throw Error('互动类型无效');const event:any=await domain.record(id,requestId,'interaction',description,requestId,{},observerAuthority);if(!event?.id)throw Error('互动来源未保存');const text=await responses(id,'physical',lease.signal,{eventId:`legacy:event:${encodeURIComponent(event.id)}`,description});return {ok:true,reaction:{text}};};
     const adapter=createLegacyRequestAdapter({store,gate:lease,domain,humanity,service,development,responses,interrupt:id=>dispatcher.interrupt(id),tokenSnapshot:id=>tokens.snapshot(id),providers:{search:true,fetch:true,bili:true,image:true,model:true},view:id=>commandChannel.view(id),resolvePet:url=>{
       const selected=url.searchParams.get('pet')||petId;if(selected!==petId)throw Error('宠物不存在');return {petId,name:'大肥鱼'};}});
+    companionManagement=createCompanionManagement(adapter,domain,id=>dispatcher.interrupt(id));
     const cognition=new Cognition(createCognitiveModel(model.llm,()=>model!.agentDefaultModel.currentSelection()),budget,retrieval);
     let publishWhisper:((text:string,image?:string,surface?:string)=>void)|undefined;
     let resolveWhisperImage:((name:string,surface?:string)=>Promise<string>)|undefined;

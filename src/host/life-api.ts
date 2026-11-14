@@ -14,6 +14,8 @@ export interface LifeApiHost {
   links?: {chat?:string;play?:string};
   shutdown?:()=>void;
   finance?: {read:(petId:string)=>Promise<unknown>; write:(petId:string,input:Record<string,unknown>)=>Promise<unknown>};
+  companion?: {read:(petId:string,signal:AbortSignal)=>Promise<unknown>; write:(petId:string,input:Record<string,unknown>,signal:AbortSignal)=>Promise<unknown>};
+  model?: {read:(petId:string,signal:AbortSignal)=>Promise<unknown>; write:(petId:string,input:Record<string,unknown>,signal:AbortSignal)=>Promise<unknown>};
   attachments?:{put:(petId:string,requestId:string,input:{mediaType:string;data:Uint8Array})=>Promise<unknown>};
 }
 export type ManagementCommand =
@@ -44,6 +46,12 @@ export function createLifeManagement(reader: Reader, gate: PetGate, uow: UnitOfW
         goal.status=command.status;
       } else if(command.kind==='revoke') {
         life.constraints.permissions=life.constraints.permissions.filter(p=>p!==command.permission);
+        // A later settings save must not silently restore an explicitly revoked
+        // network permission from the legacy phone switch.
+        if(command.permission==='network'){
+          const legacy=draft.legacy as Record<string,any>;
+          if(legacy.config?.networkLearning){legacy.config.networkLearning=false;const phone=legacy.growth?.phone;if(phone){phone.epoch=(Number(phone.epoch)||0)+1;phone.changedAt=Date.now();phone.closedByParent=true;phone.notice='closed';}}
+        }
       } else {
         if(['__proto__','constructor','prototype'].includes(command.id)) throw new Error('记忆标识无效');
         const memory=life.memories.find(m=>m.id===command.id);
@@ -87,8 +95,8 @@ export function createLifeApi(host:LifeApiHost) {
     const url=new URL(request.url);if(!url.pathname.startsWith('/api/life/'))return undefined;
     if(!await host.authorize(request))return response(403,{ok:false,error:'没有访问权限'});
     const endpoint=url.pathname.slice('/api/life/'.length);
-    if(!['snapshot','goals','timeline','relationships','growth','settings','manage','memory-search','shutdown','attachment','finance'].includes(endpoint))return response(404,{ok:false,error:'没有这个接口'});
-    if(request.method!=='GET' && !(request.method==='POST' && ['manage','shutdown','attachment','finance'].includes(endpoint)) || request.method==='GET' && ['manage','shutdown','attachment'].includes(endpoint))return response(405,{ok:false,error:'请求方法不受支持'});
+    if(!['snapshot','goals','timeline','relationships','growth','settings','manage','memory-search','shutdown','attachment','finance','companion','model'].includes(endpoint))return response(404,{ok:false,error:'没有这个接口'});
+    if(request.method!=='GET' && !(request.method==='POST' && ['manage','shutdown','attachment','finance','companion','model'].includes(endpoint)) || request.method==='GET' && ['manage','shutdown','attachment'].includes(endpoint))return response(405,{ok:false,error:'请求方法不受支持'});
     try {
       if(endpoint==='shutdown') {if(!host.shutdown)return response(503,{ok:false,error:'关闭入口不可用'});setTimeout(host.shutdown,100);return response(200,{ok:true,value:{closing:true}});}
       const id=await host.petId();
@@ -102,14 +110,15 @@ export function createLifeApi(host:LifeApiHost) {
         const data=new Uint8Array(size);let offset=0;for(const chunk of chunks){data.set(chunk,offset);offset+=chunk.length;}
         return response(200,{ok:true,value:await host.attachments.put(id,requestId,{mediaType:type,data})});
       }
-      if(endpoint==='finance') {
-        if(!host.finance)return response(503,{ok:false,error:'饭钱管理尚未接入'});
-        if(request.method==='GET')return response(200,{ok:true,value:await host.finance.read(id)});
+      if(endpoint==='finance' || endpoint==='companion' || endpoint==='model') {
+        const manager=endpoint==='finance'?host.finance:endpoint==='companion'?host.companion:host.model;
+        if(!manager)return response(503,{ok:false,error:'管理服务尚未接入'});
+        if(request.method==='GET')return response(200,{ok:true,value:await manager.read(id,request.signal)});
         if(!/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type')||''))return response(415,{ok:false,error:'请求格式无效'});
         const raw=await request.text();if(raw.length>8192)return response(413,{ok:false,error:'请求过大'});
         let input:unknown;try{input=JSON.parse(raw);}catch{return response(400,{ok:false,error:'请求格式无效'});}
         if(!input||typeof input!=='object'||Array.isArray(input))return response(400,{ok:false,error:'请求格式无效'});
-        return response(200,{ok:true,value:await host.finance.write(id,input as Record<string,unknown>)});
+        return response(200,{ok:true,value:await manager.write(id,input as Record<string,unknown>,request.signal)});
       }
       if(request.method==='POST') {
         if(!host.manage)return response(503,{ok:false,error:'管理操作尚未接入'});
@@ -129,6 +138,6 @@ export function createLifeApi(host:LifeApiHost) {
         settings:{version:state.version,paused:state.constraints.paused,permissions:state.constraints.permissions}
       };
       return response(200,{ok:true,value:endpoint==='manage'?{version:state.version}:views[endpoint]});
-    }catch(error){return response(409,{ok:false,error:endpoint==='finance' && error instanceof Error ? error.message : '操作未完成或状态已变化，请刷新后重试'});}
+    }catch(error){return response(409,{ok:false,error:['finance','companion','model'].includes(endpoint) && error instanceof Error ? error.message : '操作未完成或状态已变化，请刷新后重试'});}
   };
 }
