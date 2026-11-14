@@ -33,8 +33,9 @@
     if(e.button===0&&this.tokenScene?.space&&!this.sleeping){this.cancelBody?.();this.tokenGrab=true;this.dragState.sling=false;this.tokenScene.begin(toLocal(e.screenX),toLocal(e.screenY));}
   };
   proto.onPointerMove=function(e){old.onPointerMove.call(this,e);if(this.dragState.active&&this.tokenScene?.space&&!this.tokenGrab&&!this.sleeping){this.cancelBody?.();this.tokenGrab=true;this.dragState.sling=false;this.tokenScene.begin(toLocal(e.screenX),toLocal(e.screenY));}if(this.dragState.active&&this.tokenScene?.dragging)this.tokenScene.sample(toLocal(e.screenX),toLocal(e.screenY));};
+  proto.pollTokenSoon=function(){for(const delay of [200,600,1200])setTimeout(()=>{if(!this.ac.signal.aborted)void this.pollBody();},delay);};
   proto.onPointerUp=function(e){
-    if(this.tokenGrab){this.tokenGrab=false;this.stopThrow();this.dragTrail=[];this.dragState.sling=false;this.tokenJustDragged=true;clearTimeout(this.tokenClickTimer);this.tokenClickTimer=setTimeout(()=>this.tokenJustDragged=false,400);this.tokenScene.release();}
+    if(this.tokenGrab){this.tokenGrab=false;this.stopThrow();this.dragTrail=[];this.dragState.sling=false;this.tokenJustDragged=true;clearTimeout(this.tokenClickTimer);this.tokenClickTimer=setTimeout(()=>this.tokenJustDragged=false,400);this.tokenScene.release();this.pollTokenSoon();}
     return old.onPointerUp.call(this,e);
   };
   proto.onClick=function(e){if(this.tokenJustDragged)return;return old.onClick.call(this,e);};
@@ -98,7 +99,7 @@
       });
       await post('completed',{played,x:(this.pos.x+this.halfW)/VIEW.w,y:(this.pos.y+this.height)/VIEW.h});
     }catch(e){if(!this.ac.signal.aborted&&!/爸爸抓住|身体被抓住|已收起/.test(e.message))this.tokenScene?.announce(e.message);await post('interrupted',{reason:e.message}).catch(()=>{});}
-    finally{clearTimeout(timer);cancelAnimationFrame(frame);if(front&&ended)front.removeEventListener('ended',ended);this.bodyExecuting=false;this.cancelBody=null;if(!this.ac.signal.aborted&&!this.bodyProtected&&!this.sleeping)this.playIdle();}
+    finally{clearTimeout(timer);cancelAnimationFrame(frame);if(front&&ended)front.removeEventListener('ended',ended);this.bodyExecuting=false;this.cancelBody=null;if(!this.ac.signal.aborted){this.pollTokenSoon();if(!this.bodyProtected&&!this.sleeping)this.playIdle();}}
   };
   // A stable desktop canvas: only the character moves inside it. The floor layer
   // never inherits a moving OS window origin. Transparent regions still pass through.

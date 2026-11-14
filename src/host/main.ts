@@ -90,10 +90,16 @@ export async function main():Promise<void> {
     const tokens=createHelperTokens(store,domain,observerAuthority);
     const commandChannel=createDesktopCommandChannel(store,helperAuthority);
     const worksite=createWorksite(store,lease,unitOfWork,id=>commandChannel.view(id),id=>commandChannel.cancelPet(id));
+    let wakeTokenPickup:(id:string)=>void=()=>{};
     let semanticResponse:((id:string,requestId:string,detail:unknown)=>Promise<unknown>)|undefined;
     const helper=createHelperChannel(humanity,commandChannel.bridge,[petId],observerAuthority,helperAuthority,commandChannel,
       (id,requestId,detail)=>domain.observeSpace(id,requestId,detail,observerAuthority),
-      (id,requestId,detail)=>tokens.handle(id,requestId,detail),
+      async(id,requestId,detail)=>{const action=(detail as any)?.action;
+        if(action==='hold'||action==='collect')commandChannel.cancelToken(id);
+        const result=await tokens.handle(id,requestId,detail);
+        if(action==='release'||action==='recover'||action==='collect')wakeTokenPickup(id);
+        return result;
+      },
       async(id,requestId,detail)=>{const d=detail as any;if(!d||typeof d.id!=='string'||typeof d.key!=='string'||![d.fromX,d.toX].every((n:unknown)=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=1))throw Error('搬砖拖动观察无效');await domain.laborAction(id,requestId,{action:'disturb',id:d.id,key:d.key,surface:'desktop',fromX:d.fromX,toX:d.toX},observerAuthority);const state=await store.loadEnvelope(id);if(!state)throw Error('状态不可用');return projectLegacySnapshot(state).labor;},
       (id,requestId,detail)=>{if(!semanticResponse)throw Error('互动服务尚未就绪');return semanticResponse(id,requestId,detail);},
       (id,action)=>action==='snapshot'?worksite.snapshot(id):worksite.act(id,action as Parameters<typeof worksite.act>[1]));
@@ -149,10 +155,24 @@ export async function main():Promise<void> {
     let validateWhisperSurface:((surface?:string)=>void)|undefined;
     let configuredPetIds:(()=>Set<string>)|undefined;
     const todos=createCanonicalTodos(store,lease,unitOfWork),todoRoute=createTodoRoute(todos,petId);
+    const deterministic=createDeterministicLife(humanity,store,service,lease,unitOfWork,actions,dispatcher,id=>budget.refresh(id),id=>tokens.held(id));
+    const pickupRuns=new Set<string>();
+    wakeTokenPickup=id=>{if(pickupRuns.has(id)||lease.signal.aborted)return;pickupRuns.add(id);
+      void (async()=>{try{
+        // The helper's release observation may arrive just after the token event.
+        for(let retries=0;!lease.signal.aborted;){
+          const complete=await deterministic.pickup(id,lease.signal);
+          if(complete){retries=0;continue;}
+          const state=await store.loadEnvelope(id),human=await humanity.get(id);
+          if(!state || state.life.constraints.paused || human.sleeping || !(state.legacy as any).tokens?.coins?.some((c:any)=>c.status==='floor'&&c.surface==='desktop') || ++retries>10)break;
+          await new Promise<void>(resolve=>{const done=()=>{clearTimeout(timer);lease.signal.removeEventListener('abort',done);resolve();};const timer=setTimeout(done,500);lease.signal.addEventListener('abort',done,{once:true});if(lease.signal.aborted)done();});
+        }
+      }catch(error){console.error('[tokens] pickup:',error);}finally{pickupRuns.delete(id);}})();
+    };
     scheduler=new LifeScheduler(kernel,cognition,{connectionString:connectionUri(dbConfig.connection),petId,intervalSeconds:60,signal:lease.signal,development,
       reminders:{run:(id,signal)=>todos.remind(id,signal,t=>{if(!publishWhisper)throw Error('桌宠显示尚未就绪');publishWhisper('提醒：'+t.text);})},
       whisper:{settings:()=>model!.getSettings(),run:async(id,signal)=>{if(!publishWhisper)throw Error('桌宠显示尚未就绪');const text=await responses(id,'whisper',signal,undefined,{autonomous:true});if(!signal.aborted)publishWhisper(text);}},
-      wakeCoordinator:wakes,deterministic:createDeterministicLife(humanity,store,service,lease,unitOfWork,actions,dispatcher,id=>budget.refresh(id)),resultCoordinator:coordinator,
+      wakeCoordinator:wakes,deterministic,resultCoordinator:coordinator,
       assertExclusive:async()=>lease.assertHeld()});
     app=await startStandalone({root,llm:model.llm,ai:{...model,queryBalance:meteredBalance,testConnection:(input:Record<string,unknown>)=>budget.runAs(petId,'interactive',()=>model!.testConnection(input))},agentDefaultModel:model.agentDefaultModel,helperChannel:helper,api,
       hostReady:(deps,helpers)=>{

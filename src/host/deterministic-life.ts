@@ -1,7 +1,6 @@
 import {strategyScore} from '../kernel/index.js';
 import {expireCommitments} from '../kernel/goal-lifecycle.js';
 import {projectBody} from './body-projection.js';
-import type {DeterministicActivity} from '../scheduler/index.js';
 import type {CanonicalHumanityAdapter} from './humanity-adapter.js';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 import type {PetGate,UnitOfWork,OutboxDispatcher} from '../storage/uow.js';
@@ -12,8 +11,28 @@ import {randomUUID} from 'node:crypto';
  * meal already in inventory; the regular service path requires the actual
  * desktop animation receipt before inventory or body is changed. */
 export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader:{loadEnvelope(id:string):Promise<CanonicalEnvelope|null>},service:(id:string,input:Record<string,unknown>,origin?:'user'|'autonomous')=>Promise<unknown>,
-  gate:PetGate,uow:UnitOfWork,actions:ActionCoordinator,dispatcher:OutboxDispatcher,refreshBudget:(petId:string)=>Promise<void>):DeterministicActivity {
-  return {async run(petId,signal,{allowAutonomous}) {
+  gate:PetGate,uow:UnitOfWork,actions:ActionCoordinator,dispatcher:OutboxDispatcher,refreshBudget:(petId:string)=>Promise<void>,tokenHeld:(petId:string)=>boolean=()=>false) {
+  // A release can start pickup immediately, independently of the minute wakeup.
+  async function pickup(petId:string,signal:AbortSignal):Promise<boolean> {
+    if(signal.aborted)return false;
+    const human=await humanity.get(petId);
+    if(signal.aborted || human.restrained || human.helperReady!==true || human.sleeping)return false;
+    return gate.run(petId,async()=>{
+      let current=await reader.loadEnvelope(petId);
+      if(!current || signal.aborted || current.life.constraints.paused || tokenHeld(petId))return false;
+      const freshHuman=current.humanity as Record<string,any>;
+      if(signal.aborted || freshHuman.restrained || freshHuman.helperReady!==true || freshHuman.sleeping || tokenHeld(petId))return false;
+      const legacy=current.legacy as Record<string,any>;
+      const coin=legacy.tokens?.coins?.find((c:any)=>c.status==='floor' && c.surface==='desktop');
+      if(legacy.worksite?.inside || !coin || !current.life.constraints.capabilities.some(c=>c.name==='token.pickup' && c.enabled) || current.life.actions.some(a=>a.actionType==='token.pickup' && ['PENDING','DISPATCHED','UNKNOWN'].includes(a.status)))return false;
+      const id='token-pickup:'+randomUUID(),at=new Date().toISOString();
+      await uow.apply(petId,current.version,draft=>{draft.life.actions.push({id,petId,actionType:'token.pickup',parameters:{coinId:coin.id},priority:40,interruptPolicy:'safe-point',requiredCapabilities:['token.pickup'],expectedStateVersion:draft.version,sourceIds:[],status:'PROPOSED',createdAt:at,updatedAt:at});return {};});
+      current=await reader.loadEnvelope(petId);if(!current || signal.aborted)return false;
+      await actions.queue(petId,id,current.version);if(signal.aborted)return false;
+      return (await dispatcher.dispatch(id)).status==='completed';
+    });
+  }
+  return {pickup,async run(petId:string,signal:AbortSignal,{allowAutonomous}:{allowAutonomous:boolean}) {
     if(signal.aborted)return;
     await refreshBudget(petId);
     if(signal.aborted)return;
@@ -56,19 +75,8 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
        !state.life.actions.some(a=>a.actionType==='service.buy-rice'&&['PENDING','DISPATCHED','UNKNOWN'].includes(a.status))) {
       await service(petId,{key:'auto-buy:'+Math.floor(Date.now()/21600000),command:'/冰箱 买一碗白饭'},'autonomous');return;
     }
-    // Each coin requires two real helper stages and a trusted receipt.
-    const coin=legacy.tokens?.coins?.find((c:any)=>c.status==='floor' && c.surface==='desktop');
-    const pickup=state.life.constraints.capabilities.find(c=>c.name==='token.pickup' && c.enabled);
-    if(!inWorksite && coin && pickup && !state.life.actions.some(a=>a.actionType==='token.pickup' && ['PENDING','DISPATCHED','UNKNOWN'].includes(a.status))) {
-      await gate.run(petId,async()=>{
-        let current=await reader.loadEnvelope(petId);if(!current || signal.aborted || current.life.constraints.paused)return;
-        if(current.life.actions.some(a=>a.actionType==='token.pickup' && ['PENDING','DISPATCHED','UNKNOWN'].includes(a.status)))return;
-        const live=(current.legacy as Record<string,any>).tokens?.coins?.find((c:any)=>c.id===coin.id && c.status==='floor' && c.surface==='desktop');if(!live)return;
-        const id='token-pickup:'+randomUUID(),at=new Date().toISOString();
-        await uow.apply(petId,current.version,draft=>{draft.life.actions.push({id,petId,actionType:'token.pickup',parameters:{coinId:coin.id},priority:40,interruptPolicy:'safe-point',requiredCapabilities:['token.pickup'],expectedStateVersion:draft.version,sourceIds:[],status:'PROPOSED',createdAt:at,updatedAt:at});return {};});
-        current=await reader.loadEnvelope(petId);if(!current || signal.aborted)return;await actions.queue(petId,id,current.version);if(!signal.aborted)await dispatcher.dispatch(id);
-      });
-      return;
+    if(!inWorksite && legacy.tokens?.coins?.some((c:any)=>c.status==='floor' && c.surface==='desktop')) {
+      await pickup(petId,signal);return;
     }
     // A confirmed work permit authorizes a bounded physical step, not a
     // fabricated trip. Actual progress only comes from the helper receipt.

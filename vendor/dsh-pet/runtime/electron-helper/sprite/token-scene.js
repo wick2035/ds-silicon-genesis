@@ -25,7 +25,7 @@ function tokenFloorLayout(coins, areas, view) {
 function createTokenScene(options) {
   const host=options.host, nodes=new Map(), abort=new AbortController(),native=options.surface==='desktop';
   let overlayTimer,noteTimer,noticeUntil=0,lastAnnouncement='';
-  let stopped=false, timer, heartbeat, sample, lastDrop=0, chain=Promise.resolve(), mutations=0, tokens=null, dragging=false, space=false,readEpoch=0,lastError='';
+  let stopped=false, timer, heartbeat, sample, lastDrop=0, queue=[], processing=false, mutations=0, tokens=null, dragging=false, space=false,readEpoch=0,lastError='';
   const layer=document.createElement('div');layer.className='pet-token-layer';layer.setAttribute('aria-label','地上的饭钱');host.append(layer);
   const status=document.createElement('div');status.className='pet-token-status';status.hidden=native;
   const balance=document.createElement('span'), hint=document.createElement('span'), retry=document.createElement('button');
@@ -82,18 +82,19 @@ function createTokenScene(options) {
       const el=document.createElement('button');el.type='button';el.className='pet-token-coin';el.dataset.coin=coin.id;el.title='收走 100 token';el.setAttribute('aria-label','收走这片 100 token，饭钱归爸爸');
       const face=document.createElement('span');face.className='pet-token-face';face.textContent='100';el.append(face);layer.append(el);nodes.set(coin.id,{el,coin});
       const collect=async e=>{
-        e.stopPropagation();if(e.type==='pointerdown'&&e.button!==0||el.disabled)return;el.disabled=true;
+        e.stopPropagation();if(e.type==='pointerdown'&&e.button!==0||el.disabled)return;el.disabled=true;el.style.visibility='hidden';options.onOverlay?.();
         try{const d=await post('collect',{id:coin.id});announce(d.result?.status==='collected'?'已收走 100 token':'这片钱已经被她捡回了');}
-        catch(error){el.disabled=false;announce(error.message);}
+        catch(error){el.disabled=false;el.style.visibility='';announce(error.message);}
+        finally{if(tokens)sync(tokens);}
       };
       // Take the coin on press; a pet/window move between down and up cannot eat the click.
       el.addEventListener('pointerdown',collect);el.addEventListener('click',collect);
       if(Date.now()-coin.ts<1800&&!matchMedia('(prefers-reduced-motion: reduce)').matches){
-        const a=options.point(coin.fromX,coin.fromY),b=options.point(coin.x,coin.y),dx=a.x-b.x,dy=a.y-b.y;
-        face.animate([{transform:`translate(${dx}px,${dy}px) rotate(-24deg)`},{transform:`translate(${dx*.35}px,${Math.min(-35,dy*.3)}px) rotate(60deg)`,offset:.5},{transform:'translate(0,0) rotate(-8deg)',offset:.74},{transform:'translate(0,-10px) rotate(4deg)',offset:.86},{transform:'translate(0,0) rotate(0deg)'}],{duration:800,easing:'ease-out'});
+        // Keep the visible coin and its native hit region together during the entrance.
+        face.animate([{transform:'scale(.65) rotate(-24deg)',opacity:.5},{transform:'scale(1.12) rotate(8deg)',offset:.65},{transform:'scale(1) rotate(0deg)',opacity:1}],{duration:320,easing:'ease-out'});
       }
     }
-    paint();options.onLayout?.();
+    paint();options.onLayout?.();options.onOverlay?.();
   }
   async function request(body) {
     const epoch=readEpoch;
@@ -101,9 +102,15 @@ function createTokenScene(options) {
     const r=await fetch(url,{...(body?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...body,surface:options.surface})}:{}),cache:'no-store',signal:AbortSignal.any([abort.signal,AbortSignal.timeout(35000)])});
     const d=await r.json();if(!r.ok||!d.ok)throw Error(d.message||'饭钱未能同步，请重试');if(body||epoch===readEpoch)sync(d.tokens);return d;
   }
+  async function drain() {
+    if(processing)return;processing=true;
+    try{while(queue.length){const item=queue.shift();try{if(stopped)throw Error('活动空间已关闭');item.resolve(await request({action:item.action,...item.body}));}catch(error){item.reject(error);}finally{mutations--;}}}
+    finally{processing=false;}
+  }
   function post(action,body={}) {
-    mutations++;readEpoch++;const pending=chain.catch(()=>{}).then(()=>{if(stopped)throw Error('活动空间已关闭');return request({action,...body});});
-    chain=pending.finally(()=>mutations--);chain.catch(()=>{});return pending;
+    mutations++;readEpoch++;
+    const pending=new Promise((resolve,reject)=>{const item={action,body,resolve,reject};if(action==='collect')queue.unshift(item);else queue.push(item);});
+    void drain();return pending;
   }
   const safePost=(action,body)=>post(action,body).catch(e=>{if(!stopped)announce(e.message);});
   scene.begin=(x,y)=>{

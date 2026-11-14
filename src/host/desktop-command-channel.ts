@@ -70,7 +70,8 @@ export function createDesktopCommandChannel(store:Reader,sourceCapability:object
         played:value.played===true,commandId:value.id,index:value.index,surface:value.surface,x:value.x,...(effortSeconds===undefined?{}:{effortSeconds,intensity:item!.intensity})},sourceCapability);
       return {ok:true};
     },
-    cancelPet(petId:string){const item=pending.get(petId);if(!item)return;clearTimeout(item.timer);pending.delete(petId);if(item.command.kind==='labor.step'){try{bridge.accept({petId,actionId:item.command.actionId,kind:'labor.step',status:'interrupted',effortSeconds:item.startedAt===undefined?0:Math.max(0,Math.min(30,(Date.now()-item.startedAt)/1000)),intensity:item.intensity},sourceCapability);}catch{bridge.interruptPet(petId,sourceCapability);}}else bridge.interruptPet(petId,sourceCapability);},
+    cancelPet(petId:string){const item=pending.get(petId);if(!item)return;clearTimeout(item.timer);pending.delete(petId);if(item.command.kind==='token.pickup'){bridge.accept({petId,actionId:item.command.actionId,kind:'token.pickup',status:'interrupted'},sourceCapability);}else if(item.command.kind==='labor.step'){try{bridge.accept({petId,actionId:item.command.actionId,kind:'labor.step',status:'interrupted',effortSeconds:item.startedAt===undefined?0:Math.max(0,Math.min(30,(Date.now()-item.startedAt)/1000)),intensity:item.intensity},sourceCapability);}catch{bridge.interruptPet(petId,sourceCapability);}}else bridge.interruptPet(petId,sourceCapability);},
+    cancelToken(petId:string){if(pending.get(petId)?.command.kind==='token.pickup')this.cancelPet(petId);},
     close(){for(const item of pending.values())clearTimeout(item.timer);pending.clear();}
   };
 }
