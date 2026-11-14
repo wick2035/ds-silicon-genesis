@@ -17,7 +17,30 @@ export function conversationContext(state:LifeState, envelope:CanonicalEnvelope)
   return {
     food:{balance:wallet.balance??null,frozen:wallet.frozen===true,price:config.costs?.feed??null,
       inventory:inventory.filter((i:any)=>i.status!=='eaten').slice(0,12).map((i:any)=>({name:i.name,status:i.status})),eating:pet.services?.eating??null},
+    worksite:worksiteFacts({...envelope,life:envelope.life??state}),
     phone:{open:config.networkLearning===true,search:abilities.search?.status==='granted',fetch:abilities.fetch?.status==='granted',
       dailyLimit:config.exploration?.dailyRuns??null,used:pet.usage?.[day]?.exploreRuns??0},actions
   };
+}
+
+/** Historical contract totals are not evidence of activity in the current visit. */
+export function worksiteFacts(envelope:CanonicalEnvelope) {
+  const pet=envelope.legacy as Record<string,any>, site=pet.worksite??{};
+  const contract=(pet.labor?.contracts??[]).find((c:any)=>['working','paused','unpaid'].includes(c.status));
+  const transition=envelope.life.events.filter(e=>e.type==='interaction.worksite' && !Object.hasOwn(envelope.life.invalidSources,e.eventId) && ['enter-forced','enter-voluntary','release','leave-voluntary'].includes(String((e.payload as any)?.action))).at(-1);
+  const enteredAt=site.inside===true && transition && ['enter-forced','enter-voluntary'].includes(String((transition.payload as any)?.action)) ? Date.parse(transition.occurredAt) : Infinity;
+  const completedTrips=envelope.life.actions.filter(a=>a.actionType==='labor.step' && a.parameters?.contractId===contract?.id && a.sourceIds.every(id=>!Object.hasOwn(envelope.life.invalidSources,id))).filter(a=>envelope.life.receipts.some(r=>{const details=r.details as Record<string,unknown>;return r.actionId===a.id && r.receiptId===a.receiptId && r.status==='COMPLETED' && details?.index===1 && typeof details.x==='number' && Math.abs(details.x-.78)<=.045 && Date.parse(r.occurredAt)>=enteredAt && envelope.life.events.some(e=>e.causationId===r.receiptId && !Object.hasOwn(envelope.life.invalidSources,e.eventId));})).length;
+  return {inside:site.inside===true,forced:site.forced===true,status:contract?.status??null,completedTotal:contract?.done??null,trips:contract?.trips??null,workPermit:contract?.workPermit===true,completedTripsThisVisit:completedTrips};
+}
+
+/** Reject definite, unsupported current-visit work claims at commit time. */
+export function groundWorksiteReply(reply:string,envelope:CanonicalEnvelope):string {
+  const facts=worksiteFacts(envelope);
+  if(!facts.inside)return reply;
+  const inactive=facts.status!=='working' || !facts.workPermit || !envelope.life.actions.some(a=>a.actionType==='labor.step' && a.status==='DISPATCHED');
+  const falseActive=inactive && /(?:我(?:一直|现在|正在|还在)?(?:忙着|正在|还在)?搬(?:砖|着|呢)|我(?:可)?没(?:有)?偷懒|我(?:一直|正在)干活)/u.test(reply);
+  const falseCompletion=facts.completedTripsThisVisit===0 && /(?:我(?:刚才|刚刚|刚|已经|都|这次|这趟|又)?(?:已经|都)?搬(?:完|好了|了一趟|了一块|了一个)|(?:这趟|这块砖)(?:我)?(?:已经|刚刚|刚)?搬完)/u.test(reply);
+  if(!falseActive && !falseCompletion)return reply;
+  const total=Number.isFinite(facts.completedTotal)?`以前记录的累计进度是 ${facts.completedTotal} 趟。`:'';
+  return `我现在还没有确认完成这一趟。${total}${inactive?'目前还没有确认正在搬砖。':'我会等实际动作完成再告诉你。'}`;
 }

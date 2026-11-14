@@ -32,7 +32,7 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
       return (await dispatcher.dispatch(id)).status==='completed';
     });
   }
-  return {pickup,async run(petId:string,signal:AbortSignal,{allowAutonomous}:{allowAutonomous:boolean}) {
+  async function run(petId:string,signal:AbortSignal,{allowAutonomous}:{allowAutonomous:boolean}) {
     if(signal.aborted)return;
     await refreshBudget(petId);
     if(signal.aborted)return;
@@ -60,7 +60,7 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     // Buying is a real, separately authorized purchase. Never manufacture a
     // free meal or retry an unconfirmed purchase merely because time passed.
     const price=legacy.config?.costs?.feed, wallet=legacy.wallet;
-    if(Number.isFinite(human.stats?.satiety) && human.stats.satiety<=30 && Array.isArray(inventory) && !inventory.some((i:any)=>i.status==='available') &&
+    if(!inWorksite && Number.isFinite(human.stats?.satiety) && human.stats.satiety<=30 && Array.isArray(inventory) && !inventory.some((i:any)=>i.status==='available') &&
        Number.isFinite(price) && price>0 && wallet?.frozen!==true && Number.isFinite(wallet?.balance) && wallet.balance>=price &&
        state.life.constraints.capabilities.some(c=>c.name==='service.buy-rice'&&c.enabled) &&
        !state.life.actions.some(a=>a.actionType==='service.buy-rice'&&['PENDING','DISPATCHED','UNKNOWN'].includes(a.status))) {
@@ -121,7 +121,8 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
           interruptPolicy:'safe-point',requiredCapabilities:['labor.step'],expectedStateVersion:draft.version,sourceIds:contract.workDecisionEvent?[contract.workDecisionEvent]:[],status:'PROPOSED',createdAt:at,updatedAt:at});return {};});
       current=await reader.loadEnvelope(petId);if(!current||signal.aborted)return;
       await actions.queue(petId,id,current.version);
-      if(!signal.aborted)await dispatcher.dispatch(id);
+      if(!signal.aborted){const receipt=await dispatcher.dispatch(id);if(receipt.status==='completed'&&!signal.aborted){const timer=setTimeout(()=>{if(!signal.aborted)void run(petId,signal,{allowAutonomous}).catch(()=>{});},0);timer.unref?.();}}
     });
-  }};
+  }
+  return {pickup,run};
 }

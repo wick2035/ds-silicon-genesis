@@ -29,6 +29,20 @@ test('her voluntary chat decision resumes one trip and requests the worksite',as
   assert.equal(s.legacy.worksite.requested,true);assert.equal(s.life.events.find(e=>e.eventId===c.workDecisionEvent).payload.choice,'work');
 });
 
+test('a contextual QQ request to enter is understood without an internal marker',async()=>{
+  const f=fixture('那我进去了，爸爸。等会儿记得看我搬完。');const now=new Date().toISOString();
+  f.get().life.events.push({eventId:'old-user',petId:'main',type:'conversation.user',source:'qq-c2c',actorId:'dad',occurredAt:now,receivedAt:now,evidenceLevel:'observed',payload:{text:'你先搬砖'}});
+  const reply=await f.chat.turn({requestId:'contextual-entry',petId:'main',channel:'qq-c2c',actorId:'dad',text:'可以 那你自己进去'},new AbortController().signal);
+  assert.match(reply,/我现在就进去/);assert.equal(f.get().legacy.worksite.requested,true);assert.equal(f.get().legacy.labor.contracts[0].workPermit,true);
+});
+
+test('an unmarked clear promise to work now starts the existing contract, but a deferred promise does not',async()=>{
+  for(const [reply,willing] of [['看就看，我这就去搬一块，不嘴上说说。',true],['我现在就动身去工地，你不能笑我。',true],['愿意啊，精神好了我就去试一趟。不过说好啊，搬完一块我可得吃饭。',true],['我现在就去工地，不过得先喝口水。',false],['我先休息，等我好了再去搬砖。',false],['我现在不去搬，太累了。',false]]){
+    const f=fixture(reply);await f.chat.turn({requestId:'plain-'+willing+reply.length,petId:'main',channel:'desktop',actorId:'dad',text:'你说你会搬砖，可以搬一个我看看嘛？'},new AbortController().signal);
+    assert.equal(f.get().legacy.worksite.requested===true,willing);
+  }
+});
+
 test('the voluntary chat decision enters the page and dispatches a web labor step',async()=>{
   const f=fixture('好，我去搬一趟。\n[愿意去工地]');let dispatched,awakened;
   const actions=new ActionCoordinator(f.uow,projectBody);
