@@ -9,6 +9,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('petBridge', {
+  worksiteOnly: !!process.env.SILICON_HELPER_EPOCH,
   reportRestraint(kind, restrained) { ipcRenderer.send('pet:restraint', {kind, restrained}); },
   onRestraintRetry(callback) { ipcRenderer.on('pet:restraint-retry', () => callback()); },
   reportActionReceipt(receipt) { return ipcRenderer.invoke('pet:action-receipt', receipt); },

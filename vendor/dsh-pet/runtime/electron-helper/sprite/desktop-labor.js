@@ -11,7 +11,7 @@
   const style=document.createElement('style');style.textContent='.pet-labor-brick{position:absolute;width:30px;height:15px;border-radius:2px;background:#b45a3c;border:1px solid #713b2d;box-shadow:inset 0 3px #d98b66;pointer-events:none}.pet-labor-place{position:absolute;pointer-events:none;color:#f8f5ef;background:#423e38;padding:5px 9px;border-radius:5px;font:12px "Microsoft YaHei",sans-serif;white-space:nowrap}.pet-labor-load{position:absolute;pointer-events:none;width:28px;height:14px;border-radius:2px;background:#b45a3c;border:1px solid #713b2d;box-shadow:inset 0 3px #d98b66}';document.head.append(style);
   style.textContent+='.pet-labor-art{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;pointer-events:none;opacity:0;transform-origin:50% 90%}.pet-stage.has-labor-art:not(.is-crying):not(.is-using-phone) .pet-labor-art{opacity:1}.pet-stage.has-labor-art:not(.is-crying):not(.is-using-phone) .pet-video{opacity:0}.pet-labor-art[data-pose="carry"]{animation:pet-brick-steps .48s ease-in-out infinite alternate}.pet-labor-art[data-pose="lift"]{animation:pet-brick-lift 1.2s ease-in-out infinite alternate}@keyframes pet-brick-steps{from{transform:translateY(0) rotate(-1deg)}to{transform:translateY(-3px) rotate(1deg)}}@keyframes pet-brick-lift{from{transform:translateY(2px)}to{transform:translateY(-3px)}}@media(prefers-reduced-motion:reduce){.pet-labor-art{animation:none!important}}';
   proto.paintLabor=function(){
-    const c=this.laborView?.current, visible=c&&['working','paused','unpaid'].includes(c.status)&&c.surface==='desktop';
+    const c=this.laborView?.current, visible=!window.petBridge?.worksiteOnly&&c&&['working','paused','unpaid'].includes(c.status)&&c.surface==='desktop';
     const command=this.laborCommand;const pose=null;
     this.laborArtActive=!!pose;
     if(pose&&this.painStage){if(!this.laborArt){this.laborArt=document.createElement('img');this.laborArt.className='pet-labor-art';this.laborArt.alt='大肥鱼抱着砖认真搬运';this.laborArt.onload=()=>{if(this.laborArtActive)this.painStage?.classList.add('has-labor-art');};this.painStage.append(this.laborArt);}if(this.laborArt.dataset.pose!==pose){this.laborArt.dataset.pose=pose;this.laborArt.src=BASE+'/humanity/labor-'+pose+'.png';}if(this.laborArt.complete&&this.laborArt.naturalWidth)this.painStage.classList.add('has-labor-art');}else this.painStage?.classList.remove('has-labor-art');
@@ -76,7 +76,7 @@
   };
   proto.fitWindow=function(){
     const c=this.laborView?.current;
-    if(!c||!['working','paused','unpaid'].includes(c.status)||c.surface!=='desktop'){
+    if(window.petBridge?.worksiteOnly||!c||!['working','paused','unpaid'].includes(c.status)||c.surface!=='desktop'){
       const fit=old.fitWindow.call(this);this.laborOrigin={x:fit.x,y:fit.y};return fit;
     }
     // Keep the transparent worksite window fixed while the real sprite moves inside it.

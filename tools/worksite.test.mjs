@@ -4,6 +4,8 @@ import {createHumanity} from '../vendor/dsh-pet/src/host/humanity.mjs';
 import {createWorksite} from '../dist/host/worksite.js';
 import {createDesktopCommandChannel} from '../dist/host/desktop-command-channel.js';
 import {projectOutcome} from '../dist/host/outcome-projector.js';
+import {readFile} from 'node:fs/promises';
+import vm from 'node:vm';
 
 function fixture(){
   let state={petId:'main',version:0,legacy:{events:[],labor:{contracts:[]},world:{},wallet:{balance:100},config:{costs:{}}},humanity:createHumanity(),life:{events:[],invalidSources:{},constraints:{paused:false}}};
@@ -47,4 +49,20 @@ test('web labor receipts match the dispatched body and interrupted work is cance
   const interrupted=channel.bridge.execute('main',next,new AbortController().signal);await new Promise(setImmediate);channel.cancelPet('main');
   const receipt=await interrupted;assert.equal(receipt.status,'cancelled');assert.equal(receipt.evidence.effortSeconds,0);
   projectOutcome(state,next,receipt,new Date().toISOString(),'source');assert.equal(state.legacy.world.command.status,'interrupted');channel.close();
+});
+
+test('restored desktop contracts cannot draw bricks or expand the new desktop window',async()=>{
+  const source=await readFile(new URL('../vendor/dsh-pet/runtime/electron-helper/sprite/desktop-labor.js',import.meta.url),'utf8');
+  const makeNode=()=>({style:{},append(){},replaceChildren(){},setAttribute(){},remove(){this.removed=true;}});
+  class Sprite {}
+  for(const name of ['executeBody','pollBody','reportWindow','dispose','onPointerDown','onPointerMove','onPointerUp','syncPhoneBody','syncPainState'])Sprite.prototype[name]=()=>{};
+  Sprite.prototype.fitWindow=()=>({x:10,y:20,width:200,height:300});
+  const document={createElement:makeNode,head:makeNode(),body:makeNode()};
+  const window={petBridge:{worksiteOnly:true}};
+  vm.runInNewContext(source,{PetSprite:Sprite,document,window,VIEW:{w:1920,h:1080}});
+  const sprite=new Sprite();Object.assign(sprite,{laborView:{current:{id:'old',status:'working',surface:'desktop',done:0,trips:3}},laborLayer:makeNode(),pos:{x:40,y:50},winOffset:{x:0,y:0},height:100});
+  const oldLayer=sprite.laborLayer;sprite.paintLabor();assert.equal(oldLayer.removed,true);assert.equal(sprite.laborLayer,null);
+  assert.equal(sprite.fitWindow().width,200);
+  window.petBridge.worksiteOnly=false;sprite.paintLabor();assert.ok(sprite.laborLayer,'the original desktop host retains its own display');
+  sprite.applyWinOffset=()=>{};assert.equal(sprite.fitWindow().width,1920);
 });
