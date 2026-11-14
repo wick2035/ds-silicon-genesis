@@ -52,7 +52,7 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     // Only the worksite body may perform physical work while she is inside.
     // Desktop-only meals and coin pickup wait until she returns.
     const inWorksite=legacy.worksite?.inside===true;
-    if(!inWorksite && Number.isFinite(human.stats?.satiety) && human.stats.satiety<=30 && Array.isArray(inventory) && inventory.some((i:any)=>i.status==='available')) {
+    if(!inWorksite && Number.isFinite(human.stats?.satiety) && human.stats.satiety<=30 && Array.isArray(inventory) && inventory.some((i:any)=>i.status==='available') && !state.life.actions.some(a=>a.actionType==='service.eat-rice' && a.status==='UNKNOWN')) {
       if(!state.life.actions.some(a=>a.actionType==='service.eat-rice' && ['PENDING','DISPATCHED','UNKNOWN'].includes(a.status)))
         await service(petId,{key:'auto-meal:'+Math.floor(Date.now()/21600000),command:'/吃'},'autonomous');
       return;
@@ -73,7 +73,7 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     // fabricated trip. Actual progress only comes from the helper receipt.
     await gate.run(petId,async()=>{
       let current=await reader.loadEnvelope(petId);if(!current||signal.aborted||current.life.constraints.paused)return;
-      if(current.life.actions.some(a=>['PENDING','DISPATCHED','UNKNOWN'].includes(a.status) && ['labor.step','service.eat-rice'].includes(a.actionType)))return;
+      if(current.life.actions.some(a=>a.actionType==='labor.step' && ['PENDING','DISPATCHED','UNKNOWN'].includes(a.status) || a.actionType==='service.eat-rice' && ['PENDING','DISPATCHED'].includes(a.status)))return;
       let pet=current.legacy as Record<string,any>, contract=pet.labor?.contracts?.find((c:any)=>c.status==='working');
       if(!contract || !Number.isFinite(contract.done) || contract.done>=contract.trips)return;
       if(contract.workPermit && contract.workDecisionEvent && Object.hasOwn(current.life.invalidSources,contract.workDecisionEvent)){await uow.apply(petId,current.version,draft=>{const c=(draft.legacy as Record<string,any>).labor?.contracts?.find((x:any)=>x.id===contract.id);if(c){c.workPermit=false;c.batchRemaining=0;c.nextDecision=0;}return {};});current=await reader.loadEnvelope(petId);if(!current)return;pet=current.legacy as Record<string,any>;contract=pet.labor?.contracts?.find((c:any)=>c.id===contract.id);if(!contract)return;}

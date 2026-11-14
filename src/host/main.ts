@@ -91,7 +91,8 @@ export async function main():Promise<void> {
     const domain=new LegacyDomain(store,unitOfWork,lease,observerAuthority);
     const tokens=createHelperTokens(store,domain,observerAuthority);
     const commandChannel=createDesktopCommandChannel(store,helperAuthority);
-    const worksite=createWorksite(store,lease,unitOfWork,id=>commandChannel.view(id),id=>commandChannel.cancelPet(id));
+    let worksiteWake:(id:string)=>void=()=>{};
+    const worksite=createWorksite(store,lease,unitOfWork,id=>commandChannel.view(id),id=>commandChannel.cancelPet(id),id=>worksiteWake(id));
     let wakeTokenPickup:(id:string)=>void=()=>{};
     let semanticResponse:((id:string,requestId:string,detail:unknown)=>Promise<unknown>)|undefined;
     const helper=createHelperChannel(humanity,commandChannel.bridge,[petId],observerAuthority,helperAuthority,commandChannel,
@@ -114,7 +115,7 @@ export async function main():Promise<void> {
     const attachments=createAttachmentStore(store,lease,unitOfWork);
     model=createModelFacade(modelConfig,{leaseSignal:lease.signal,budget,resolveImage:attachments.resolve,persist:async value=>{const file=join(root,'data','model-config.json'),temporary=file+'.tmp';await writeFile(temporary,JSON.stringify(value,null,2),{mode:0o600});await rename(temporary,file);}});
     executors.set('image.observe',createImageObserver(store,budget,model));
-    const retrieval=new CanonicalMemoryRetrieval(lease), chat=new CanonicalChat(store,lease,unitOfWork,budget,model,(id,q)=>retrieval.search(id,q),(id,key,input)=>domain.laborAction(id,key,input),(id,input)=>service(id,input));
+    const retrieval=new CanonicalMemoryRetrieval(lease), chat=new CanonicalChat(store,lease,unitOfWork,budget,model,(id,q)=>retrieval.search(id,q),(id,key,input)=>domain.laborAction(id,key,input),(id,input)=>service(id,input),id=>worksiteWake(id));
     let requestShutdown=()=>{};
     const decideLaborOffer=async(id:string,requestId:string,contractId:string)=>{
       const state=await lease.run(id,()=>store.loadEnvelope(id));
@@ -160,6 +161,7 @@ export async function main():Promise<void> {
     const reactionBaseline=await store.loadEnvelope(petId);if(!reactionBaseline)throw Error('生命状态不可用');
     const todos=createCanonicalTodos(store,lease,unitOfWork),todoRoute=createTodoRoute(todos,petId);
     const deterministic=createDeterministicLife(humanity,store,service,lease,unitOfWork,actions,dispatcher,id=>budget.refresh(id),id=>tokens.held(id));
+    worksiteWake=id=>{void deterministic.run(id,lease.signal,{allowAutonomous:true}).catch(()=>{});};
     const pickupRuns=new Set<string>();
     wakeTokenPickup=id=>{if(pickupRuns.has(id)||lease.signal.aborted)return;pickupRuns.add(id);
       void (async()=>{try{

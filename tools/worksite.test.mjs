@@ -12,12 +12,13 @@ function fixture(){
   const store={loadEnvelope:async()=>structuredClone(state)};
   const gate={run:async(_id,fn)=>fn()};
   const uow={apply:async(_id,version,fn)=>{assert.equal(version,state.version);const draft=structuredClone(state);fn(draft);draft.version++;state=draft;}};
-  let cancelled=0;const service=createWorksite(store,gate,uow,()=>null,()=>cancelled++);
-  return {service,store,get:()=>state,set:value=>{state=value;},cancelled:()=>cancelled};
+  let cancelled=0,woken=0;const service=createWorksite(store,gate,uow,()=>null,()=>cancelled++,()=>woken++);
+  return {service,store,get:()=>state,set:value=>{state=value;},cancelled:()=>cancelled,woken:()=>woken};
 }
 
 test('forced entry survives a fresh service instance and only a manual release unlocks it',async()=>{
   const f=fixture();f.get().legacy.labor.contracts.push({id:'c',status:'working',workPermit:true,batchRemaining:2});await f.service.act('main','enter-forced');
+  assert.equal(f.woken(),1);
   assert.deepEqual((await f.service.snapshot('main')).location,{inside:true,forced:true,requested:false});
   await assert.rejects(f.service.act('main','leave-voluntary'),/等爸爸/);
   await f.service.act('main','touch');await f.service.act('main','drag');
@@ -65,4 +66,7 @@ test('restored desktop contracts cannot draw bricks or expand the new desktop wi
   assert.equal(sprite.fitWindow().width,200);
   window.petBridge.worksiteOnly=false;sprite.paintLabor();assert.ok(sprite.laborLayer,'the original desktop host retains its own display');
   sprite.applyWinOffset=()=>{};assert.equal(sprite.fitWindow().width,1920);
+  let drops=0;window.petBridge.dropInWorksite=async()=>{drops++;return {entered:false};};sprite.laborView=null;
+  for(const event of [{type:'pointerup'},{type:'mousemove',buttons:0},{type:'lostpointercapture',buttons:0},{type:'pointercancel',buttons:0}]){sprite.dragState={dragging:true};sprite.onPointerUp(event);}
+  assert.equal(drops,3,'normal and fallback releases enter the worksite, cancellation does not');
 });

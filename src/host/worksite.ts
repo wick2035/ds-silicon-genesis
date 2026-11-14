@@ -8,7 +8,7 @@ type Action='enter-forced'|'enter-voluntary'|'release'|'leave-voluntary'|'touch'
 
 /** The helper is the sole caller. A location is committed before either body
  * changes visibility; the forced-entry lock survives window and host restarts. */
-export function createWorksite(store:Reader,gate:PetGate,uow:UnitOfWork,view:(id:string)=>unknown,cancel:(id:string)=>void) {
+export function createWorksite(store:Reader,gate:PetGate,uow:UnitOfWork,view:(id:string)=>unknown,cancel:(id:string)=>void,wake?:(id:string)=>void) {
   const snapshot=async(id:string)=>{
     const state=await store.loadEnvelope(id);if(!state)throw Error('生命状态不可用');
     const pet=state.legacy as Record<string,any>,projected=projectLegacySnapshot(state);
@@ -52,6 +52,8 @@ export function createWorksite(store:Reader,gate:PetGate,uow:UnitOfWork,view:(id
         return {};
       });
     });
-    return snapshot(id);
+    const result=await snapshot(id);
+    if(action==='enter-forced'||action==='enter-voluntary')try{wake?.(id);}catch{/* The normal scheduler can retry. */}
+    return result;
   }};
 }
