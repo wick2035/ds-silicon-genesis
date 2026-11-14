@@ -151,7 +151,6 @@ export class CanonicalChat {
         const legacy=draft.legacy as Record<string,any>, turn=legacy.chatTurns?.[id];
         if(!turn||turn.status!=='running'||turn.fingerprint!==fingerprint)throw new Error('对话状态已变化');
         const reviewValid=!!review && this.grounding?.signature(draft)===review.signature;
-        if(this.grounding && !reviewValid)worksiteIntent=false;
         if(sources.some(source=>Object.hasOwn(draft.life.invalidSources,source)||!draft.life.events.some(e=>e.eventId===source)))throw new Error('对话依赖的记忆已变化');
         settleSimulatedSpending(draft,'chat','chat:'+id);
         const now=new Date().toISOString(), userId='chat-user:'+id, assistantId='chat-assistant:'+id;
@@ -174,9 +173,9 @@ export class CanonicalChat {
             decidedToWork=true;
           }
         }
-        if(!workBlocked)output=this.grounding?reviewedReply(review??null,reviewValid,decidedToWork):groundActionReply(groundWorksiteReply(output,draft),draft);
+        if(!workBlocked)output=this.grounding?(!reviewValid?this.grounding.currentReply(draft,decidedToWork):reviewedReply(review??null,true,decidedToWork)):groundActionReply(groundWorksiteReply(output,draft),draft);
         if(laborProposal){const p=laborProposal as any;const description=p.action==='offer'?`搬 ${p.trips} 趟，工钱 ${p.wage} token`:p.action==='pay'?`结算 ${p.amount} token 工钱`:({confirm:'确认开工',counter:'接受还价',decline:'拒绝工作',pause:'暂停工作',resume:'继续工作',nudge:'催促工作'} as Record<string,string>)[p.action];output+='\n我理解的是：'+description+'。请说“确认”或发送 /确认工作 '+id.slice(0,12)+'。';}
-        if(group && [...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(output)].length>15)output='这趟还没有完成。';
+        if(group && [...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(output)].length>15)output='我现在还不确定。';
         draft.life.events.push({eventId:assistantId,petId:input.petId,type:'conversation.assistant',source:input.channel,occurredAt:now,receivedAt:now,evidenceLevel:'inferred',causationId:userId,payload:{text:output,channel:input.channel,...(typeof groupId==='string'?{groupId}:{}),sourceIds:sources}});
         if(workDecision)draft.life.events.push({eventId:String(workDecision.eventId),petId:input.petId,type:'labor.decision',source:'model',occurredAt:now,receivedAt:now,evidenceLevel:'inferred',causationId:assistantId,payload:{contractId:workDecision.contractId,choice:'work',reason:'conversation',sourceIds:[userId,assistantId]}});
         if(laborProposal){const proposals=legacy.chatLaborProposals ||= {};const code=id.slice(0,12);if(proposals[code])throw Error('工作提案编号冲突');proposals[code]={input:laborProposal,sourceId:userId,status:'pending',expiresAt:Date.now()+600000};}

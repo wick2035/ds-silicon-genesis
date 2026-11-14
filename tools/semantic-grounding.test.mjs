@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createSemanticGrounding,reviewedReply,actionFacts} from '../dist/host/semantic-grounding.js';
+import {createSemanticGrounding,reviewedReply,actionFacts,currentWorksiteReply} from '../dist/host/semantic-grounding.js';
 import {CanonicalChat} from '../dist/host/chat-service.js';
 import {CompanionStore} from '../vendor/pet-plugins/behavior/core.mjs';
 import {createHumanity} from '../vendor/dsh-pet/src/host/humanity.mjs';
@@ -25,8 +25,15 @@ test('semantic audit rejects paraphrased motion without playing evidence and can
 test('missing, altered, or unsupported evidence fails closed',async()=>{
   for(const build of [input=>({workIntent:true,segments:[]}),input=>({workIntent:true,segments:input.segments.map(text=>({text:text+'x',kind:'other',supported:true,evidence:[]}))}),input=>({workIntent:true,segments:input.segments.map(text=>({text,kind:'fact',supported:true,evidence:['invented']}))})]){
     const f=fixture(build);const reply=await f.chat.turn({requestId:'bad-review',petId:'main',channel:'desktop',actorId:'dad',text:'快搬！'},new AbortController().signal);
-    assert.match(reply,/没法确认/);assert.equal(f.get().legacy.labor.contracts[0].status,'paused');
+    assert.match(reply,/累计搬了 21\/50 趟/);assert.match(reply,/没有确认到正在播放/);assert.equal(f.get().legacy.labor.contracts[0].status,'paused');
   }
+});
+test('stale or unavailable review reports current committed work and body state without inventing playback',async()=>{
+  const f=fixture(()=>({}));const s=await f.reader.loadEnvelope('main');s.humanity.stats.stamina=42.334;s.humanity.stats.satiety=1.154;s.legacy.labor.contracts[0].carrying=true;
+  const output=currentWorksiteReply(s,undefined,false);assert.match(output,/累计搬了 21\/50 趟，手里拿着砖/);assert.match(output,/体力 42\.33，饱腹感 1\.15/);assert.match(output,/没有确认到正在播放/);assert.doesNotMatch(output,/我正在执行/);
+  s.life.actions.push({id:'step',actionType:'labor.step',status:'DISPATCHED',parameters:{contractId:'c'},sourceIds:[]});
+  assert.match(currentWorksiteReply(s,{actionId:'step',kind:'labor.step',startedAt:1},false),/我正在执行搬砖动作/);
+  delete s.legacy.labor.contracts[0].carrying;assert.doesNotMatch(currentWorksiteReply(s,undefined,false),/手里/);
 });
 test('a state change between review and commit invalidates the result',async()=>{
   const f=fixture(input=>({workIntent:false,segments:input.segments.map(text=>({text,kind:'other',supported:true,evidence:[]}))}));

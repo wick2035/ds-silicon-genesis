@@ -34,6 +34,7 @@ export function actionFactsSignature(draft:CanonicalEnvelope,observation?:Observ
 export function createSemanticGrounding(reader:Reader,budget:DurableCognitiveBudget,model:Model,observe:(id:string)=>Observation=()=>undefined) {
   return {
     signature:(draft:CanonicalEnvelope)=>actionFactsSignature(draft,observe(draft.petId)),
+    currentReply:(draft:CanonicalEnvelope,workingDecision:boolean)=>currentWorksiteReply(draft,observe(draft.petId),workingDecision),
     async review(petId:string,reply:string,request:string,signal:AbortSignal,category:'interactive'|'autonomous'='interactive'):Promise<ReplyReview>{
       const draft=await reader.loadEnvelope(petId);if(!draft)return null;
       const observed=observe(petId),facts=actionFacts(draft,observed),signature=actionFactsSignature(draft,observed),parts=split(reply);
@@ -60,6 +61,23 @@ export function createSemanticGrounding(reader:Reader,budget:DurableCognitiveBud
       }catch{return null;}
     }
   };
+}
+
+/** When a long review becomes stale, render the newly committed facts directly.
+ * A queued command is never described as playing or complete. */
+export function currentWorksiteReply(draft:CanonicalEnvelope,observation:Observation,workingDecision:boolean):string {
+  const pet=draft.legacy as Record<string,any>, site=pet.worksite, work=pet.labor?.contracts?.find((c:any)=>['working','paused','unpaid'].includes(c.status));
+  if(!site?.inside || !work || !Number.isFinite(work.done) || !Number.isFinite(work.trips))return '我现在没法确认刚才的动作状态，等我核实后再说。';
+  const facts=actionFacts(draft,observation),human=draft.humanity as Record<string,any>,stats=human.stats??{};
+  const command=pet.world?.command;
+  const completed=command?.source==='labor' && command?.labor?.id===work.id && command?.labor?.leg==='deliver' && command?.status==='completed' &&
+    facts.receipts.some(r=>r.type==='labor.step' && r.status==='COMPLETED' && r.parameters?.commandId===command.id && (draft.life.receipts.find(x=>x.actionId===r.id.slice('receipt:'.length))?.details as Record<string,unknown>)?.index===1);
+  const format=(n:unknown)=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=100?String(Math.round(n*100)/100):null;
+  const stamina=format(stats.stamina),satiety=format(stats.satiety);
+  const body=stamina!==null&&satiety!==null?`体力 ${stamina}，饱腹感 ${satiety}。`:'';
+  const motion=facts.playing?.type==='labor.step'?'我正在执行搬砖动作。':'目前没有确认到正在播放的搬砖动作。';
+  const carrying=work.carrying===true?'，手里拿着砖':work.carrying===false?'，手里没有砖':'';
+  return `${completed?'最近一趟的放砖有完成回执。':''}累计搬了 ${work.done}/${work.trips} 趟${carrying}。${motion}${body}${workingDecision?'我决定试着搬一趟，动作开始再告诉你。':''}`;
 }
 
 export function reviewedReply(review:ReplyReview,valid:boolean,workingDecision:boolean):string {
