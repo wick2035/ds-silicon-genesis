@@ -7,6 +7,7 @@ import {createDeterministicLife} from '../dist/host/deterministic-life.js';
 import {ActionCoordinator} from '../dist/host/action-coordinator.js';
 import {projectBody} from '../dist/host/body-projection.js';
 import {projectOutcome} from '../dist/host/outcome-projector.js';
+import {blocksNewLabor} from '../dist/host/labor-pending.js';
 
 function fixture(reply,{tired=false,inside=true}={}){
   const old=Object.create(CompanionStore.prototype);Object.assign(old,{data:{version:2,pets:{}},loaded:true,clock:Date.now,save(){},load(){}});
@@ -23,6 +24,20 @@ function fixture(reply,{tired=false,inside=true}={}){
   return {chat,store,gate,uow,get:()=>envelope,setWake:fn=>{wake=fn;}};
 }
 const turn=(f,text,id)=>f.chat.turn({requestId:id,petId:'main',channel:'desktop',actorId:'dad',text},new AbortController().signal);
+
+test('未执行的搬砖动作取消后撤销工作许可并中断对应命令',()=>{
+  const f=fixture('');const state=f.get();const contract=state.legacy.labor.contracts[0];contract.status='working';contract.workPermit=true;contract.batchRemaining=1;
+  state.legacy.world={command:{id:'command',source:'labor',status:'queued',labor:{id:contract.id}}};
+  projectOutcome(state,{id:'step',type:'labor.step',payload:{parameters:{contractId:contract.id,commandId:'command'}}},{status:'cancelled',evidence:{reason:'state-changed'}},new Date().toISOString(),'receipt');
+  assert.equal(state.legacy.world.command.status,'interrupted');assert.equal(contract.workPermit,false);assert.equal(contract.done,18);
+});
+
+test('重启中断的未知动作不计入进度，也不永久阻塞新的动作',()=>{
+  const state=fixture('').get();state.legacy.world={command:{id:'old',status:'queued'}};
+  state.life.actions.push({actionType:'labor.step',status:'UNKNOWN',parameters:{commandId:'old'}});
+  assert.equal(blocksNewLabor(state),true);state.legacy.world.command.status='interrupted';
+  assert.equal(blocksNewLabor(state),false);assert.equal(state.legacy.labor.contracts[0].done,18);assert.equal(state.life.actions[0].status,'UNKNOWN');
+});
 
 test('催促得到愿意立即干的回答时，恢复约定并唤醒工地',async()=>{
   for(const [message,reply] of [['干活吧，我去忙了','这趟我搬。'],['立马干','好，我马上干。']]){

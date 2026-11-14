@@ -12,6 +12,14 @@ const clamp = (n: number) => Math.max(0, Math.min(100, n));
  * Called inside the same locked DB transaction as the receipt and outbox update.
  * Unknown, failed and cancelled operations never create positive outcomes. */
 export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, receipt: ExecutionReceipt, occurredAt: string, sourceEventId: string): void {
+  if(intent.type==='labor.step' && (receipt.status==='cancelled'||receipt.status==='failed')) {
+    const pet=draft.legacy as Obj, params=intent.payload.parameters as Obj;
+    const command=pet.world?.command, contract=pet.labor?.contracts?.find((c:Obj)=>c.id===params?.contractId);
+    if(command?.id===params?.commandId && ['queued','running'].includes(command.status)) {
+      command.status='interrupted'; command.interruptedReason='execution-'+receipt.status;
+      if(contract && command.labor?.id===contract.id){contract.workPermit=false;contract.batchRemaining=0;contract.behavior='动作中断，等待新的工作决定';}
+    }
+  }
   if (receipt.status !== 'completed' && !(intent.type==='labor.step' && receipt.status==='cancelled' && receipt.evidence?.confirmed===true)) return;
   const at = Date.parse(occurredAt); assert(Number.isFinite(at), '执行时间无效');
   const e = receipt.evidence as Obj, params = intent.payload.parameters as Obj;

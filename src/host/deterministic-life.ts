@@ -1,6 +1,7 @@
 import {strategyScore} from '../kernel/index.js';
 import {expireCommitments} from '../kernel/goal-lifecycle.js';
 import {projectBody} from './body-projection.js';
+import {blocksNewLabor} from './labor-pending.js';
 import type {CanonicalHumanityAdapter} from './humanity-adapter.js';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 import type {PetGate,UnitOfWork,OutboxDispatcher} from '../storage/uow.js';
@@ -73,7 +74,7 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     // fabricated trip. Actual progress only comes from the helper receipt.
     await gate.run(petId,async()=>{
       let current=await reader.loadEnvelope(petId);if(!current||signal.aborted||current.life.constraints.paused)return;
-      if(current.life.actions.some(a=>a.actionType==='labor.step' && ['PENDING','DISPATCHED','UNKNOWN'].includes(a.status) || a.actionType==='service.eat-rice' && ['PENDING','DISPATCHED'].includes(a.status)))return;
+      if(blocksNewLabor(current) || current.life.actions.some(a=>a.actionType==='service.eat-rice' && ['PENDING','DISPATCHED'].includes(a.status)))return;
       let pet=current.legacy as Record<string,any>, contract=pet.labor?.contracts?.find((c:any)=>c.status==='working');
       if(!contract || !Number.isFinite(contract.done) || contract.done>=contract.trips)return;
       if(contract.workPermit && contract.workDecisionEvent && Object.hasOwn(current.life.invalidSources,contract.workDecisionEvent)){await uow.apply(petId,current.version,draft=>{const c=(draft.legacy as Record<string,any>).labor?.contracts?.find((x:any)=>x.id===contract.id);if(c){c.workPermit=false;c.batchRemaining=0;c.nextDecision=0;}return {};});current=await reader.loadEnvelope(petId);if(!current)return;pet=current.legacy as Record<string,any>;contract=pet.labor?.contracts?.find((c:any)=>c.id===contract.id);if(!contract)return;}

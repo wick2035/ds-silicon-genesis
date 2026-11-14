@@ -4,8 +4,11 @@ import { redactDadNames } from '../../vendor/pet-plugins/behavior/memory-privacy
 import { rebuildRelationships } from '../kernel/index.js';
 import { conversationContext, groundWorksiteReply, worksiteFacts } from './conversation-context.js';
 import { groundActionReply } from './reply-grounding.js';
+import {reviewedReply} from './semantic-grounding.js';
+import type {createSemanticGrounding} from './semantic-grounding.js';
 import {groupSpeaker,isOwnerPrivateConversation} from './chat-identity.js';
 import {projectBody} from './body-projection.js';
+import {blocksNewLabor} from './labor-pending.js';
 import type { LifeState, Memory } from '../kernel/types.js';
 import type { CanonicalEnvelope } from '../storage/postgres.js';
 import type { PetGate, UnitOfWork } from '../storage/uow.js';
@@ -25,7 +28,8 @@ export class CanonicalChat {
     private readonly search:(petId:string,query:string)=>Promise<Memory[]>,
     private readonly laborAction?:(petId:string,requestId:string,input:Record<string,unknown>)=>Promise<unknown>,
     private readonly service?:(petId:string,input:Record<string,unknown>)=>Promise<unknown>,
-    private readonly wakeWorksite?:(petId:string)=>void) {}
+    private readonly wakeWorksite?:(petId:string)=>void,
+    private readonly grounding?:ReturnType<typeof createSemanticGrounding>) {}
   private async edit<T>(petId:string,fn:(draft:CanonicalEnvelope)=>T):Promise<T> {
     return this.gate.run(petId,async()=>{
       const current=await this.reader.loadEnvelope(petId);if(!current||this.gate.signal.aborted)throw new Error('生命状态不可用');
@@ -124,7 +128,7 @@ export class CanonicalChat {
       const recentTopic=history.slice(-4).map(e=>e.content).join(' ');
       const workContext=(state.legacyContext.worksite as any)?.inside===true || (envelope?.legacy as any)?.worksite?.inside===true || /搬砖|搬(?:一|1|块|趟)|工地/u.test(recentTopic);
       const workPrompt=/搬砖|搬(?:一|1|块|趟)|工地/u.test(text)||workContext && /干活|开工|(?:立马|马上|现在|赶紧|快点).{0,3}(?:干|做|工作)|(?:自己|现在|就|那|去|进).{0,6}(?:进去|进来|工地)/u.test(text);
-      if(!worksiteIntent && !group && input.actorId==='dad' && workPrompt && /(?:搬|工地|进去|进来|干活|开工|(?:马上|立刻|这就|现在).{0,4}(?:干|做|工作))/u.test(output)){
+      if(!this.grounding && !worksiteIntent && !group && input.actorId==='dad' && workPrompt && /(?:搬|工地|进去|进来|干活|开工|(?:马上|立刻|这就|现在).{0,4}(?:干|做|工作))/u.test(output)){
         // Some models omit the internal marker even when their ordinary reply
         // plainly commits to work now. Recognize a narrow affirmative first;
         // do not mistake a refusal or a conditional future promise for consent.
@@ -136,27 +140,32 @@ export class CanonicalChat {
           const decision=JSON.parse(verdict.replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,''));worksiteIntent=decision?.willing===true;
         }catch{/* An unconfirmed decision must not move her. */}
       }
-      if(worksiteIntent && laborProposal && ['resume','nudge'].includes(String(laborProposal.action)))laborProposal=undefined;
       output=redactDadNames(output.replace(/\[愿意去工地\]/gu,'').replace(/<(?:body|service)>[\s\S]*?<\/(?:body|service)>/gi,'').trim());if(!output || output.length>4000 || combined.aborted)throw new Error('模型没有给出完整回复');
+      const review=this.grounding?await this.grounding.review(input.petId,output,text,combined):undefined;
+      if(this.grounding)worksiteIntent=!group && input.actorId==='dad' && review?.workIntent===true;
+      if(worksiteIntent && laborProposal && ['resume','nudge'].includes(String(laborProposal.action)))laborProposal=undefined;
       if(worksiteIntent && !(state.legacyContext.worksite as any)?.inside)output=output.replace(/我进去了|我进去啦/gu,'我现在就进去');
       if(group && [...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(output)].length>15)throw new Error('群回复超过 15 字');
-      if(laborProposal){const p=laborProposal as any;const description=p.action==='offer'?`搬 ${p.trips} 趟，工钱 ${p.wage} token`:p.action==='pay'?`结算 ${p.amount} token 工钱`:({confirm:'确认开工',counter:'接受还价',decline:'拒绝工作',pause:'暂停工作',resume:'继续工作',nudge:'催促工作'} as Record<string,string>)[p.action];output+='\n我理解的是：'+description+'。请说“确认”或发送 /确认工作 '+id.slice(0,12)+'。';}
       let decidedToWork=false;
       await this.edit(input.petId,draft=>{
         const legacy=draft.legacy as Record<string,any>, turn=legacy.chatTurns?.[id];
         if(!turn||turn.status!=='running'||turn.fingerprint!==fingerprint)throw new Error('对话状态已变化');
+        const reviewValid=!!review && this.grounding?.signature(draft)===review.signature;
+        if(this.grounding && !reviewValid)worksiteIntent=false;
         if(sources.some(source=>Object.hasOwn(draft.life.invalidSources,source)||!draft.life.events.some(e=>e.eventId===source)))throw new Error('对话依赖的记忆已变化');
         settleSimulatedSpending(draft,'chat','chat:'+id);
         const now=new Date().toISOString(), userId='chat-user:'+id, assistantId='chat-assistant:'+id;
         if(!draft.life.events.some(e=>e.eventId===userId) || draft.life.events.some(e=>e.eventId===assistantId))throw Error('对话事件冲突');
-        let workDecision:Record<string,unknown>|undefined;
+        let workDecision:Record<string,unknown>|undefined,workBlocked=false;
         if(worksiteIntent){
           const contract=legacy.labor?.contracts?.find((c:any)=>['working','paused'].includes(c.status) && Number.isFinite(c.done) && c.done<c.trips);
           const body=projectBody(draft).body;
           const capability=draft.life.constraints.capabilities.find(c=>c.name==='labor.step'&&c.enabled);
-          const blocked=draft.life.constraints.paused || !capability || !!capability.requiresPermission&&!draft.life.constraints.permissions.includes(capability.requiresPermission) || body.sleeping || body.restrained || body.injured || body.energy<30 || body.stamina<35 || body.pain>=50 || draft.life.actions.some(a=>a.actionType==='labor.step' && ['PENDING','DISPATCHED','UNKNOWN'].includes(a.status));
-          if(!contract)output='目前没有可继续的搬砖约定，我还不能开始搬。';
-          else if(blocked)output='现在身体或上一趟的状态还不允许开工，我先等等。';
+          const pending=blocksNewLabor(draft);
+          const blocked=draft.life.constraints.paused || !capability || !!capability.requiresPermission&&!draft.life.constraints.permissions.includes(capability.requiresPermission) || body.sleeping || body.restrained || body.injured || body.energy<30 || body.stamina<35 || body.pain>=50;
+          if(!contract){output='目前没有可继续的搬砖约定，我还不能开始搬。';workBlocked=true;}
+          else if(pending){output='上一动作还在等待执行结果，我先确认回执。';workBlocked=true;}
+          else if(blocked){output='现在身体或工作权限的状态还不允许开工，我先等等。';workBlocked=true;}
           else {
             const eventId='labor-chat-decision:'+id,site=legacy.worksite||={inside:false,forced:false};
             contract.status='working';contract.workPermit=true;contract.batchRemaining=1;contract.lastWorkDecision=Date.now();contract.nextDecision=Date.now()+60000;contract.workDecisionEvent=eventId;contract.behavior='决定去工地搬一趟';
@@ -165,7 +174,8 @@ export class CanonicalChat {
             decidedToWork=true;
           }
         }
-        output=groundActionReply(groundWorksiteReply(output,draft),draft);
+        if(!workBlocked)output=this.grounding?reviewedReply(review??null,reviewValid,decidedToWork):groundActionReply(groundWorksiteReply(output,draft),draft);
+        if(laborProposal){const p=laborProposal as any;const description=p.action==='offer'?`搬 ${p.trips} 趟，工钱 ${p.wage} token`:p.action==='pay'?`结算 ${p.amount} token 工钱`:({confirm:'确认开工',counter:'接受还价',decline:'拒绝工作',pause:'暂停工作',resume:'继续工作',nudge:'催促工作'} as Record<string,string>)[p.action];output+='\n我理解的是：'+description+'。请说“确认”或发送 /确认工作 '+id.slice(0,12)+'。';}
         if(group && [...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(output)].length>15)output='这趟还没有完成。';
         draft.life.events.push({eventId:assistantId,petId:input.petId,type:'conversation.assistant',source:input.channel,occurredAt:now,receivedAt:now,evidenceLevel:'inferred',causationId:userId,payload:{text:output,channel:input.channel,...(typeof groupId==='string'?{groupId}:{}),sourceIds:sources}});
         if(workDecision)draft.life.events.push({eventId:String(workDecision.eventId),petId:input.petId,type:'labor.decision',source:'model',occurredAt:now,receivedAt:now,evidenceLevel:'inferred',causationId:assistantId,payload:{contractId:workDecision.contractId,choice:'work',reason:'conversation',sourceIds:[userId,assistantId]}});

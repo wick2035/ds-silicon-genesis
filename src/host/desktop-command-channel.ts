@@ -30,6 +30,7 @@ export function createDesktopCommandChannel(store:Reader,sourceCapability:object
     signal.addEventListener('abort',()=>{const item=pending.get(command.petId);if(item?.command.actionId===command.actionId){clearTimeout(item.timer);pending.delete(command.petId);}},{once:true});
   },sourceCapability,65000);
   return {bridge,
+    observation(petId:string) {const item=pending.get(petId);return item?.startedAt===undefined?undefined:{actionId:item.command.actionId,kind:item.command.kind,startedAt:item.startedAt};},
     view(petId:string) {
       const c=pending.get(petId)?.command;
       if(!c)return undefined;
@@ -45,25 +46,25 @@ export function createDesktopCommandChannel(store:Reader,sourceCapability:object
       const item=pending.get(value?.petId), c=item?.command;
       if(c?.kind==='body.activity') {
         if(value.id!==c.actionId || value.actionId!==c.actionId || value.index!==0 || value.surface!=='desktop' || !['playing','completed','interrupted'].includes(value.status))throw Error('走动回执不匹配');
-        if(value.status==='playing')return {ok:true};
+        if(value.status==='playing'){item!.startedAt ??= Date.now();return {ok:true};}
         if(value.status==='completed' && (value.played!==true || value.activity!==c.parameters.activity || (['walk','run'].includes(String(c.parameters.activity)) && (!Number.isFinite(value.distance) || value.distance<8 || value.distance>10000))))throw Error('桌面活动未确认');
         clearTimeout(item!.timer);pending.delete(c.petId);bridge.accept({petId:c.petId,actionId:c.actionId,kind:c.kind,status:value.status,played:value.played===true,surface:'desktop',distance:value.distance,activity:value.activity},sourceCapability);return {ok:true};
       }
       if(c?.kind==='body.sleep'||c?.kind==='body.wake') {
         if(value.id!==c.actionId || value.actionId!==c.actionId || value.restKind!==(c.kind==='body.sleep'?'sleep':'wake') || value.index!==0 || value.surface!=='desktop' || !['playing','completed','interrupted'].includes(value.status))throw Error('睡眠回执不匹配');
-        if(value.status==='playing')return {ok:true};
+        if(value.status==='playing'){item!.startedAt ??= Date.now();return {ok:true};}
         clearTimeout(item!.timer);pending.delete(c.petId);bridge.accept({petId:c.petId,actionId:c.actionId,kind:c.kind,status:value.status,played:value.played===true},sourceCapability);return {ok:true};
       }
       if(c?.kind==='token.pickup') {
         const coin=item!.coin!;if(value.id!==c.actionId || value.actionId!==c.actionId || value.coinId!==coin.id || value.index!==item!.stage || value.surface!=='desktop' || !['playing','completed','interrupted'].includes(value.status))throw Error('拾取回执不匹配');
-        if(value.status==='playing')return {ok:true};
+        if(value.status==='playing'){item!.startedAt ??= Date.now();return {ok:true};}
         if(value.status==='completed' && (value.played!==true || !Number.isFinite(value.x) || !Number.isFinite(value.y) || Math.hypot(value.x-coin.x,value.y-coin.y)>.045))throw Error('尚未走到碎片旁');
-        if(value.status==='completed' && item!.stage===0){item!.stage=1;return {ok:true};}
+        if(value.status==='completed' && item!.stage===0){item!.stage=1;item!.startedAt=undefined;return {ok:true};}
         clearTimeout(item!.timer);pending.delete(c.petId);bridge.accept({petId:c.petId,actionId:c.actionId,kind:c.kind,status:value.status,played:value.played===true,coinId:coin.id,surface:'desktop',x:value.x,y:value.y},sourceCapability);return {ok:true};
       }
       if(c?.kind==='service.eat-rice'||c?.kind.startsWith('care.')) {
         if(value.id!==c.actionId || value.actionId!==c.actionId || value.itemId!==(c.kind==='service.eat-rice'?c.parameters.itemId:c.kind==='care.feed'?'parent':c.kind.slice(5)) || value.index!==0 || value.surface!=='desktop' || !['playing','completed','interrupted'].includes(value.status))throw Error('照料回执没有对应行动');
-        if(value.status==='playing')return {ok:true};
+        if(value.status==='playing'){item!.startedAt ??= Date.now();return {ok:true};}
         if(value.status==='completed' && value.played!==true)throw Error('照料动画未完成');
         clearTimeout(item!.timer);pending.delete(c.petId);
         const reasons=['睡眠、恢复、学习或爸爸正在互动','爸爸的互动或新动作打断了这次尝试','动作被其他互动打断','动作素材播放超时','照料动画素材不可用'];

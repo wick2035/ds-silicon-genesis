@@ -2,6 +2,7 @@ import {createCanonicalTodos,createTodoRoute} from './canonical-todos.js';
 import {createLegacyResponses} from './legacy-responses.js';
 import {createCareReactions,careReactionLeaf} from './care-reactions.js';
 import {createWorksiteReactions} from './worksite-reactions.js';
+import {createSemanticGrounding} from './semantic-grounding.js';
 import {projectLegacySnapshot} from './legacy-snapshot.js';
 import {readFile,writeFile,rename,realpath,stat} from 'node:fs/promises';
 import {createRequire} from 'node:module';
@@ -120,7 +121,8 @@ export async function main():Promise<void> {
     const attachments=createAttachmentStore(store,lease,unitOfWork);
     model=createModelFacade(modelConfig,{leaseSignal:lease.signal,budget,resolveImage:attachments.resolve,persist:async value=>{const file=join(root,'data','model-config.json'),temporary=file+'.tmp';await writeFile(temporary,JSON.stringify(value,null,2),{mode:0o600});await rename(temporary,file);}});
     executors.set('image.observe',createImageObserver(store,budget,model));
-    const retrieval=new CanonicalMemoryRetrieval(lease,desktopIdle), chat=new CanonicalChat(store,lease,unitOfWork,budget,model,(id,q)=>retrieval.search(id,q),(id,key,input)=>domain.laborAction(id,key,input),(id,input)=>service(id,input),id=>worksiteWake(id));
+    const grounding=createSemanticGrounding(store,budget,model,id=>commandChannel.observation(id));
+    const retrieval=new CanonicalMemoryRetrieval(lease,desktopIdle), chat=new CanonicalChat(store,lease,unitOfWork,budget,model,(id,q)=>retrieval.search(id,q),(id,key,input)=>domain.laborAction(id,key,input),(id,input)=>service(id,input),id=>worksiteWake(id),grounding);
     let requestShutdown=()=>{};
     const decideLaborOffer=async(id:string,requestId:string,contractId:string)=>{
       const state=await lease.run(id,()=>store.loadEnvelope(id));
@@ -152,7 +154,7 @@ export async function main():Promise<void> {
     const actions=new ActionCoordinator(unitOfWork,projectBody), coordinator=new CognitiveResultCoordinator(store,unitOfWork,lease,projectBody,actions,dispatcher);
     const service=createLegacyServiceActions(store,lease,unitOfWork,actions,dispatcher);
     const development=createDevelopment(store,lease,unitOfWork,budget,model);
-    const responses=createLegacyResponses(store,lease,unitOfWork,budget,model,persona);
+    const responses=createLegacyResponses(store,lease,unitOfWork,budget,model,persona,grounding);
     semanticResponse=async(id,requestId,detail)=>{const d=detail as any;const descriptions:Record<string,string>={'drag-start':'爸爸开始拖动我','drag-end':'爸爸松开了我','flight-start':'我开始飞行，尚不知道是否发生碰撞','flight-end':'飞行结束','prop-take':'爸爸拿起我的饭碗','prop-release':'爸爸放下我的饭碗','menu-anim':'爸爸选择了一个动画','go-home':'爸爸选择回家','open-chat':'爸爸打开聊天','open-care':'爸爸打开照料面板','open-todo':'爸爸打开待办','show-balance':'爸爸查看余额'};const description=descriptions[d?.action];if(!description)throw Error('互动类型无效');const event:any=await domain.record(id,requestId,'interaction',description,requestId,{},observerAuthority);if(!event?.id)throw Error('互动来源未保存');const text=await responses(id,'physical',lease.signal,{eventId:`legacy:event:${encodeURIComponent(event.id)}`,description});return {ok:true,reaction:{text}};};
     let waitCareResponse:((eventId:string)=>Promise<string|undefined>)|undefined;
     const adapter=createLegacyRequestAdapter({store,gate:lease,domain,humanity,service,development,responses,waitCareResponse:eventId=>waitCareResponse?.(eventId)??Promise.resolve(undefined),interrupt:id=>dispatcher.interrupt(id),tokenSnapshot:id=>tokens.snapshot(id),providers:{search:true,fetch:true,bili:true,image:true,model:true},view:id=>commandChannel.view(id),resolvePet:url=>{
