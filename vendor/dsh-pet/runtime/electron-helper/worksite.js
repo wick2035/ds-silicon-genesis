@@ -6,7 +6,9 @@
   function place(){worker.style.left=(position*100)+'%';}
   function bricks(id,n){const root=$(id);root.replaceChildren();for(let i=0;i<Math.min(12,Math.max(0,n));i++){const b=document.createElement('i');b.className='brick';root.append(b);}}
   function render(s){
-    latest=s;const c=s.labor?.current,inside=s.location?.inside===true;
+    const wasInside=latest?.location?.inside===true;latest=s;const c=s.labor?.current,inside=s.location?.inside===true;
+    if(inside&&!wasInside)$('feedback').textContent='';
+    const speech=s.location?.speech,showSpeech=inside&&speech?.action==='enter-forced'&&Date.now()-speech.at<12000;$('speech').hidden=!showSpeech;if(showSpeech)$('speech').textContent=speech.text;
     worker.hidden=!inside;$('release').hidden=!inside;
     $('state').textContent=inside?(s.location.forced?'爸爸把她放进来了，等爸爸接她出去':'她自己走进了工地'):'工地空着，等她来';
     $('headline').textContent=!inside?'工地已经打开':c?.status==='working'?'她正在安排自己的工作':c?.status==='paused'?'她在工地歇一会儿':c?.status==='unpaid'?'砖都搬好了':'她在工地里';

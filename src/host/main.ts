@@ -1,6 +1,7 @@
 import {createCanonicalTodos,createTodoRoute} from './canonical-todos.js';
 import {createLegacyResponses} from './legacy-responses.js';
 import {createCareReactions,careReactionLeaf} from './care-reactions.js';
+import {createWorksiteReactions} from './worksite-reactions.js';
 import {projectLegacySnapshot} from './legacy-snapshot.js';
 import {readFile,writeFile,rename,realpath,stat} from 'node:fs/promises';
 import {createRequire} from 'node:module';
@@ -191,6 +192,17 @@ export async function main():Promise<void> {
         const reactToCare=createCareReactions(reactionBaseline,(id,event,signal)=>responses(id,'care',AbortSignal.any([lease.signal,signal]),event),text=>deps.state.writePet(petId,'say',careReactionLeaf(text,helpers.readAllConfig(deps.configPaths).main?.voiceEnabled===true)));
         waitCareResponse=eventId=>reactToCare.wait(eventId);
         unitOfWork.onCommit(reactToCare);dispatcher.onCommit(reactToCare);
+        const reactToWorksite=createWorksiteReactions(reactionBaseline,(id,event,signal)=>responses(id,'worksite',AbortSignal.any([lease.signal,signal]),event),async(id,event,text,fallback)=>{
+          const published=await lease.run(id,async()=>{const current=await store.loadEnvelope(id);if(!current)return false;let valid=false;
+            await unitOfWork.apply(id,current.version,draft=>{const transitions=draft.life.events.filter(e=>e.type==='interaction.worksite'&&['enter-forced','enter-voluntary','release','leave-voluntary'].includes((e.payload as any)?.action));
+              const site=(draft.legacy as any).worksite;if(transitions.at(-1)?.eventId!==event.eventId||!site||(event.action==='enter-forced'?!site.inside:site.inside))return {};
+              site.speech={eventId:event.eventId,action:event.action,text,at:Date.now()};valid=true;
+              if(fallback){const at=new Date().toISOString();draft.life.events.push({eventId:'worksite-reply:'+event.eventId,petId:id,type:'conversation.assistant',source:'desktop',occurredAt:at,receivedAt:at,evidenceLevel:'inferred',causationId:event.eventId,payload:{text,sourceIds:[event.eventId],fallback:true}});}return {};
+            });return valid;});
+          // These two manually requested reactions speak even if general chat voice is off.
+          if(published&&!lease.signal.aborted)deps.state.writePet(id,'say',{...careReactionLeaf(text,false),worksiteReaction:true});
+        });
+        unitOfWork.onCommit(reactToWorksite);dispatcher.onCommit(reactToWorksite);
         validateWhisperSurface=(surface?:string)=>{const params=new URLSearchParams({pet:petId,...(surface?{surface}:{})});if(!deps.requirePet(params,()=>helpers.readAllConfig(deps.configPaths),{surface:true}).ok)throw Error('当前显示端不可用');};
         resolveWhisperImage=async(name:string,surface?:string)=>{const key=name.trim();if(!key||key.length>120||/[\/\\:\x00-\x1f]/.test(key)||key==='.'||key==='..')throw Error('表情名称无效');const params=new URLSearchParams({pet:petId,...(surface?{surface}:{})});const who=deps.requirePet(params,()=>helpers.readAllConfig(deps.configPaths),{surface:true});if(!who.ok)throw Error('当前显示端不可用');const memes=who.conf?.memes;if(!memes||!Object.hasOwn(memes,key)||typeof memes[key]!=='string'||!memes[key].trim())throw Error('表情不在当前素材池');for(const dir of deps.memeDirsFor(who.entry)){try{const base=await realpath(dir),file=await realpath(join(dir,key+'.png')),rel=relative(base,file);if(!rel||rel==='..'||rel.startsWith('..'+(process.platform==='win32'?'\\':'/'))||isAbsolute(rel))continue;const info=await stat(file);if(info.isFile())return key;}catch{}}throw Error('表情图片不可用');};
         const sync=(state:any)=>{if(state.petId!==petId)return;const sleeping=projectBody(state).body.sleeping;

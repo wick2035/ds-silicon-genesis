@@ -25,11 +25,13 @@ export function createWorksite(store:Reader,gate:PetGate,uow:UnitOfWork,view:(id
         if(action==='enter-forced'||action==='enter-voluntary'){
           if(site.inside)throw Error('她已经在工地里');
           if(action==='enter-voluntary' && (!site.requested || draft.life.constraints.paused))throw Error('她没有决定进入工地');
+          delete site.speech;
           site.inside=true;site.forced=action==='enter-forced';site.requested=false;
           text=site.forced?'爸爸把我拖进搬砖网页，我需要爸爸把我拿出去。':'我自己决定进入搬砖网页工作。';
         }else if(action==='release'||action==='leave-voluntary'){
           if(!site.inside)throw Error('她不在工地里');
           if(action==='leave-voluntary'&&site.forced)throw Error('被爸爸放进来后，要等爸爸亲手接我出去');
+          delete site.speech;
           site.inside=false;site.forced=false;site.requested=false;
           site.suppressUntilDecision=true;
           for(const contract of pet.labor?.contracts||[])if(contract.status==='working'){
