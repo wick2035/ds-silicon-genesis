@@ -91,6 +91,10 @@ export async function main():Promise<void> {
       });});
     // Register the executable capability for existing archives without a schema migration.
     await lease.run(petId,async()=>{const state=await store.loadEnvelope(petId);if(state&&!state.life.constraints.capabilities.some(c=>c.name==='body.activity'))await unitOfWork.apply(petId,state.version,draft=>{draft.life.constraints.capabilities.push({name:'body.activity',enabled:true,physical:true});return {};});});
+    // A forced batch may drive stamina/energy negative; labor.step must not be
+    // blocked by the default body limits. The decision layer (tired/forced) owns
+    // whether she works, so widen the physical floor on existing archives.
+    await lease.run(petId,async()=>{const state=await store.loadEnvelope(petId);if(!state)return;const cap=state.life.constraints.capabilities.find(c=>c.name==='labor.step');if(cap&&(!cap.bodyLimits||cap.bodyLimits.minStamina===undefined||cap.bodyLimits.minStamina>=0))await unitOfWork.apply(petId,state.version,draft=>{const c=draft.life.constraints.capabilities.find((x:any)=>x.name==='labor.step');if(c)c.bodyLimits={...(c.bodyLimits||{}),allowSleeping:true,allowRestrained:true,allowInjured:true,minStamina:-101,maxPain:101};return {};});});
     const authority={},observerAuthority={},helperAuthority={};
     const humanity=new CanonicalHumanityAdapter(store,unitOfWork,lease,authority,observerAuthority);
     const domain=new LegacyDomain(store,unitOfWork,lease,observerAuthority);
@@ -196,7 +200,7 @@ export async function main():Promise<void> {
         unitOfWork.onCommit(reactToCare);dispatcher.onCommit(reactToCare);
         const reactToWorksite=createWorksiteReactions(reactionBaseline,(id,event,signal)=>responses(id,'worksite',AbortSignal.any([lease.signal,signal]),event),async(id,event,text,fallback)=>{
           const published=await lease.run(id,async()=>{const current=await store.loadEnvelope(id);if(!current)return false;let valid=false;
-            await unitOfWork.apply(id,current.version,draft=>{const transitions=draft.life.events.filter(e=>e.type==='interaction.worksite'&&['enter-forced','enter-voluntary','release','leave-voluntary'].includes((e.payload as any)?.action));
+            await unitOfWork.apply(id,current.version,draft=>{const transitions=draft.life.events.filter(e=>e.type==='interaction.worksite'&&['enter-forced','enter-voluntary','release','leave-voluntary','force-work'].includes((e.payload as any)?.action));
               const site=(draft.legacy as any).worksite;if(transitions.at(-1)?.eventId!==event.eventId||!site||(event.action==='enter-forced'?!site.inside:site.inside))return {};
               site.speech={eventId:event.eventId,action:event.action,text,at:Date.now()};valid=true;
               if(fallback){const at=new Date().toISOString();draft.life.events.push({eventId:'worksite-reply:'+event.eventId,petId:id,type:'conversation.assistant',source:'desktop',occurredAt:at,receivedAt:at,evidenceLevel:'inferred',causationId:event.eventId,payload:{text,sourceIds:[event.eventId],fallback:true}});}return {};

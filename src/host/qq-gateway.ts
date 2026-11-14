@@ -81,7 +81,13 @@ export class CanonicalQQGateway extends QQPetBridge {
     this.#timer=setTimeout(()=>{this.#timer=undefined; const items=this.#items.splice(0); this.#batchStarted=0; this.enqueueTurn('group',items);},flushAt-now);
   }
   private enqueueTurn(scene:'c2c'|'group',items:Item[]):void {
-    if(this.#queuedTurns>=4) { this.statusSafe('queue-full'); return; }
+    if(this.#queuedTurns>=4) {
+      // Never silently drop an owner's message: reply with a transient notice
+      // instead, so the sender knows to retry rather than assuming a send died.
+      this.statusSafe('queue-full');
+      if(!this.#closed&&!this.#options.signal.aborted) void this.respond(scene,items,scene==='c2c'?'我这边有点忙，稍等再发一次。':'我有点忙，稍后再聊。').catch(()=>{});
+      return;
+    }
     this.#queuedTurns++;
     this.#serial=this.#serial.then(()=>this.runTurn(scene,items)).catch(()=>this.statusSafe('message-failed')).finally(()=>{this.#queuedTurns--;});
   }
@@ -90,8 +96,12 @@ export class CanonicalQQGateway extends QQPetBridge {
     items=items.filter(item=>Date.now()-item.receivedAt<=240000);
     if(!items.length||this.#closed||this.#options.signal.aborted)return;
     let text:string|null;
+    // Bound a single turn so a stalled model/gateway can never wedge the whole
+    // serial queue; the next owner message is then free to proceed.
+    const turnAbort=new AbortController();
+    const turnSignal=AbortSignal.any([this.#options.signal,turnAbort.signal,AbortSignal.timeout(90000)]);
     try {
-      text=await this.#options.onTurn({petId:this.#options.config.petId||'main',scene,messages:items.map(({text,isOwner,eventId})=>({text,isOwner,eventId}))},this.#options.signal);
+      text=await this.#options.onTurn({petId:this.#options.config.petId||'main',scene,messages:items.map(({text,isOwner,eventId})=>({text,isOwner,eventId}))},turnSignal);
     } catch(error) {
       this.statusSafe('message-failed');
       if(this.#closed||this.#options.signal.aborted)return;

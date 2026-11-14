@@ -1,0 +1,19 @@
+- main [ref=e2]:
+  - generic [ref=e4]:
+    - paragraph [ref=e5]: 大肥鱼的工作空间
+    - heading "搬砖工地" [level=1] [ref=e6]
+    - paragraph [ref=e7]: 她在这里一步一步地搬，放下砖才算完成一趟。
+  - region "搬砖工地" [ref=e8]:
+    - generic [ref=e9]:
+      - status [ref=e10]: 正在连接她的世界…
+      - generic [ref=e11]:
+        - generic [ref=e12]: 待搬 —
+        - generic [ref=e15]: 已放好 —
+  - generic [ref=e19]:
+    - generic [ref=e20]:
+      - strong [ref=e21]: 工地已经打开
+      - paragraph [ref=e22]: 可以从桌面把她拖到这个窗口；她也会自己决定来工作。
+    - generic [ref=e23]:
+      - generic [ref=e24]: 等待工作约定
+      - progressbar "搬砖进度" [ref=e25]
+  - status [ref=e26]

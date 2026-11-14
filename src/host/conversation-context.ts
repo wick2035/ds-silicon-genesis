@@ -14,9 +14,10 @@ export function conversationContext(state:LifeState, envelope:CanonicalEnvelope)
       ...(typeof details?.reason==='string'?{reason:details.reason.slice(0,300)}:{})};
   });
   const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  const recentMoney=Array.isArray(pet.events)?pet.events.filter((e:any)=>['wallet','wallet-spend'].includes(e.kind)).slice(-6).map((e:any)=>e.text):[];
   return {
     food:{balance:wallet.balance??null,frozen:wallet.frozen===true,price:config.costs?.feed??null,
-      inventory:inventory.filter((i:any)=>i.status!=='eaten').slice(0,12).map((i:any)=>({name:i.name,status:i.status})),eating:pet.services?.eating??null},
+      inventory:inventory.filter((i:any)=>i.status!=='eaten').slice(0,12).map((i:any)=>({name:i.name,status:i.status})),eating:pet.services?.eating??null,recentChanges:recentMoney},
     worksite:worksiteFacts({...envelope,life:envelope.life??state}),
     phone:{open:config.networkLearning===true,search:abilities.search?.status==='granted',fetch:abilities.fetch?.status==='granted',
       dailyLimit:config.exploration?.dailyRuns??null,used:pet.usage?.[day]?.exploreRuns??0},actions
@@ -29,7 +30,15 @@ export function worksiteFacts(envelope:CanonicalEnvelope) {
   const contract=(pet.labor?.contracts??[]).find((c:any)=>['working','paused','unpaid'].includes(c.status));
   const transition=envelope.life.events.filter(e=>e.type==='interaction.worksite' && !Object.hasOwn(envelope.life.invalidSources,e.eventId) && ['enter-forced','enter-voluntary','release','leave-voluntary'].includes(String((e.payload as any)?.action))).at(-1);
   const enteredAt=site.inside===true && transition && ['enter-forced','enter-voluntary'].includes(String((transition.payload as any)?.action)) ? Date.parse(transition.occurredAt) : Infinity;
-  const completedTrips=(envelope.life.actions??[]).filter(a=>a.actionType==='labor.step' && a.parameters?.contractId===contract?.id && a.sourceIds.every(id=>!Object.hasOwn(envelope.life.invalidSources,id))).filter(a=>(envelope.life.receipts??[]).some(r=>{const details=r.details as Record<string,unknown>;return r.actionId===a.id && r.receiptId===a.receiptId && r.status==='COMPLETED' && details?.index===1 && typeof details.x==='number' && Math.abs(details.x-.78)<=.045 && Date.parse(r.occurredAt)>=enteredAt && envelope.life.events.some(e=>e.causationId===r.receiptId && !Object.hasOwn(envelope.life.invalidSources,e.eventId));})).length;
+  // A trip is finished when its "deliver" leg completes: the leg is encoded on
+  // the command at dispatch time, not on the receipt. The receipt's index is the
+  // command index reported by the helper (0 for the walk+lift leg, 1 for the
+  // walk+putdown/deliver leg), so a completed deliver trip is simply the last
+  // COMPLETED labor.step for this contract whose receipt index is 1. Matching on
+  // a hard-coded x coordinate (0.78) is fragile — the target depends on which
+  // side the brick is loaded from, and a slightly-off final position should not
+  // erase a real, confirmed delivery.
+  const completedTrips=(envelope.life.actions??[]).filter(a=>a.actionType==='labor.step' && a.parameters?.contractId===contract?.id && a.sourceIds.every(id=>!Object.hasOwn(envelope.life.invalidSources,id))).filter(a=>(envelope.life.receipts??[]).some(r=>{const details=r.details as Record<string,unknown>;return r.actionId===a.id && r.receiptId===a.receiptId && r.status==='COMPLETED' && details?.index===1 && Date.parse(r.occurredAt)>=enteredAt && envelope.life.events.some(e=>e.causationId===r.receiptId && !Object.hasOwn(envelope.life.invalidSources,e.eventId));})).length;
   return {inside:site.inside===true,forced:site.forced===true,status:contract?.status??null,completedTotal:contract?.done??null,trips:contract?.trips??null,workPermit:contract?.workPermit===true,completedTripsThisVisit:completedTrips};
 }
 

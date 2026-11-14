@@ -1,0 +1,87 @@
+- generic [ref=e2]:
+  - complementary [ref=e3]:
+    - generic [ref=e9]:
+      - strong [ref=e10]: 大肥鱼
+      - generic [ref=e11]: DAFEI LIFEOS
+    - generic [ref=e12]: 生命空间
+    - navigation "主导航" [ref=e13]:
+      - button "当前" [ref=e14] [cursor=pointer]
+      - button "聊天" [ref=e19] [cursor=pointer]
+      - button "照料" [ref=e23] [cursor=pointer]:
+        - generic [aria-hidden] [ref=e24]: ♡
+        - text: 照料
+      - button "目标" [ref=e25] [cursor=pointer]
+      - button "轨迹" [ref=e31] [cursor=pointer]
+      - button "关系" [ref=e36] [cursor=pointer]
+      - button "成长" [ref=e40] [cursor=pointer]
+      - button "饭钱" [ref=e44] [cursor=pointer]
+      - button "设置" [active] [ref=e49] [cursor=pointer]
+    - generic [ref=e57]:
+      - strong [ref=e58]: 已连接
+      - generic [ref=e59]: 生命状态可用
+  - main [ref=e60]:
+    - generic [ref=e61]:
+      - generic [ref=e62]: 大肥鱼 / 设置
+      - generic [ref=e63]:
+        - generic [ref=e64]: 已同步 12:49
+        - button "暂停自主行为" [ref=e72] [cursor=pointer]
+        - button "关闭新版" [ref=e66] [cursor=pointer]
+        - button "刷新" [ref=e67] [cursor=pointer]
+    - generic [ref=e73]:
+      - generic [ref=e181]:
+        - heading "照顾好她的世界" [level=1] [ref=e182]
+        - paragraph [ref=e183]: 管理自主行为的运行状态。
+      - generic [ref=e184]:
+        - generic [ref=e185]:
+          - heading "自主行为" [level=2] [ref=e186]
+          - generic [ref=e187]:
+            - generic [ref=e188]:
+              - strong [ref=e189]: 自主行为运行中
+              - paragraph [ref=e190]: 暂停会阻止发起新的自主行动。
+            - button "暂停自主行为" [ref=e191] [cursor=pointer]
+        - generic [ref=e192]:
+          - heading "权限" [level=2] [ref=e193]
+          - generic [ref=e194]: 撤销后，相关行动会在执行前重新校验
+          - generic [ref=e195]: 当前没有已授权的权限。
+      - generic [ref=e197]:
+        - heading "模型连接" [level=2] [ref=e198]
+        - paragraph [ref=e199]: 管理当前服务的连接与回应设置。密钥只在需要更换时填写。
+        - generic [ref=e200]:
+          - generic [ref=e201]:
+            - generic [ref=e202]:
+              - generic [ref=e203]: 接口协议
+              - combobox "接口协议" [ref=e204]:
+                - option "OpenAI 兼容" [selected]
+                - option "Anthropic"
+            - generic [ref=e205]:
+              - generic [ref=e206]: 服务地址
+              - textbox "服务地址" [ref=e207]: https://llm-bgfep8w3altbfvcg.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+            - generic [ref=e208]:
+              - generic [ref=e209]: 模型名称
+              - textbox "模型名称" [ref=e210]: deepseek-v4-flash-0731
+            - generic [ref=e211]:
+              - generic [ref=e212]: 更换密钥（留空则保持）
+              - textbox "更换密钥（留空则保持）" [ref=e213]
+            - generic [ref=e214]:
+              - generic [ref=e215]: 单次最大输出 token
+              - spinbutton "单次最大输出 token" [ref=e216]: "1024"
+            - generic [ref=e217]:
+              - generic [ref=e218]: 超时时间（毫秒）
+              - spinbutton "超时时间（毫秒）" [ref=e219]: "60000"
+            - generic [ref=e220]:
+              - generic [ref=e221]: 碎碎念间隔（秒）
+              - spinbutton "碎碎念间隔（秒）" [ref=e222]: "300"
+            - generic [ref=e223]:
+              - generic [ref=e224]: 余额服务
+              - combobox "余额服务" [ref=e225]:
+                - option "关闭" [selected]
+                - option "DeepSeek 官方"
+          - generic [ref=e226]:
+            - checkbox "自动碎碎念" [ref=e227]
+            - text: 自动碎碎念
+          - generic [ref=e228]:
+            - button "保存模型设置" [ref=e229] [cursor=pointer]
+            - button "测试当前连接" [ref=e230] [cursor=pointer]
+            - button "查询真实 API 余额" [ref=e231] [cursor=pointer]
+            - button "查看已配置模型" [ref=e232] [cursor=pointer]
+          - status

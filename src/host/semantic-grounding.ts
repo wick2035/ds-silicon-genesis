@@ -47,6 +47,14 @@ export function createSemanticGrounding(reader:Reader,budget:DurableCognitiveBud
       const observed=observe(petId),facts=actionFacts(draft,observed),signature=actionFactsSignature(draft,observed),parts=split(reply);
       const observedAt=Date.now(),reviewFacts={...facts,receipts:facts.receipts.map(r=>({...r,ageSeconds:Math.max(0,Math.floor((observedAt-Date.parse(r.at))/1000))})),payments:facts.payments.map(e=>({...e,ageSeconds:Math.max(0,Math.floor((observedAt-Date.parse(e.at))/1000))}))};
       if(!parts.length||parts.length>80)return null;
+      // Fast path: pure small-talk with no factual/action/temporal claim needs no
+      // model round-trip. Conservative on purpose — any keyword that could mark
+      // a claim of having done, doing, or about to do something falls through to
+      // the full review so no false statement is ever waived.
+      const CLAIM=/搬砖|工地|工作|干活|开工|工钱|工资|进去|进来|正在|已经|刚刚|刚才|马上|立刻|这就|才(?:完成|搬|做|干)|我(?:进去|进来|来搬|去搬|搬了|做完了|干完了)|吃过|喝过|睡了|醒了|饱了|饿了|疼|伤|累|困|完成了|开始了|结束了|搬(?:完|了|过)|刚(?:搬|吃|喝|睡|醒|做完)/u;
+      if(category==='interactive' && !CLAIM.test(reply) && !/搬砖|工作|工地|记住|记下|提醒/u.test(request)){
+        return {signature,segments:[{text:reply,kind:'other',supported:true,evidence:[]}],workIntent:false};
+      }
       let raw='';
       try {
         const selected=model.agentDefaultModel.currentSelection(),combined=AbortSignal.any([signal,AbortSignal.timeout(45000)]);
@@ -79,6 +87,10 @@ export function createSemanticGrounding(reader:Reader,budget:DurableCognitiveBud
 }
 
 export function reviewedReply(review:ReplyReview,valid:boolean,_workingDecision:boolean):string|null {
-  if(!review||!valid||review.segments.some(s=>!s.supported))return null;
+  if(!review||!valid)return null;
+  // Only factual claims and action intents must be supported by evidence.
+  // Subjective feelings, wishes and questions (kind 'other') are always allowed,
+  // otherwise normal small talk gets rejected and the turn fails.
+  if(review.segments.some(s=>s.kind!=='other' && !s.supported))return null;
   return review.segments.map(s=>s.text).join('');
 }

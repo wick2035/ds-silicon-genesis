@@ -90,6 +90,15 @@ export class LegacyDomain {
           if (draft.life.events.some(e => e.eventId === id) || Object.hasOwn(draft.life.invalidSources,id)) continue;
           const stamp = new Date(event.ts).toISOString();
           draft.life.events.push({eventId:id,petId,type:typeof event.kind === 'string' && event.kind ? event.kind : 'legacy.event',source:'canonical-legacy',occurredAt:stamp,receivedAt:stamp,evidenceLevel:event.kind === 'explicit' ? 'reported' : 'observed',payload:structuredClone(event)});
+          // A manual wallet adjustment (add/subtract/set/freeze) is a deliberate
+          // action by dad that she should remember as an event, not just a number
+          // change. Mirror it into long-term memory with the same source binding.
+          if (event.kind === 'wallet') {
+            const memoryId = namespaced('memory',event.id);
+            if (!draft.life.memories.some(m => m.id === memoryId)) {
+              draft.life.memories.push({id:memoryId,kind:'autobiographical',content:typeof event.text === 'string' && event.text ? event.text : '爸爸调整了饭钱',sourceIds:[id],evidenceLevel:'observed',valid:true,createdAt:stamp});
+            }
+          }
         }
         return {};
       });

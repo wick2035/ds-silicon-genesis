@@ -47,9 +47,15 @@ export function createModelFacade(config: ImportedModelConfig, options: ModelFac
       if (o.maxTokens !== undefined && (!Number.isInteger(o.maxTokens) || o.maxTokens < 1 || o.maxTokens > 8192)) return fail('模型输出限制无效');
       if (o.temperature !== undefined && (!Number.isFinite(o.temperature) || o.temperature < 0 || o.temperature > 2)) return fail('模型温度无效');
       const timeoutMs=settings.timeoutMs, maxTokens=Math.min(o.maxTokens??settings.maxTokens,settings.maxTokens);
+      // A reasoning model can stall before its first token; wait only a bounded
+      // window for the stream to start, then only enforce the overall timeout
+      // while bytes keep arriving (a live stream may legitimately run long).
+      const firstByteMs=Math.min(timeoutMs,20000);
       const p=providers[o.provider], controller=new AbortController(), abort=()=>controller.abort();
       if (leaseSignal.aborted || o.signal?.aborted) return fail('模型请求已取消');
       leaseSignal.addEventListener('abort',abort,{once:true}); o.signal?.addEventListener('abort',abort,{once:true}); active.add(controller);
+      let firstByteTimer:ReturnType<typeof setTimeout>|undefined=setTimeout(abort,firstByteMs);
+      const onActivity=()=>{ if(firstByteTimer){clearTimeout(firstByteTimer);firstByteTimer=undefined;} };
       const timer=setTimeout(abort,timeoutMs);
       // SDK may supply headers or inherit ambient config; reconstruct only the
       // configured credential and reject redirects and unexpected endpoints.
@@ -71,9 +77,15 @@ export function createModelFacade(config: ImportedModelConfig, options: ModelFac
         const shared={apiKey:p.apiKey,baseURL:base,maxRetries:0,timeout:timeoutMs,fetch:transport,logger:quiet,logLevel:'off' as const};
         if (p.api==='openai-completions') {
           const client=new OpenAI({...shared,organization:null,project:null,webhookSecret:null});
-          const lowEffort=o.reasoningEffort==='low' && /(?:^|\.)maas\.aliyuncs\.com$/i.test(new URL(base).hostname) && /^deepseek-v4\.1-flash(?:-\d+)?$/i.test(o.model);
-          const stream=await client.chat.completions.create({model:o.model,messages:[...(system?[{role:'system' as const,content:system}]:[]),...messages] as any,stream:true,n:1,...(tools?.length?{tools:tools as any}:{}),max_tokens:maxTokens,...(o.temperature!==undefined?{temperature:o.temperature}:{}),...(lowEffort?{reasoning_effort:'low' as const}:{})},{signal:controller.signal});
+          // Aliyun Bailian hosts deepseek-v4.1-flash with an always-on thinking
+          // mode by default. `enable_thinking:false` actually disables it there
+          // (first token ~0.4s vs ~1.4s), unlike DeepSeek's own API. Apply both
+          // the lowest effort and the disable flag so chat replies are fast.
+          const isBailianDS41=/(?:^|\.)aliyuncs\.com$/i.test(new URL(base).hostname) && /^deepseek-v4\.1-flash(?:-\d+)?$/i.test(o.model);
+          const lowEffort=o.reasoningEffort==='low' && isBailianDS41;
+          const stream=await client.chat.completions.create({model:o.model,messages:[...(system?[{role:'system' as const,content:system}]:[]),...messages] as any,stream:true,n:1,...(tools?.length?{tools:tools as any}:{}),max_tokens:maxTokens,...(o.temperature!==undefined?{temperature:o.temperature}:{}),...(lowEffort?{reasoning_effort:'low' as const,enable_thinking:false}:{})},{signal:controller.signal});
           for await(const chunk of stream) {
+            onActivity();
             if(controller.signal.aborted) throw new Error('cancelled');
             if(++events>4096) throw new Error('limit');
             const choice=chunk.choices.find(c=>c.index===0);
@@ -87,6 +99,7 @@ export function createModelFacade(config: ImportedModelConfig, options: ModelFac
           const client=new Anthropic({...shared,authToken:null,webhookKey:null});
           const stream=await client.messages.create({model:o.model,system,messages:messages as any,max_tokens:maxTokens,stream:true,...(tools?.length?{tools:tools as any}:{}),...(o.temperature!==undefined?{temperature:Math.min(1,o.temperature)}:{})},{signal:controller.signal});
           for await(const chunk of stream) {
+            onActivity();
             if(controller.signal.aborted) throw new Error('cancelled');
             if(++events>4096) throw new Error('limit');
             if(chunk.type==='message_delta' && chunk.delta.stop_reason==='max_tokens') throw new ModelResultError('模型输出被截断，请提高输出 token 上限后重试');
@@ -102,7 +115,7 @@ export function createModelFacade(config: ImportedModelConfig, options: ModelFac
         const message=controller.signal.aborted?'模型请求已取消或超时':error instanceof ModelResultError?error.message:status===401||status===403?'模型服务认证失败，请检查 API 密钥和访问权限':status===404?'模型或接口不存在，请检查模型名称和服务地址':status===429?'模型服务额度不足或请求过于频繁':status>=500?'模型服务暂时不可用，请稍后重试':'模型请求未能完整完成，请检查服务配置';
         throw new Error(message);
       }
-      finally {clearTimeout(timer);leaseSignal.removeEventListener('abort',abort);o.signal?.removeEventListener('abort',abort);controller.abort();active.delete(controller);if(release) await release();}
+      finally {clearTimeout(timer);if(firstByteTimer)clearTimeout(firstByteTimer);leaseSignal.removeEventListener('abort',abort);o.signal?.removeEventListener('abort',abort);controller.abort();active.delete(controller);if(release) await release();}
     }
   };
   const getSettings=()=>{const p=providers[selection.provider];return {protocol:p.api==='anthropic-messages'?'anthropic':'openai-compatible',baseUrl:p.baseURL,model:selection.model,hasKey:!!p.apiKey,...settings};};

@@ -1,0 +1,51 @@
+- generic [ref=e2]:
+  - complementary [ref=e3]:
+    - generic [ref=e9]:
+      - strong [ref=e10]: 大肥鱼
+      - generic [ref=e11]: DAFEI LIFEOS
+    - generic [ref=e12]: 生命空间
+    - navigation "主导航" [ref=e13]:
+      - button "当前" [ref=e14] [cursor=pointer]
+      - button "聊天" [active] [ref=e19] [cursor=pointer]
+      - button "目标" [ref=e23] [cursor=pointer]
+      - button "轨迹" [ref=e29] [cursor=pointer]
+      - button "关系" [ref=e34] [cursor=pointer]
+      - button "成长" [ref=e38] [cursor=pointer]
+      - button "饭钱" [ref=e42] [cursor=pointer]
+      - button "设置" [ref=e47] [cursor=pointer]
+    - generic [ref=e55]:
+      - strong [ref=e56]: 已连接
+      - generic [ref=e57]: 生命状态可用
+  - main [ref=e58]:
+    - generic [ref=e59]:
+      - generic [ref=e60]: 大肥鱼 / 聊天
+      - generic [ref=e61]:
+        - generic [ref=e62]: 已同步 12:19
+        - button "暂停自主行为" [ref=e63] [cursor=pointer]
+        - button "关闭新版" [ref=e64] [cursor=pointer]
+        - button "刷新" [ref=e65] [cursor=pointer]
+    - generic [ref=e70]:
+      - generic [ref=e104]:
+        - heading "和大肥鱼说话" [level=1] [ref=e105]
+        - paragraph [ref=e106]: 在这里，继续你们的对话。
+      - region "聊天面板" [ref=e107]:
+        - generic [ref=e110]:
+          - heading "大肥鱼" [level=2] [ref=e111]
+          - paragraph [ref=e112]: 你们的对话
+        - log "聊天记录" [ref=e113]:
+          - article [ref=e114]:
+            - generic [ref=e115]: 我 · 2026年11月14日 12:19
+            - generic [ref=e116]: 你好，今天过得怎么样？
+          - article [ref=e117]:
+            - generic [ref=e118]: 大肥鱼 · 2026年11月14日 12:19
+            - generic [ref=e119]: 看到你来，我很开心。
+        - generic [ref=e120]:
+          - generic [ref=e121]: 想对她说的话
+          - textbox "想对她说的话" [ref=e122]:
+            - /placeholder: 写下想说的话…
+          - generic [ref=e123]:
+            - generic [ref=e124]:
+              - generic [ref=e125] [cursor=pointer]: 附上图片
+              - button "附上图片" [ref=e126]
+              - generic [ref=e127]: 支持 PNG、JPEG、WebP、GIF，最大 5 MB
+            - button "发送消息" [ref=e128] [cursor=pointer]

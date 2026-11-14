@@ -18,7 +18,13 @@ export const projectBody: BodyProjection = (envelope: Readonly<CanonicalEnvelope
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100) throw new Error('原身心数值无效');
     return value;
   };
-  const energy=number(stats.energy), stamina=number(stats.stamina), satiety=number(stats.satiety);
+  // Stamina/energy/satiety may dip below zero when a forced batch overdraws the
+  // body; the rest of the stats stay within 0–100.
+  const drainable = (value: unknown) => {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < -100 || value > 100) throw new Error('原身心数值无效');
+    return value;
+  };
+  const energy=drainable(stats.energy), stamina=drainable(stats.stamina), satiety=drainable(stats.satiety);
   const hydration=number(stats.hydration), comfort=number(stats.comfort), pain=number(stats.pain);
   const stress=number(stats.stress), security=number(stats.security);
   const clamp = (value: number) => Math.max(0,Math.min(100,value));

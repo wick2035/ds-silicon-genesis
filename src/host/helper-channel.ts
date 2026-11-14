@@ -71,7 +71,7 @@ export function createHelperChannel(humanity:CanonicalHumanityAdapter, desktop:T
       if(event.kind==='feed'){if((event.detail as any)?.played!==true)throw Error('投喂动作没有完成');return {ok:true,state:await humanity.observeParentFeed(event.petId,id,observerAuthority)};}
       if(event.kind==='pet'){await humanity.act(event.petId,'pet',id);return {ok:true,state:await humanity.snapshot(event.petId)};}
       if(!['collision','impact','knock','utensil','sleep','wake'].includes(event.kind))throw Error('互动类型无效');
-      if(event.kind==='collision') {const d=event.detail as any;if(!d||!['left','right','ceiling','floor'].includes(d.edge)||!Number.isFinite(d.speed)||d.speed<550||d.speed>10000)throw Error('碰撞观察无效');}
+      if(event.kind==='collision') {const d=event.detail as any;if(!d||!['left','right','ceiling','floor'].includes(d.edge)||!Number.isFinite(d.speed)||d.speed<200||d.speed>10000)throw Error('碰撞观察无效');}
       if(event.kind==='impact' && (typeof event.detail!=='number'||!Number.isFinite(event.detail)||event.detail<0||event.detail>2))throw Error('晃动观察无效');
       if(event.kind==='knock') {const d=event.detail as any;if(!d||!Number.isInteger(d.count)||d.count<3||d.count>8)throw Error('敲击观察无效');}
       if(event.kind==='utensil') {const d=event.detail as any;if(!d||!['basin','bowl'].includes(d.kind)||!Number.isFinite(d.speed)||d.speed<1||d.speed>2500||!['user-drag','user-throw','unknown'].includes(d.origin))throw Error('物体碰撞观察无效');}

@@ -321,10 +321,10 @@ export function reactHumanity(input, event, now = Date.now(), detail = '') {
     s.collision = { edge: event, speed: 550 + strength * 80, origin, ...(event === 'utensil' ? { kind: detail.kind } : {}), at: now };
     rememberInjury(s, now, strength);
   } else if (event === 'collision') {
-    if (!detail || !['left', 'right', 'ceiling', 'floor'].includes(detail.edge) || !Number.isFinite(detail.speed) || detail.speed < 550) return s;
+    if (!detail || !['left', 'right', 'ceiling', 'floor'].includes(detail.edge) || !Number.isFinite(detail.speed) || detail.speed < 200) return s;
     const strength = Math.min(2, detail.speed / 1500);
-    const severity = Math.max(0, Math.min(1, (detail.speed - 550) / 1450));
-    addResponse(s, now, 'pulse', { stats: { pain: 6 + 62 * severity ** 1.3, stress: 3 + 12 * severity } }, 3, 180);
+    const severity = Math.max(0, Math.min(1, (detail.speed - 200) / 1875));
+    addResponse(s, now, 'pulse', { stats: { pain: 9 + 70 * severity ** 1.25, stress: 4 + 14 * severity } }, 3, 250);
     b.stamina -= 2 * strength; b.comfort -= 3 * strength;
     e.fear += 4 * strength; e.sadness += 5 * strength; e.anger += strength;
     const place = { left: '屏幕左边', right: '屏幕右边', ceiling: '屏幕上沿', floor: '屏幕底边' }[detail.edge];
@@ -332,14 +332,14 @@ export function reactHumanity(input, event, now = Date.now(), detail = '') {
     if (origin === 'user-throw') { b.security -= 2 * strength; e.anger += 1.5 * strength; }
     memory = origin === 'user-throw' ? '爸爸把我甩出去后撞到' + place + '，疼得哭了' : '撞到' + place + '，疼得哭了，起因不清楚';
     s.lastThought = origin === 'user-throw' ? '爸爸，你把我扔出去撞疼了……让我缓缓' : detail.speed >= 1200 ? '呜哇——嗷！撞疼了……呜呜呜' : '呜呜……撞疼了，让我缓一会儿';
-    s.cryingUntil = now + Math.min(12000, 4500 + detail.speed * 2);
+    s.cryingUntil = now + Math.min(14000, 4750 + detail.speed * 2.25);
     s.collision = { edge: detail.edge, speed: detail.speed, origin, at: now };
-    rememberInjury(s, now, strength * 3);
+    rememberInjury(s, now, strength * 3.5);
   } else if (event === 'sleep') { s.sleeping = true; memory = '收起尾巴睡着了'; }
   else if (event === 'wake') { s.sleeping = false; s.restingUntil = 0; s.awakeUntil = now + 30 * 60000; memory = '伸了伸尾巴，醒来了'; }
   else return s;
   easeEmotions(s, beforeEmotions, now);
-  s.cooldowns['event-' + event] = now + (event === 'collision' ? 150 : event === 'knock' ? 450 : event === 'utensil' ? 800 : event === 'impact' ? 10000 : event === 'chat' ? 3000 : 1000);
+  s.cooldowns['event-' + event] = now + (event === 'collision' ? 80 : event === 'knock' ? 450 : event === 'utensil' ? 800 : event === 'impact' ? 10000 : event === 'chat' ? 3000 : 1000);
   for (const k of Object.keys(b)) b[k] = humanClamp(b[k]);
   for (const k of Object.keys(e)) e[k] = humanClamp(e[k]);
   if (memory) { s.memories.unshift({ ts: now, text: memory }); s.memories = s.memories.slice(0, 32); }

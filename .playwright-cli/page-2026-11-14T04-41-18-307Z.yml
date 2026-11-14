@@ -1,0 +1,188 @@
+- generic [ref=e2]:
+  - complementary [ref=e3]:
+    - navigation "主导航" [ref=e13]:
+      - button "当前" [ref=e14] [cursor=pointer]
+      - button "聊天" [ref=e19] [cursor=pointer]
+      - button "照料" [active] [ref=e23] [cursor=pointer]:
+        - generic [aria-hidden] [ref=e24]: ♡
+        - text: 照料
+      - button "目标" [ref=e25] [cursor=pointer]
+      - button "轨迹" [ref=e31] [cursor=pointer]
+      - button "关系" [ref=e36] [cursor=pointer]
+      - button "成长" [ref=e40] [cursor=pointer]
+      - button "饭钱" [ref=e44] [cursor=pointer]
+      - button "设置" [ref=e49] [cursor=pointer]
+  - main [ref=e60]:
+    - generic [ref=e61]:
+      - generic [ref=e62]: 大肥鱼 / 照料
+      - generic [ref=e63]:
+        - generic [ref=e64]: 已同步 12:41
+        - button "暂停自主行为" [ref=e65] [cursor=pointer]
+        - button "关闭新版" [ref=e66] [cursor=pointer]
+        - button "刷新" [ref=e67] [cursor=pointer]
+    - generic [ref=e72]:
+      - generic [ref=e687]:
+        - heading "照料与成长" [level=1] [ref=e688]
+        - paragraph [ref=e689]: 照顾她的身体，陪伴她探索与成长。
+      - generic [ref=e690]:
+        - generic [ref=e691]:
+          - heading "好好照顾她" [level=2] [ref=e692]
+          - paragraph [ref=e693]: 互动会经过真实状态检查；喂饭和探索可能消耗模拟饭钱。
+          - generic [ref=e694]:
+            - button "喂饭" [ref=e695] [cursor=pointer]
+            - button "喝水" [ref=e696] [cursor=pointer]
+            - button "摸摸" [ref=e697] [cursor=pointer]
+            - button "陪伴" [ref=e698] [cursor=pointer]
+            - button "一起玩" [ref=e699] [cursor=pointer]
+            - button "安慰" [ref=e700] [cursor=pointer]
+            - button "休息" [ref=e701] [cursor=pointer]
+            - button "叫醒" [ref=e702] [cursor=pointer]
+            - button "探索" [ref=e703] [cursor=pointer]
+        - generic [ref=e704]:
+          - heading "调整身体状态" [level=2] [ref=e705]
+          - paragraph [ref=e706]: 只提交改动的指标；其他地方的调整会触发冲突提醒。
+          - generic [ref=e707]:
+            - generic [ref=e708]:
+              - generic [ref=e709]:
+                - generic [ref=e710]: 体力
+                - spinbutton "体力" [ref=e711]: "65"
+              - generic [ref=e712]:
+                - generic [ref=e713]: 精力
+                - spinbutton "精力" [ref=e714]: "72"
+              - generic [ref=e715]:
+                - generic [ref=e716]: 饱腹
+                - spinbutton "饱腹" [ref=e717]: "56"
+              - generic [ref=e718]:
+                - generic [ref=e719]: 水分
+                - spinbutton "水分" [ref=e720]: "81"
+              - generic [ref=e721]:
+                - generic [ref=e722]: 舒适
+                - spinbutton "舒适" [ref=e723]: "90"
+              - generic [ref=e724]:
+                - generic [ref=e725]: 痛苦
+                - spinbutton "痛苦" [ref=e726]: "5"
+              - generic [ref=e727]:
+                - generic [ref=e728]: 压力
+                - spinbutton "压力" [ref=e729]: "2"
+              - generic [ref=e730]:
+                - generic [ref=e731]: 安全感
+                - spinbutton "安全感" [ref=e732]: "82"
+              - generic [ref=e733]:
+                - generic [ref=e734]: 亲密
+                - spinbutton "亲密" [ref=e735]: "90"
+            - button "保存身体调整" [ref=e737] [cursor=pointer]
+        - generic [ref=e738]:
+          - heading "能力与联网" [level=2] [ref=e739]
+          - paragraph [ref=e740]: 联网开关和各项能力共同决定能否使用网络。
+          - generic [ref=e741]:
+            - generic [ref=e742]:
+              - strong [ref=e743]: 联网学习
+              - generic [ref=e744]: 已开启
+            - button "关闭联网" [ref=e745] [cursor=pointer]
+          - generic [ref=e746]:
+            - article [ref=e747]:
+              - generic [ref=e748]:
+                - strong [ref=e749]: 搜索公开网页
+                - generic [ref=e750]: 待处理
+              - generic [ref=e751]:
+                - button "授权" [ref=e752] [cursor=pointer]
+                - button "暂缓" [ref=e753] [cursor=pointer]
+                - button "拒绝" [ref=e754] [cursor=pointer]
+                - button "撤销" [ref=e755] [cursor=pointer]
+            - article [ref=e756]:
+              - generic [ref=e757]:
+                - strong [ref=e758]: 观察已分享图片
+                - generic [ref=e759]: 待处理
+              - generic [ref=e760]:
+                - button "授权" [ref=e761] [cursor=pointer]
+                - button "暂缓" [ref=e762] [cursor=pointer]
+                - button "拒绝" [ref=e763] [cursor=pointer]
+                - button "撤销" [ref=e764] [cursor=pointer]
+        - generic [ref=e765]:
+          - heading "成长节奏" [level=2] [ref=e766]
+          - paragraph [ref=e767]: 调整认知与自动整理，不会替她虚构经历。
+          - generic [ref=e768]:
+            - generic [ref=e769]:
+              - checkbox "启用自定义聪明程度" [checked] [ref=e770]
+              - text: 启用自定义聪明程度
+            - generic [ref=e771]:
+              - checkbox "自动整理日记" [checked] [ref=e772]
+              - text: 自动整理日记
+            - generic [ref=e773]:
+              - generic [ref=e774]:
+                - generic [ref=e775]: 聪明程度
+                - spinbutton "聪明程度" [ref=e776]: "70"
+              - generic [ref=e777]:
+                - generic [ref=e778]: 白饭吸引力 %
+                - spinbutton "白饭吸引力 %" [ref=e779]: "100"
+              - generic [ref=e780]:
+                - generic [ref=e781]: 每日探索次数
+                - spinbutton "每日探索次数" [ref=e782]: "1"
+              - generic [ref=e783]:
+                - generic [ref=e784]: 探索模型次数
+                - spinbutton "探索模型次数" [ref=e785]: "2"
+              - generic [ref=e786]:
+                - generic [ref=e787]: 学习模型次数
+                - spinbutton "学习模型次数" [ref=e788]: "3"
+              - generic [ref=e789]:
+                - generic [ref=e790]: 请求饭钱最少轮数
+                - spinbutton "请求饭钱最少轮数" [ref=e791]: "3"
+              - generic [ref=e792]:
+                - generic [ref=e793]: 请求饭钱最多轮数
+                - spinbutton "请求饭钱最多轮数" [ref=e794]: "5"
+              - generic [ref=e795]:
+                - generic [ref=e796]: 请求间隔（分钟）
+                - spinbutton "请求间隔（分钟）" [ref=e797]: "10"
+              - generic [ref=e798]:
+                - generic [ref=e799]: 每小时请求上限
+                - spinbutton "每小时请求上限" [ref=e800]: "4"
+            - button "保存设置" [ref=e802] [cursor=pointer]
+          - generic [ref=e803]:
+            - generic [ref=e804]:
+              - strong [ref=e805]: 人格变化
+              - generic [ref=e806]: 允许随经历变化
+            - button "冻结变化" [ref=e807] [cursor=pointer]
+        - generic [ref=e808]:
+          - heading "念想" [level=2] [ref=e809]
+          - paragraph [ref=e810]: 记录好奇的事，获得授权后可发起探索。
+          - generic [ref=e811]:
+            - generic [ref=e812]:
+              - text: 想知道什么
+              - textbox "想知道什么" [ref=e813]:
+                - /placeholder: 例如：鲸鱼为什么唱歌
+            - generic [ref=e814]:
+              - text: 使用能力
+              - combobox "使用能力" [ref=e815]:
+                - option "搜索公开网页" [selected]
+                - option "观察已分享图片"
+            - button "添加念想" [ref=e816] [cursor=pointer]
+          - article [ref=e818]:
+            - generic [ref=e819]:
+              - strong [ref=e820]: 鲸鱼怎么唱歌
+              - generic [ref=e821]: 待处理
+            - paragraph [ref=e822]: 搜索公开网页
+            - generic [ref=e823]:
+              - button "开始探索" [ref=e824] [cursor=pointer]
+              - button "取消念想" [ref=e825] [cursor=pointer]
+        - generic [ref=e826]:
+          - heading "记住一件事" [level=2] [ref=e827]
+          - paragraph [ref=e828]: 明确告诉她需要记住的内容。
+          - generic [ref=e829]:
+            - generic [ref=e830]:
+              - text: 内容
+              - textbox "内容" [ref=e831]:
+                - /placeholder: 写下想让她记住的事
+            - button "添加记忆" [ref=e833] [cursor=pointer]
+        - generic [ref=e834]:
+          - heading "日记与整理" [level=2] [ref=e835]
+          - paragraph [ref=e836]: 手动整理需要真实经历和可用模型，可能消耗模拟饭钱。
+          - generic [ref=e837]:
+            - button "整理今日日记" [ref=e838] [cursor=pointer]
+            - button "整理成长反思" [ref=e839] [cursor=pointer]
+          - generic [ref=e840]:
+            - generic [ref=e841]:
+              - text: 指定日期
+              - textbox "指定日期" [ref=e842]
+            - button "整理这天的日记" [ref=e843] [cursor=pointer]
+          - group [ref=e845]:
+            - generic "2026-01-01" [ref=e846] [cursor=pointer]

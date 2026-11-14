@@ -25,9 +25,13 @@ Object.assign(PetSprite.prototype, {
 
   reportBoundaryPain(hit, origin = 'unknown') {
     // Normal speed BEFORE restitution: a fast glide along the floor is not an impact.
-    if (!hit || hit.speed < 550) return;
+    // Lower the threshold so moderate knocks register; only a gentle settle stays silent.
+    if (!hit || hit.speed < 200) return;
     const now = performance.now();
-    if ((this.lastPainContact ?? -Infinity) + 150 > now) return;
+    // Debounce only rapid duplicates of the *same* frame's rebound, not distinct
+    // walls hit in quick succession. A shorter window means four walls hit one
+    // after another each leave their own pain instead of being swallowed.
+    if ((this.lastPainContact ?? -Infinity) + 60 > now) return;
     this.lastPainContact = now;
     if (!this.sleeping) this.showPainReaction(hit.speed);
     window.petBridge.reportInteraction('collision',{edge:hit.edge,speed:hit.speed,origin}).then(async (data) => {

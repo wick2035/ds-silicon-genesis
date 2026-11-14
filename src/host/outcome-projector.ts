@@ -39,6 +39,11 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
     assert(!services.inventory.some((item: Obj) => item.id === id), '饭已入账');
     wallet.balance = Math.round((wallet.balance - charge) * 100) / 100;
     services.inventory.push({id,sku:'rice',name:'大白饭',status:'available',price,paid:charge,at});
+    if (charge > 0) {
+      const text = `买饭消耗 ${charge} token，余额 ${wallet.balance} token`;
+      (pet.events ||= []).push({id:'finance:'+intent.id,kind:'wallet-spend',text,ts:at});
+      draft.life.events.push({eventId:'finance:'+intent.id,petId:draft.petId,type:'wallet.spend',source:'canonical',occurredAt,receivedAt:occurredAt,evidenceLevel:'observed',payload:{kind:'buy-rice',amount:charge,balance:wallet.balance}});
+    }
     return;
   }
   if(intent.type==='care.feed'){assert(e.played===true && e.itemId==='parent','投喂动画未完成');const result=actHumanity(human,'feed',at);assert(result.ok,result.message||'当前不能投喂');settleSimulatedSpending(draft,'feed',intent.id);draft.humanity=result.state;draft.life.events.push({eventId:'care-feed:'+intent.id,petId:draft.petId,type:'social.care',source:'executor',actorId:'dad',occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'observed',payload:{action:'feed'}});rebuildRelationships(draft.life);return;}
@@ -91,7 +96,17 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
     if (finite(e.effortSeconds)) {
       assert(e.effortSeconds >= 0 && e.effortSeconds <= 30 && finite(e.intensity) && e.intensity >= 1 && e.intensity <= 1.7 && human.stats && human.emotions, '体力回执无效');
       const next = advanceHumanity(human,at), effort = e.effortSeconds * e.intensity;
-      next.stats.stamina = clamp(next.stats.stamina - effort * .08); next.stats.energy = clamp(next.stats.energy - effort * .045); next.stats.satiety = clamp(next.stats.satiety - effort * .015);
+      if (contract.forced) {
+        // A forced batch drains the body past its floor: stamina and energy may
+        // go negative, and pain climbs as the overdraft becomes real distress.
+        next.stats.stamina = Math.max(-100, next.stats.stamina - effort * .12);
+        next.stats.energy = Math.max(-100, next.stats.energy - effort * .08);
+        next.stats.satiety = clamp(next.stats.satiety - effort * .015);
+        next.stats.pain = clamp(next.stats.pain + effort * .25 + 3);
+        next.stats.stress = clamp(next.stats.stress + effort * .2 + 2);
+      } else {
+        next.stats.stamina = clamp(next.stats.stamina - effort * .08); next.stats.energy = clamp(next.stats.energy - effort * .045); next.stats.satiety = clamp(next.stats.satiety - effort * .015);
+      }
       next.serviceActions = {...human.serviceActions,[`labor-effort:${intent.id}`]:{ok:true,at,action:'labor-effort',seconds:e.effortSeconds,intensity:e.intensity}};
       draft.humanity = next;
     }

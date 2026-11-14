@@ -1,0 +1,29 @@
+- generic [ref=e2]:
+  - complementary [ref=e3]:
+    - generic [ref=e9]:
+      - strong [ref=e10]: 大肥鱼
+      - generic [ref=e11]: DAFEI LIFEOS
+    - generic [ref=e12]: 生命空间
+    - navigation "主导航" [ref=e13]:
+      - button "当前" [ref=e14] [cursor=pointer]
+      - button "聊天" [ref=e19] [cursor=pointer]
+      - button "照料" [ref=e23] [cursor=pointer]:
+        - generic [aria-hidden] [ref=e24]: ♡
+        - text: 照料
+      - button "目标" [ref=e25] [cursor=pointer]
+      - button "轨迹" [ref=e31] [cursor=pointer]
+      - button "关系" [ref=e36] [cursor=pointer]
+      - button "成长" [ref=e40] [cursor=pointer]
+      - button "饭钱" [ref=e44] [cursor=pointer]
+      - button "设置" [ref=e49] [cursor=pointer]
+    - generic [ref=e57]:
+      - strong [ref=e58]: 正在连接
+      - generic [ref=e59]: 生命状态同步中
+  - main [ref=e60]:
+    - generic [ref=e61]:
+      - generic [ref=e62]: 大肥鱼 / 当前
+      - generic [ref=e63]:
+        - generic [ref=e64]: 等待同步
+        - button "自主状态同步中" [disabled] [ref=e65]
+        - button "关闭新版" [ref=e66] [cursor=pointer]
+        - button "刷新" [ref=e67] [cursor=pointer]
