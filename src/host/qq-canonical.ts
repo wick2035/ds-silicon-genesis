@@ -10,14 +10,12 @@ type Obj = Record<string,any>;
 const hash = (s:string) => createHash('sha256').update(s).digest('hex');
 const key = (s:unknown): s is string => typeof s === 'string' && s.length > 0 && s.length <= 200 && !/[\x00-\x1f]/.test(s);
 const relayKey = (eventId:string,part:number) => hash('desktop-relay:'+eventId+':'+part);
-function relayParts(draft:CanonicalEnvelope,eventId:string):string[] {
-  const event=draft.life.events.find(e=>e.eventId===eventId);
-  if(!event || event.source!=='desktop' || !['conversation.user','conversation.assistant'].includes(event.type) || Object.hasOwn(draft.life.invalidSources,eventId))return [];
-  if(event.type==='conversation.assistant' && !draft.life.events.some(e=>e.eventId===event.causationId && e.type==='conversation.user' && e.source==='desktop' && !Object.hasOwn(draft.life.invalidSources,e.eventId)))return [];
-  const text=String((event.payload as Obj)?.text||'').trim(); if(!text)return [];
-  const chars=Array.from(redactDadNames(text)), chunks:string[]=[];
-  for(let i=0;i<chars.length;i+=800)chunks.push(chars.slice(i,i+800).join(''));
-  return chunks.map((chunk,i)=>`【生命空间·${event.type==='conversation.user'?'我':'大肥鱼'}${chunks.length>1?` ${i+1}/${chunks.length}`:''}】${chunk}`);
+function relayTurn(draft:CanonicalEnvelope,userId:string,answerId:string):string|null {
+  const user=draft.life.events.find(e=>e.eventId===userId),answer=draft.life.events.find(e=>e.eventId===answerId);
+  if(!user||!answer||user.type!=='conversation.user'||answer.type!=='conversation.assistant'||user.source!=='desktop'||answer.source!=='desktop'||answer.causationId!==userId||Object.hasOwn(draft.life.invalidSources,userId)||Object.hasOwn(draft.life.invalidSources,answerId))return null;
+  const clip=(s:unknown)=>{const chars=Array.from(redactDadNames(String(s||'').trim()));return chars.length>800?chars.slice(0,799).join('')+'…':chars.join('');};
+  const question=clip((user.payload as Obj)?.text),reply=clip((answer.payload as Obj)?.text);
+  return question&&reply?`【生命空间】\n我：${question}\n大肥鱼：${reply}`:null;
 }
 function nextReplySeq(draft:CanonicalEnvelope,replyTo:string,scene:string):number {
   return Math.max(0,...draft.life.actions.filter(a=>a.actionType==='qq.send' && (a.parameters as Obj).replyTo===replyTo && (a.parameters as Obj).scene===scene).map(a=>Number((a.parameters as Obj).replySeq)||1))+1;
@@ -29,6 +27,7 @@ export interface QQIncoming { messageId:string; scene:'c2c'|'group'; actorOpenid
  * a socket, reads old files, stores appSecret, or invokes the old QQ bridge. */
 export class CanonicalQQ {
   readonly #ingress: object;
+  readonly #relayStarted=new Map<string,number>();
   constructor(private readonly reader:Reader, private readonly uow:UnitOfWork, private readonly gate:PetGate,
     private readonly body:BodyProjection, ingressAuthority:object) {
     if (!ingressAuthority || typeof ingressAuthority !== 'object') throw new Error('QQ 通道凭据无效'); this.#ingress=ingressAuthority;
@@ -140,37 +139,37 @@ export class CanonicalQQ {
       return {value:actionId,intents:[{id:actionId,type:'qq.send',payload:{actionId,petId,actionType:'qq.send',parameters:proposal.parameters}}]};
     });
   }
-  /** Start once at the most recent private QQ exchange, allowing missed desktop turns to catch up. */
+  /** Only complete desktop turns created after this process starts are eligible. */
   async enableRelay(petId:string):Promise<void> {
-    const current=await this.reader.loadEnvelope(petId);if((current?.legacy as Obj)?.qq?.relay?.startedAt)return;
-    await this.change(petId,draft=>{const qq=(draft.legacy as Obj).qq;if(!qq?.identity?.ownerOpenid)return {value:undefined};
-      const last=draft.life.events.filter(e=>e.source==='qq' && e.type==='social.message' && e.actorId==='dad' && (e.payload as Obj)?.scene==='c2c').at(-1);
-      qq.relay ||= {startedAt:last?.receivedAt||new Date().toISOString()};return {value:undefined};});
+    if(!this.#relayStarted.has(petId))this.#relayStarted.set(petId,Date.now());
   }
   /** Queue the next unsent desktop conversation part against a live private reply window. */
   async enqueueNextRelay(petId:string,authority:object):Promise<string|null> {
     if(authority!==this.#ingress)throw Error('QQ 通道凭据无效');
     return this.change(petId,draft=>{
-      const qq=(draft.legacy as Obj).qq, started=Date.parse(qq?.relay?.startedAt||'');
+      const qq=(draft.legacy as Obj).qq, started=this.#relayStarted.get(petId);
       if(!Number.isFinite(started)||!key(qq?.identity?.ownerOpenid))return {value:null};
       const anchor=draft.life.events.filter(e=>e.source==='qq' && e.type==='social.message' && e.actorId==='dad' && (e.payload as Obj)?.scene==='c2c' && !Object.hasOwn(draft.life.invalidSources,e.eventId) && Date.now()-Date.parse(e.occurredAt)<60*60*1000 && Date.now()>=Date.parse(e.occurredAt)-60000).at(-1);
       if(!anchor)return {value:null};const replyTo=String((anchor.payload as Obj).messageId||'');if(!key(replyTo))return {value:null};
       const seq=nextReplySeq(draft,replyTo,'c2c');
-      const hasReply=draft.life.actions.some(a=>a.actionType==='qq.send' && (a.parameters as Obj).replyTo===replyTo && !(a.parameters as Obj).relay);
-      if(seq>5 || (seq===5 && !hasReply))return {value:null};
+      const hasReply=draft.life.actions.some(a=>a.actionType==='qq.send' && (a.parameters as Obj).replyTo===replyTo && !(a.parameters as Obj).relay && a.status==='COMPLETED');
+      if(seq>5 || !hasReply)return {value:null};
       for(const event of draft.life.events){
-        if(Date.parse(event.receivedAt)<started)continue;
-        const parts=relayParts(draft,event.eventId);
+        if(event.type!=='conversation.assistant'||event.source!=='desktop'||Date.parse(event.receivedAt)<started!||Date.now()-Date.parse(event.receivedAt)>120000)continue;
+        const user=draft.life.events.find(e=>e.eventId===event.causationId);if(!user||Date.parse(user.receivedAt)<started!)continue;
+        const content=relayTurn(draft,user.eventId,event.eventId);if(!content)continue;const parts=[content];
         for(let part=0;part<parts.length;part++){
           const logical=relayKey(event.eventId,part);
           const attempts=Object.values(qq.outbound as Obj).filter((entry:any)=>entry.relayKey===logical) as Obj[];
+          // Preserve turn order until an earlier send has a definite outcome.
+          if(attempts.some(entry=>['pending','sending','unknown'].includes(entry.state)))return {value:null};
           // Unknown delivery must never be repeated. A known cancellation may
           // be attempted again only against a different incoming QQ message.
           if(attempts.some(entry=>!['cancelled','failed'].includes(entry.state)||entry.anchorId===anchor.eventId))continue;
           const id=hash('desktop-relay-attempt:'+logical+':'+anchor.eventId);
           const content=parts[part], actionId='qq-send:'+id, scene='c2c',sourceEventId=event.eventId;
           const fingerprint=hash(JSON.stringify({scene,text:content,sourceEventId,replyTo}));
-          const proposal:ActionProposal={id:actionId,petId,actionType:'qq.send',parameters:{scene,destination:qq.identity.ownerOpenid,content,replyTo,replySeq:seq,relay:{part}},priority:50,interruptPolicy:'noninterruptible',requiredCapabilities:['qq.send'],expectedStateVersion:draft.version,sourceIds:[sourceEventId,anchor.eventId]};
+          const proposal:ActionProposal={id:actionId,petId,actionType:'qq.send',parameters:{scene,destination:qq.identity.ownerOpenid,content,replyTo,replySeq:seq,relay:{part}},priority:50,interruptPolicy:'noninterruptible',requiredCapabilities:['qq.send'],expectedStateVersion:draft.version,sourceIds:[sourceEventId,user.eventId,anchor.eventId]};
           qq.outbound[id]={at:Date.now(),state:'pending',actionId,fingerprint,relayKey:logical,anchorId:anchor.eventId};
           const state:LifeState={...structuredClone(draft.life),petId,version:draft.version,...this.body(draft)};validateQQReply(draft,state,proposal);
           const at=new Date().toISOString();draft.life.actions.push({...proposal,status:'PENDING',createdAt:at,updatedAt:at});
@@ -213,8 +212,8 @@ export function validateQQReply(draft:CanonicalEnvelope,state:LifeState,proposal
   const source=draft.life.events.find(e=>e.eventId===proposal.sourceIds[0]);
   const entry=Object.values(qq?.outbound||{}).find((x:any)=>x.actionId===proposal.id) as Obj|undefined;
   const fingerprint=hash(JSON.stringify({scene:p.scene,text:p.content,sourceEventId:proposal.sourceIds[0],replyTo:p.replyTo}));
-  const anchor=p.relay ? draft.life.events.find(e=>e.eventId===proposal.sourceIds[1]):source;
-  const validRelay=!!p.relay && proposal.sourceIds.length===2 && Number.isInteger(p.relay.part) && entry?.relayKey===relayKey(proposal.sourceIds[0],p.relay.part) && entry?.anchorId===anchor?.eventId && relayParts(draft,proposal.sourceIds[0])[p.relay.part]===p.content && p.scene==='c2c' && p.destination===qq?.identity?.ownerOpenid && anchor?.actorId==='dad' && Date.now()-Date.parse(anchor.occurredAt)<60*60*1000;
+  const anchor=p.relay ? draft.life.events.find(e=>e.eventId===proposal.sourceIds[2]):source;
+  const validRelay=!!p.relay && proposal.sourceIds.length===3 && p.relay.part===0 && entry?.relayKey===relayKey(proposal.sourceIds[0],0) && entry?.anchorId===anchor?.eventId && relayTurn(draft,proposal.sourceIds[1],proposal.sourceIds[0])===p.content && p.scene==='c2c' && p.destination===qq?.identity?.ownerOpenid && anchor?.actorId==='dad' && Date.now()-Date.parse(anchor.occurredAt)<60*60*1000;
   if(proposal.actionType!=='qq.send' || !entry || entry.fingerprint!==fingerprint || !anchor || anchor.source!=='qq' || anchor.evidenceLevel!=='observed' || !['social.message','social.paired'].includes(anchor.type) || (anchor.payload as Obj)?.messageId!==p.replyTo || (anchor.payload as Obj)?.scene!==p.scene || (p.relay?!validRelay:proposal.sourceIds.length!==1) || (p.replySeq!==undefined&&(!Number.isInteger(p.replySeq)||p.replySeq<1||p.replySeq>5))) throw Error('QQ 会话回复来源无效');
   const interactive={...state,constraints:{...state.constraints,paused:false}};
   validateProposal(interactive,proposal);
