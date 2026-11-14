@@ -40,6 +40,11 @@ test('拒绝、身体阻碍和没有真实回执时，回复与状态一致',asy
   }
 });
 
+test('普通聊天的非工地动作回复也与存档使用同一校验结果',async()=>{
+  const f=fixture('我刚喝到了水。');const reply=await turn(f,'你刚喝水了吗？','water-claim');
+  assert.match(reply,/没有确认/);assert.equal(f.get().life.events.filter(e=>e.type==='conversation.assistant').at(-1).payload.text,reply);
+});
+
 test('一趟工作逐步等待实际回执后才增加进度并消耗体力',async()=>{
   const f=fixture('好，我马上干。');f.get().humanity.stats.satiety=6;f.get().legacy.services.inventory=[];f.get().life.constraints.capabilities.push({name:'service.buy-rice',enabled:true});
   const actions=new ActionCoordinator(f.uow,projectBody);let count=0,buys=0;

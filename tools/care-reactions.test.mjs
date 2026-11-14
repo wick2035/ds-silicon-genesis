@@ -76,7 +76,7 @@ test('只有真实提交的吃喝触发一次自然回应，模型失败有可�
   assert.deepEqual(calls.map(x=>x.eventId),['water','feed']);
   assert.match(calls[0].description,/喝了水/);
   assert.match(calls[1].description,/喂了你一口饭/);
-  assert.deepEqual(new Set(shown),new Set(['咕噜，谢谢爸爸','好香呀，爸爸']));
+  assert.deepEqual(new Set(shown),new Set(['咕噜……喝到啦，谢谢爸爸。','好香呀，爸爸']));
 });
 
 test('喝水必须播放对应动作，完成回执后才增加水分',async()=>{
@@ -151,7 +151,7 @@ test('模型返回空内容时照料回应仍可见，且等待者拿到同一�
   const base={petId:'main',humanity:{lastThought:'喝到啦'},life:{events:[],invalidSources:{}}},shown=[];
   const observe=createCareReactions(base,async()=>'',text=>shown.push(text));
   observe({...base,life:{...base.life,events:[{eventId:'care-water:test',type:'social.care',payload:{action:'water'}}]}});
-  assert.equal(await observe.wait('care-water:test'),'喝到啦');assert.deepEqual(shown,['喝到啦']);
+  assert.equal(await observe.wait('care-water:test'),'咕噜……喝到啦，谢谢爸爸。');assert.deepEqual(shown,['咕噜……喝到啦，谢谢爸爸。']);
 });
 
 test('照料回应显示期间不会被普通心情气泡盖掉',async()=>{

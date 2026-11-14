@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { redactDadNames } from '../../vendor/pet-plugins/behavior/memory-privacy.mjs';
 import { rebuildRelationships } from '../kernel/index.js';
 import { conversationContext, groundWorksiteReply, worksiteFacts } from './conversation-context.js';
+import { groundActionReply } from './reply-grounding.js';
 import {groupSpeaker,isOwnerPrivateConversation} from './chat-identity.js';
 import {projectBody} from './body-projection.js';
 import type { LifeState, Memory } from '../kernel/types.js';
@@ -164,7 +165,7 @@ export class CanonicalChat {
             decidedToWork=true;
           }
         }
-        output=groundWorksiteReply(output,draft);
+        output=groundActionReply(groundWorksiteReply(output,draft),draft);
         if(group && [...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(output)].length>15)output='这趟还没有完成。';
         draft.life.events.push({eventId:assistantId,petId:input.petId,type:'conversation.assistant',source:input.channel,occurredAt:now,receivedAt:now,evidenceLevel:'inferred',causationId:userId,payload:{text:output,channel:input.channel,...(typeof groupId==='string'?{groupId}:{}),sourceIds:sources}});
         if(workDecision)draft.life.events.push({eventId:String(workDecision.eventId),petId:input.petId,type:'labor.decision',source:'model',occurredAt:now,receivedAt:now,evidenceLevel:'inferred',causationId:assistantId,payload:{contractId:workDecision.contractId,choice:'work',reason:'conversation',sourceIds:[userId,assistantId]}});

@@ -243,7 +243,7 @@ export async function main():Promise<void> {
     const targetHome=join(root,'data','dsh');
     let freshQQ=false;
     try {await stat(join(targetHome,'dsh-pet','qq-fresh-config.json'));freshQQ=true;} catch(error) {if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
-    if(freshQQ || await verifyQQCutoverProof(targetHome)) {
+    if(process.env.SILICON_DISABLE_QQ!=='1' && (freshQQ || await verifyQQCutoverProof(targetHome))) {
       const ingressAuthority={};
       const canonical=new CanonicalQQ(store,unitOfWork,lease,projectBody,ingressAuthority);
       const shared={canonical,ingressAuthority,signal:lease.signal,onTurn:chat.qqTurn.bind(chat),dispatch:(id:string)=>dispatcher.dispatch(id)};

@@ -5,8 +5,8 @@ import type {CanonicalEnvelope} from '../storage/postgres.js';
 export function conversationContext(state:LifeState, envelope:CanonicalEnvelope) {
   const pet=envelope.legacy as Record<string,any>, config=pet.config??{}, wallet=pet.wallet??{};
   const abilities=pet.abilities??{}, inventory=Array.isArray(pet.services?.inventory)?pet.services.inventory:[];
-  const actions=state.actions.filter(a=>(a.actionType.startsWith('care.')||['service.buy-rice','service.eat-rice','learning.observe','image.observe','body.sleep','body.wake'].includes(a.actionType)) && a.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id))).slice(-8).map(a=>{
-    const receipt=state.receipts.find(r=>r.actionId===a.id && r.receiptId===a.receiptId && state.events.some(e=>e.causationId===r.receiptId && !Object.hasOwn(state.invalidSources,e.eventId)));
+  const actions=(state.actions??[]).filter(a=>(a.actionType.startsWith('care.')||['service.buy-rice','service.eat-rice','learning.observe','image.observe','body.sleep','body.wake'].includes(a.actionType)) && a.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id))).slice(-8).map(a=>{
+    const receipt=(state.receipts??[]).find(r=>r.actionId===a.id && r.receiptId===a.receiptId && state.events.some(e=>e.causationId===r.receiptId && !Object.hasOwn(state.invalidSources,e.eventId)));
     const details=receipt?.details as Record<string,unknown>|undefined;
     const status=receipt?.status??(['COMPLETED','FAILED','CANCELLED','UNKNOWN'].includes(a.status)?'UNCONFIRMED':a.status);
     return {type:a.actionType,status,at:receipt?.occurredAt??a.updatedAt,
@@ -29,7 +29,7 @@ export function worksiteFacts(envelope:CanonicalEnvelope) {
   const contract=(pet.labor?.contracts??[]).find((c:any)=>['working','paused','unpaid'].includes(c.status));
   const transition=envelope.life.events.filter(e=>e.type==='interaction.worksite' && !Object.hasOwn(envelope.life.invalidSources,e.eventId) && ['enter-forced','enter-voluntary','release','leave-voluntary'].includes(String((e.payload as any)?.action))).at(-1);
   const enteredAt=site.inside===true && transition && ['enter-forced','enter-voluntary'].includes(String((transition.payload as any)?.action)) ? Date.parse(transition.occurredAt) : Infinity;
-  const completedTrips=envelope.life.actions.filter(a=>a.actionType==='labor.step' && a.parameters?.contractId===contract?.id && a.sourceIds.every(id=>!Object.hasOwn(envelope.life.invalidSources,id))).filter(a=>envelope.life.receipts.some(r=>{const details=r.details as Record<string,unknown>;return r.actionId===a.id && r.receiptId===a.receiptId && r.status==='COMPLETED' && details?.index===1 && typeof details.x==='number' && Math.abs(details.x-.78)<=.045 && Date.parse(r.occurredAt)>=enteredAt && envelope.life.events.some(e=>e.causationId===r.receiptId && !Object.hasOwn(envelope.life.invalidSources,e.eventId));})).length;
+  const completedTrips=(envelope.life.actions??[]).filter(a=>a.actionType==='labor.step' && a.parameters?.contractId===contract?.id && a.sourceIds.every(id=>!Object.hasOwn(envelope.life.invalidSources,id))).filter(a=>(envelope.life.receipts??[]).some(r=>{const details=r.details as Record<string,unknown>;return r.actionId===a.id && r.receiptId===a.receiptId && r.status==='COMPLETED' && details?.index===1 && typeof details.x==='number' && Math.abs(details.x-.78)<=.045 && Date.parse(r.occurredAt)>=enteredAt && envelope.life.events.some(e=>e.causationId===r.receiptId && !Object.hasOwn(envelope.life.invalidSources,e.eventId));})).length;
   return {inside:site.inside===true,forced:site.forced===true,status:contract?.status??null,completedTotal:contract?.done??null,trips:contract?.trips??null,workPermit:contract?.workPermit===true,completedTripsThisVisit:completedTrips};
 }
 

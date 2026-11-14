@@ -13,7 +13,7 @@ export function createCareReactions(initial:CanonicalEnvelope, respond:(petId:st
       const descriptions:Record<string,string>={feed:'爸爸刚刚喂了你一口饭，你真的吃到了',water:'爸爸刚刚给你喝了水',pet:'爸爸刚刚摸摸你',play:'你刚刚和爸爸一起玩了一会儿',soothe:'爸爸刚刚安慰了你',accompany:'你刚刚和爸爸安静地待了一会儿'};
       if(!['social.care','body.meal'].includes(event.type)||!Object.hasOwn(descriptions,action)||Object.hasOwn(state.life.invalidSources,event.eventId))continue;
       const description=(event.type==='body.meal'?'你刚刚真的吃完了一碗饭':descriptions[action])+'，请根据自己的身体感受和心情自然说一句。';
-      const fallback=(typeof (state.humanity as any).lastThought==='string'&&(state.humanity as any).lastThought.trim())||({feed:'嗯，好香，谢谢爸爸。',water:'咕噜……喝到啦，谢谢爸爸。',pet:'嗯，被摸到了。',play:'和爸爸一起玩真好。',soothe:'谢谢爸爸，我慢慢缓一缓。',accompany:'爸爸在旁边，真好。'} as Record<string,string>)[action];
+      const fallback=({feed:'嗯，好香，谢谢爸爸。',water:'咕噜……喝到啦，谢谢爸爸。',pet:'嗯，被摸到了。',play:'和爸爸一起玩真好。',soothe:'谢谢爸爸，我慢慢缓一缓。',accompany:'爸爸在旁边，真好。'} as Record<string,string>)[action];
       const controller=new AbortController();let timer:ReturnType<typeof setTimeout>;
       const deadline=new Promise<string>(resolve=>{timer=setTimeout(()=>{controller.abort();resolve(fallback);},5000);});
       const task=Promise.race([Promise.resolve().then(()=>respond(state.petId,{eventId:event.eventId,description},controller.signal)),deadline])
