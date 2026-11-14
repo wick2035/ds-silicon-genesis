@@ -18,6 +18,7 @@ window.lifeApi = Object.freeze({
   chat: async (text, requestId, attachments = []) => { const token=sessionStorage.getItem('life-token'); const headers={'content-type':'application/json'}; if(token) headers['x-dsh-pet-token']=token; const response=await fetch('/api/life/chat',{method:'POST',credentials:'same-origin',headers,body:JSON.stringify({text,requestId,attachments})}); const data=await response.json(); if(!response.ok || !data.ok) throw Error(data.error||'聊天暂时不可用'); return data.reply; },
   uploadImage: file => request('attachment', {method:'POST',headers:{'content-type':file.type,'x-request-id':crypto.randomUUID()},body:file}),
   shutdown: () => request('shutdown', {method:'POST'}),
+  openWorksite: () => request('worksite', {method:'POST'}),
   getSnapshot: () => request('snapshot'),
   getGoals: () => request('goals'),
   getTimeline: () => request('timeline'),

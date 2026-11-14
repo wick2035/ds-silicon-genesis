@@ -8,12 +8,12 @@ function register({ipcMain,petWindows,hostRequest,BrowserWindow,screen,app}) {
   let shuttingDown=false;app?.on('before-quit',()=>{shuttingDown=true;});
   const petFor=sender=>[...petWindows.state.windows].find(([,win])=>win.webContents===sender)?.[0];
   const siteFor=sender=>[...sites].find(([,win])=>!win.isDestroyed()&&win.webContents===sender)?.[0];
-  function call(petId,action){
+  function call(petId,action,requestId){
     const next=(queues.get(petId)||Promise.resolve()).catch(()=>{}).then(async()=>{
-      const res=await hostRequest('POST','/__silicon/worksite',JSON.stringify({petId,action}));
+      const res=await hostRequest('POST','/__silicon/worksite',JSON.stringify({petId,action,...(requestId?{requestId}:{})}));
       let body;try{body=JSON.parse(res.body||'{}');}catch{throw Error('工地状态不可用');}
       if(res.status!==200)throw Error(body.message||'工地状态未保存');
-      last.set(petId,body);return body;
+      if(body.location)last.set(petId,body);return body;
     });
     queues.set(petId,next);return next;
   }
@@ -55,6 +55,11 @@ function register({ipcMain,petWindows,hostRequest,BrowserWindow,screen,app}) {
     if(busy.has(id))return;busy.add(id);
     try{
       let state=await call(id,'snapshot');
+      if(state.openRequestId){
+        const win=open(id,true);
+        if(win.webContents.isLoading())await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('工地窗口加载超时')),6000);win.webContents.once('did-finish-load',()=>{clearTimeout(timer);resolve();});win.webContents.once('did-fail-load',()=>{clearTimeout(timer);reject(Error('工地窗口加载失败'));});});
+        if(win.isDestroyed())throw Error('工地窗口已关闭');win.show();win.focus();await call(id,'open-ack',state.openRequestId);
+      }
       if(state.location?.requested&&!state.location?.inside){
         const win=open(id,false);
         if(!win.webContents.isLoading()&&!win.isDestroyed()){state=await call(id,'enter-voluntary');}

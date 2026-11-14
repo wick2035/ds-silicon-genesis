@@ -134,7 +134,7 @@ export async function main():Promise<void> {
       return domain.laborDecision(id,'labor-decision:'+createHash('sha256').update(requestId).digest('hex'),{id:contractId,trips:contract.trips,wage:contract.wage,choice:decision.choice,...(decision.choice==='bargain'?{counterTrips:decision.trips,counterWage:decision.wage}:{})});
     };
     let companionManagement:ReturnType<typeof createCompanionManagement>;
-    const lifeApi=createLifeApi({authorize:()=>true,petId:()=>petId,getState:id=>kernel.getState(id),shutdown:()=>requestShutdown(),attachments,finance:createFinanceManagement(store,lease,domain,decideLaborOffer),
+    const lifeApi=createLifeApi({authorize:()=>true,petId:()=>petId,getState:id=>kernel.getState(id),shutdown:()=>requestShutdown(),openWorksite:id=>helper.requestWorksiteOpen(id),attachments,finance:createFinanceManagement(store,lease,domain,decideLaborOffer),
       companion:{read:(id,signal)=>companionManagement.read(id,signal),write:(id,input,signal)=>companionManagement.write(id,input,signal)},
       model:{read:async()=>model!.getSettings(),write:async(id,input)=>{
         if(input.operation==='save'){const {operation,...settings}=input;return model!.saveSettings(settings);}

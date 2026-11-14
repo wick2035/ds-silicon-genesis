@@ -55,6 +55,7 @@ installFinance(view,()=>load(),()=>page==='finance');
 installCompanion(view,()=>load(),()=>page==='companion');
 installModel(view,()=>load(),()=>page==='settings');
 const dialog=document.querySelector('#edit-dialog'),form=document.querySelector('#edit-form'),save=document.querySelector('#edit-save');
+document.querySelector('#open-worksite').addEventListener('click',async event=>{const button=event.currentTarget;button.disabled=true;button.textContent='正在打开…';try{await window.lifeApi.openWorksite();}catch(error){notice.textContent=error?.message||'工地窗口暂时无法打开';notice.hidden=false;}finally{button.disabled=false;button.textContent='打开搬砖工地';}});
 function setPaused(value){paused=value;const b=document.querySelector('#global-pause');b.disabled=false;b.textContent=value?'恢复自主行为':'暂停自主行为';}
 async function submitCommand(command){await window.lifeApi.manage(command);await load();notice.textContent='操作已保存';notice.hidden=false;}
 function commandFrom(button,reason,content){const type=button.dataset.command,base={version:currentVersion,reason};return type==='goal'?{...base,kind:'goal',id:button.dataset.id,status:button.dataset.value,expectedStatus:button.dataset.expected}:type==='revoke'?{...base,kind:'revoke',permission:button.dataset.id}:type==='pause'?{...base,kind:'pause',paused:button.dataset.value==='true'}:{...base,kind:'memory',id:button.dataset.id,expectedContent:button.dataset.expected,action:type==='memory-correct'?'correct':'delete',...(content!==undefined?{content}: {})};}

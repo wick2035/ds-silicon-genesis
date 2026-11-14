@@ -13,6 +13,7 @@ export interface LifeApiHost {
   searchMemories?(petId:string, query:string): Promise<unknown[]>;
   links?: {chat?:string;play?:string};
   shutdown?:()=>void;
+  openWorksite?:(petId:string)=>Promise<void>;
   finance?: {read:(petId:string)=>Promise<unknown>; write:(petId:string,input:Record<string,unknown>)=>Promise<unknown>};
   companion?: {read:(petId:string,signal:AbortSignal)=>Promise<unknown>; write:(petId:string,input:Record<string,unknown>,signal:AbortSignal)=>Promise<unknown>};
   model?: {read:(petId:string,signal:AbortSignal)=>Promise<unknown>; write:(petId:string,input:Record<string,unknown>,signal:AbortSignal)=>Promise<unknown>};
@@ -95,11 +96,12 @@ export function createLifeApi(host:LifeApiHost) {
     const url=new URL(request.url);if(!url.pathname.startsWith('/api/life/'))return undefined;
     if(!await host.authorize(request))return response(403,{ok:false,error:'没有访问权限'});
     const endpoint=url.pathname.slice('/api/life/'.length);
-    if(!['snapshot','goals','timeline','relationships','growth','settings','manage','memory-search','shutdown','attachment','finance','companion','model'].includes(endpoint))return response(404,{ok:false,error:'没有这个接口'});
-    if(request.method!=='GET' && !(request.method==='POST' && ['manage','shutdown','attachment','finance','companion','model'].includes(endpoint)) || request.method==='GET' && ['manage','shutdown','attachment'].includes(endpoint))return response(405,{ok:false,error:'请求方法不受支持'});
+    if(!['snapshot','goals','timeline','relationships','growth','settings','manage','memory-search','shutdown','attachment','finance','companion','model','worksite'].includes(endpoint))return response(404,{ok:false,error:'没有这个接口'});
+    if(request.method!=='GET' && !(request.method==='POST' && ['manage','shutdown','attachment','finance','companion','model','worksite'].includes(endpoint)) || request.method==='GET' && ['manage','shutdown','attachment','worksite'].includes(endpoint))return response(405,{ok:false,error:'请求方法不受支持'});
     try {
       if(endpoint==='shutdown') {if(!host.shutdown)return response(503,{ok:false,error:'关闭入口不可用'});setTimeout(host.shutdown,100);return response(200,{ok:true,value:{closing:true}});}
       const id=await host.petId();
+      if(endpoint==='worksite'){if(!host.openWorksite)return response(503,{ok:false,error:'工地入口暂不可用'});try{await host.openWorksite(id);return response(200,{ok:true,value:{opened:true}});}catch(error){return response(503,{ok:false,error:error instanceof Error?error.message:'工地窗口暂不可用'});}}
       if(endpoint==='attachment'){
         if(!host.attachments)return response(503,{ok:false,error:'图片服务尚未接入'});
         const type=request.headers.get('content-type')||'',requestId=request.headers.get('x-request-id')||'';

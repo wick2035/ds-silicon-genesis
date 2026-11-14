@@ -11,8 +11,10 @@ export function createHelperChannel(humanity:CanonicalHumanityAdapter, desktop:T
   commands:ReturnType<typeof createDesktopCommandChannel>, observeSpace?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, tokens?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, disturb?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, semantic?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, worksite?:(petId:string,action:string)=>Promise<unknown>, idle?:{update(seconds:number,observedAt:number):void;clear():void}) {
   const allowed=new Set(petIds), observers=new Map<string,HelperObserver>();
   const epochs=new Map<string,string>();
+  const openRequests=new Map<string,{id:string;promise:Promise<void>;resolve:()=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>();
   let epoch='', pending=Promise.resolve();
   const disconnected=(old:string) => {
+    for(const pending of openRequests.values()){clearTimeout(pending.timer);pending.reject(Error('桌面角色已断开，请重新启动后再试'));}openRequests.clear();
     idle?.clear();
     for(const id of allowed) commands.cancelPet(id);
     for(const observer of observers.values())observer.close(sourceCapability);
@@ -26,9 +28,20 @@ export function createHelperChannel(humanity:CanonicalHumanityAdapter, desktop:T
     return pending;
   };
   return {
-    async worksite(sourceEpoch:string,input:{petId:string;action:string}) {
+    requestWorksiteOpen(petId:string):Promise<void> {
+      if(!epoch||!allowed.has(petId))return Promise.reject(Error('桌面角色尚未连接，请重新启动后再试'));
+      const existing=openRequests.get(petId);if(existing)return existing.promise;
+      let resolve!:()=>void,reject!:(error:Error)=>void;
+      const promise=new Promise<void>((yes,no)=>{resolve=yes;reject=no;});
+      const timer=setTimeout(()=>{openRequests.delete(petId);reject(Error('工地窗口没有响应，请稍后重试'));},8000);
+      openRequests.set(petId,{id:randomUUID(),promise,resolve,reject,timer});return promise;
+    },
+    async worksite(sourceEpoch:string,input:{petId:string;action:string;requestId?:string}) {
       if(sourceEpoch!==epoch || !allowed.has(input?.petId) || !worksite || typeof input.action!=='string')throw Error('工地通道不可用');
-      return worksite(input.petId,input.action);
+      if(input.action==='open-ack'){const pending=openRequests.get(input.petId);if(pending&&pending.id===input.requestId){openRequests.delete(input.petId);clearTimeout(pending.timer);pending.resolve();}return {ok:true};}
+      const result=await worksite(input.petId,input.action);
+      const pending=openRequests.get(input.petId);
+      return input.action==='snapshot'&&pending?{...(result as object),openRequestId:pending.id}:result;
     },
     opened(next:string) {
       if(!/^[a-f0-9]{32}$/.test(next))throw Error('桌宠通道标识无效');
