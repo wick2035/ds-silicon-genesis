@@ -2,12 +2,12 @@
 setlocal
 cd /d "%~dp0"
 if not exist "runtime\node\node.exe" (
-  echo 缺少随包 Node 运行时。
+  echo Missing bundled Node runtime.
   pause
   exit /b 1
 )
 if not exist "dist\host\main.js" (
-  echo 缺少生产构建，请先运行构建。
+  echo Missing production build. Please build the project first.
   pause
   exit /b 1
 )
