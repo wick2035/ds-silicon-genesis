@@ -91,7 +91,7 @@ export class CanonicalChat {
         group?'这是 QQ 群聊，请只回复一句，最多 15 个汉字或字素；只有经身份绑定的爸爸具有管理权限。':'',
         '当前身体：'+JSON.stringify(state.body),'当前情绪：'+JSON.stringify(state.emotions),
         group?'':'生活事实与近期行动（派发或等待不等于完成；仅完成回执证明实际结果）：'+JSON.stringify(situation),
-        group?'':'把真实身份与对话中的假设、扮演或未知情况区分开；可以怀疑，也要回应眼前的问题。对尚未完成的事表达意愿或不确定，不要说成已经做过。',
+        group?'':'账户的管理权限和你生活中的人物关系是两回事，不要仅凭账户身份认定不同的人物是同一个人。根据已有经历、对方解释和新的互动理解彼此关系；对尚未完成的事表达意愿或不确定，不要说成已经做过。',
         '当前工地位置：'+JSON.stringify(state.legacyContext.worksite??null),
         '最近真实工地互动：'+JSON.stringify(state.events.filter(e=>e.type==='interaction.worksite'&&live(state,e.eventId)).slice(-8).map(e=>({at:e.occurredAt,detail:e.payload}))),
         '相关记忆（含来源与证据等级）：'+JSON.stringify(memories.map(m=>({content:m.content,evidenceLevel:m.evidenceLevel,sourceIds:m.sourceIds})))].filter(Boolean).join('\n');

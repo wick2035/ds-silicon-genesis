@@ -47,7 +47,7 @@ export function hasCognitiveDemand(state: LifeState): boolean {
   return state.body.hunger >= 60 || state.body.energy <= 30 || state.body.pain >= 50 || state.commitments.some(c => c.status === 'open') || state.goals.some(g => g.status === 'active' && (g.urgency >= 50 || g.priority >= 70));
 }
 export class Cognition {
-  constructor(private readonly model: CognitiveModel | null, private readonly budget: CognitiveBudget, private readonly retrieval: {forCognition(state:LifeState):Promise<Memory[]>; world(state:LifeState):Promise<NonNullable<CognitiveWorkspace['environment']>>}, private readonly timeoutMs = 15000) {
+  constructor(private readonly model: CognitiveModel | null, private readonly budget: CognitiveBudget, private readonly retrieval: {forCognition(state:LifeState):Promise<Memory[]>; world(state:LifeState):Promise<NonNullable<CognitiveWorkspace['environment']>>}, private readonly timeoutMs = 45000) {
     if (!Number.isFinite(timeoutMs) || timeoutMs < 1) throw new Error('Invalid cognition timeout');
   }
   async propose(state: LifeState, signal: AbortSignal, reload: () => Promise<LifeState>): Promise<CognitiveResult> {

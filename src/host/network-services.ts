@@ -45,14 +45,25 @@ export function createPublicWeb() {
   return {
     async search(input:{query:string;maxResults:number},signal:AbortSignal):Promise<{sources:Source[]}> {
       if(typeof input.query!=='string'||!input.query.trim()||input.query.length>300||!Number.isInteger(input.maxResults)||input.maxResults<1||input.maxResults>10)throw new Error('搜索参数无效');
-      const search=new URL('https://html.duckduckgo.com/html/');search.searchParams.set('q',input.query);
-      const page=await readPublic(search.href,signal);const sources:Source[]=[];
-      const pattern=/<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
-      for(const match of page.body.matchAll(pattern)){
-        try {if(!/class=["'][^"']*result__a/i.test(match[1]))continue;const href=/href=["']([^"']+)/i.exec(match[1])?.[1];if(!href)continue;let link=new URL(decode(href),page.url);const redirected=link.searchParams.get('uddg');if(redirected)link=new URL(redirected);checkedUrl(link.href);const title=plain(match[2]);if(title&&!sources.some(s=>s.url===link.href))sources.push({url:link.href,title:title.slice(0,200),snippet:''});}catch{/* skip malformed links */}
-        if(sources.length>=input.maxResults)break;
+      const sources:Source[]=[];
+      // Results are only candidates; the executor still reads a public page.
+      // Discard unrelated search titles rather than storing irrelevant pages as knowledge.
+      const ignored=new Set(['什么','意思','如何','怎么','为什么','多少','查询','搜索','了解','介绍','定义']);
+      const terms=[...new Set((input.query.toLowerCase().match(/[a-z0-9]{3,}|[\p{Script=Han}]{2,}/gu)||[]).flatMap(term=>/\p{Script=Han}/u.test(term)?Array.from({length:term.length-1},(_,i)=>term.slice(i,i+2)).filter(t=>!ignored.has(t)):[term]))];
+      for(const provider of ['so','duckduckgo','bing'] as const){
+        if(signal.aborted)throw new Error('请求已取消');
+        try {
+          const search=new URL(provider==='so'?'https://www.so.com/s':provider==='duckduckgo'?'https://html.duckduckgo.com/html/':'https://cn.bing.com/search');search.searchParams.set('q',input.query);
+          const page=await readPublic(search.href,signal);
+          const pattern=provider==='so'?/<h3\b[^>]*class=["'][^"']*\bres-title\b[^"']*["'][^>]*>\s*<a\b([^>]*)>([\s\S]*?)<\/a>/gi:provider==='duckduckgo'?/<a\b([^>]*)>([\s\S]*?)<\/a>/gi:/<li\b[^>]*class=["'][^"']*\bb_algo\b[^"']*["'][^>]*>[\s\S]*?<h2[^>]*>\s*<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+          for(const match of page.body.matchAll(pattern)){
+            try {if(provider==='duckduckgo'&&!/class=["'][^"']*result__a/i.test(match[1]))continue;const href=(provider==='so'?/data-mdurl=["']([^"']+)/i.exec(match[1])?.[1]:undefined)??/href=["']([^"']+)/i.exec(match[1])?.[1];if(!href)continue;let link=new URL(decode(href),page.url);const redirected=link.searchParams.get('uddg');if(redirected)link=new URL(redirected);checkedUrl(link.href);const title=plain(match[2]);if(title&&(!terms.length||terms.some(t=>title.toLowerCase().includes(t)))&&!sources.some(s=>s.url===link.href))sources.push({url:link.href,title:title.slice(0,200),snippet:''});}catch{/* skip malformed links */}
+            if(sources.length>=input.maxResults)break;
+          }
+          if(sources.length)return {sources};
+        } catch {if(signal.aborted)throw new Error('请求已取消');}
       }
-      if(!sources.length)throw new Error('搜索服务没有返回可读取的结果');return {sources};
+      throw new Error('搜索服务没有返回可读取的结果');
     },
     async fetch(input:{url:string;maxChars:number},signal:AbortSignal):Promise<{url:string;content:string;untrusted:true}> {
       if(!Number.isInteger(input.maxChars)||input.maxChars<1||input.maxChars>10000)throw new Error('读取长度无效');
@@ -86,7 +97,12 @@ export function createExplorationExecutor(web:ReturnType<typeof createPublicWeb>
       const subtitle=await bili.call('bili_subtitle',{bvid:id},signal);let value:any=subtitle;if(typeof value==='string'){try{value=JSON.parse(value);}catch{value={text:value};}}
       if(value?.error||value?.ok===false||typeof value?.text!=='string'||!value.text.trim()||/无字幕|没有字幕|未登录|登录失效/.test(value.text))throw new Error('视频字幕不可用，可能需要登录');
       documentUrl=`https://www.bilibili.com/video/${id}`;content=value.text.slice(0,4000);
-    } else {const source=p.kind==='fetch'&&typeof p.url==='string'?p.url:(await web.search({query:p.query,maxResults:2},signal)).sources[0].url;const page=await web.fetch({url:source,maxChars:4000},signal);documentUrl=page.url;content=page.content;}
+    } else {
+      const sources=p.kind==='fetch'&&typeof p.url==='string'?[p.url]:(await web.search({query:p.query,maxResults:5},signal)).sources.map(source=>source.url);
+      let page:{url:string;content:string}|undefined;
+      for(const url of sources){try{const candidate=await web.fetch({url,maxChars:4000},signal);if((p.kind!=='fetch' && candidate.content.trim().length<100) || /(?:^|\s)(?:404|访问的地址不存在|页面不存在)(?:\s|$)/u.test(candidate.content))continue;page ??=candidate;if(/是指|指的是|定义为/u.test(candidate.content)){page=candidate;break;}}catch{if(signal.aborted)throw new Error('探索已取消');}}
+      if(!page)throw new Error('没有可读取的搜索结果');documentUrl=page.url;content=page.content;
+    }
     if(signal.aborted)throw new Error('探索已取消');
     return {status:'completed',evidence:{actionId:intent.id,kind:'learning.observe',confirmed:true,documentUrl,content,untrusted:true,query:p.query,...(typeof p.followUpQuestion==='string' && p.followUpQuestion.trim() && p.followUpQuestion.length<=200?{followUpQuestion:p.followUpQuestion.trim()}:{})}};
     } catch {return {status:signal.aborted?'cancelled':'failed',evidence:{actionId:intent.id,kind:'learning.observe',reason:signal.aborted?'探索已取消':'资料获取失败'}};}
