@@ -29,11 +29,11 @@ test('her voluntary chat decision resumes one trip and requests the worksite',as
   assert.equal(s.legacy.worksite.requested,true);assert.equal(s.life.events.find(e=>e.eventId===c.workDecisionEvent).payload.choice,'work');
 });
 
-test('a contextual QQ request to enter is understood without an internal marker',async()=>{
+test('an unverified claim of entry is not published as completed',async()=>{
   const f=fixture('那我进去了，爸爸。等会儿记得看我搬完。');const now=new Date().toISOString();
   f.get().life.events.push({eventId:'old-user',petId:'main',type:'conversation.user',source:'qq-c2c',actorId:'dad',occurredAt:now,receivedAt:now,evidenceLevel:'observed',payload:{text:'你先搬砖'}});
-  const reply=await f.chat.turn({requestId:'contextual-entry',petId:'main',channel:'qq-c2c',actorId:'dad',text:'可以 那你自己进去'},new AbortController().signal);
-  assert.match(reply,/我现在就进去/);assert.equal(f.get().legacy.worksite.requested,true);assert.equal(f.get().legacy.labor.contracts[0].workPermit,true);
+  await assert.rejects(f.chat.turn({requestId:'contextual-entry',petId:'main',channel:'qq-c2c',actorId:'dad',text:'可以 那你自己进去'},new AbortController().signal));
+  assert.equal(f.get().legacy.worksite.requested,undefined);assert.equal(f.get().legacy.labor.contracts[0].workPermit,false);
 });
 
 test('an unmarked clear promise to work now starts the existing contract, but a deferred promise does not',async()=>{
@@ -57,9 +57,9 @@ test('the voluntary chat decision enters the page and dispatches a web labor ste
 
 test('refusal and insufficient energy do not create a worksite entry',async()=>{
   for(const [reply,tired] of [['我想休息。',false],['我去搬一趟。\n[愿意去工地]',true]]){
-    const f=fixture(reply,{tired});const result=await f.chat.turn({requestId:'rest-'+tired,petId:'main',channel:'desktop',actorId:'dad',text:'你想去工地吗？'},new AbortController().signal);
+    const f=fixture(reply,{tired});const turn=f.chat.turn({requestId:'rest-'+tired,petId:'main',channel:'desktop',actorId:'dad',text:'你想去工地吗？'},new AbortController().signal);
+    if(tired)await assert.rejects(turn);else await turn;
     assert.equal(f.get().legacy.labor.contracts[0].status,'paused');assert.equal(f.get().legacy.worksite.requested,undefined);
-    if(tired)assert.match(result,/不允许开工/);
   }
 });
 

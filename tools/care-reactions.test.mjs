@@ -65,7 +65,7 @@ test('体力很低不会自动入睡，真正睡着也不会自动唤醒',async(
   assert.equal(writes,0);
 });
 
-test('只有真实提交的吃喝触发一次自然回应，模型失败有可见回退',async()=>{
+test('只有真实提交的吃喝触发回应，模型失败不会编造回应',async()=>{
   const base={petId:'main',humanity:{lastThought:'咕噜，谢谢爸爸'},life:{events:[{eventId:'old'}],invalidSources:{}}};
   const calls=[],shown=[];
   const observe=createCareReactions(base,async(_id,event)=>{calls.push(event);if(event.eventId==='water')throw Error('模型不可用');return '好香呀，爸爸';},text=>shown.push(text));
@@ -76,7 +76,7 @@ test('只有真实提交的吃喝触发一次自然回应，模型失败有可�
   assert.deepEqual(calls.map(x=>x.eventId),['water','feed']);
   assert.match(calls[0].description,/喝了水/);
   assert.match(calls[1].description,/喂了你一口饭/);
-  assert.deepEqual(new Set(shown),new Set(['咕噜……喝到啦，谢谢爸爸。','好香呀，爸爸']));
+  assert.deepEqual(shown,['好香呀，爸爸']);
 });
 
 test('喝水必须播放对应动作，完成回执后才增加水分',async()=>{
@@ -147,11 +147,11 @@ test('照料完成后面板显示她的回应，而不是只显示完成状态',
   assert.equal(result.obj.text,'咕噜，谢谢爸爸。');assert.deepEqual(waits,['care-water:drink-id']);
 });
 
-test('模型返回空内容时照料回应仍可见，且等待者拿到同一句',async()=>{
+test('模型返回空内容时不会发布虚构的照料回应',async()=>{
   const base={petId:'main',humanity:{lastThought:'喝到啦'},life:{events:[],invalidSources:{}}},shown=[];
   const observe=createCareReactions(base,async()=>'',text=>shown.push(text));
   observe({...base,life:{...base.life,events:[{eventId:'care-water:test',type:'social.care',payload:{action:'water'}}]}});
-  assert.equal(await observe.wait('care-water:test'),'咕噜……喝到啦，谢谢爸爸。');assert.deepEqual(shown,['咕噜……喝到啦，谢谢爸爸。']);
+  assert.equal(await observe.wait('care-water:test'),'');assert.deepEqual(shown,[]);
 });
 
 test('照料回应显示期间不会被普通心情气泡盖掉',async()=>{

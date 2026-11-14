@@ -15,8 +15,8 @@ test('reacts once to each new manual transfer and ignores old or automatic event
   assert.deepEqual(published.map(x=>[x[1].action,x[2],x[3]]),[['enter-forced','接到啦。',false],['release','接到啦。',false]]);
 });
 
-test('uses a spoken fallback when the model cannot respond',async()=>{
+test('does not invent speech when the model cannot respond',async()=>{
   const published=[];const observe=createWorksiteReactions(state([]),async()=>{throw Error('model unavailable');},async(...args)=>published.push(args));
   observe(state([event('out','release')]));await flush();await flush();
-  assert.equal(published[0][1].action,'release');assert.equal(published[0][2],'爸爸接我出来啦，谢谢爸爸。');assert.equal(published[0][3],true);
+  assert.deepEqual(published,[]);
 });
