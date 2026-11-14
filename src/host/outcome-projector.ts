@@ -1,3 +1,4 @@
+import {settleSimulatedSpending} from './simulated-spending.js';
 import { rebuildRelationships } from '../kernel/index.js';
 import { actHumanity, advanceHumanity, reactHumanity } from '../../vendor/dsh-pet/src/host/humanity.mjs';
 import type { CanonicalEnvelope } from '../storage/postgres.js';
@@ -31,7 +32,7 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
     services.inventory.push({id,sku:'rice',name:'大白饭',status:'available',price,paid:charge,at});
     return;
   }
-  if(intent.type==='care.feed'){assert(e.played===true && e.itemId==='parent','投喂动画未完成');const result=actHumanity(human,'feed',at);assert(result.ok,'当前不能投喂');draft.humanity=result.state;draft.life.events.push({eventId:'care-feed:'+intent.id,petId:draft.petId,type:'social.care',source:'executor',actorId:'dad',occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'observed',payload:{action:'feed'}});rebuildRelationships(draft.life);return;}
+  if(intent.type==='care.feed'){assert(e.played===true && e.itemId==='parent','投喂动画未完成');const result=actHumanity(human,'feed',at);assert(result.ok,'当前不能投喂');settleSimulatedSpending(draft,'feed',intent.id);draft.humanity=result.state;draft.life.events.push({eventId:'care-feed:'+intent.id,petId:draft.petId,type:'social.care',source:'executor',actorId:'dad',occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'observed',payload:{action:'feed'}});rebuildRelationships(draft.life);return;}
   if (intent.type === 'service.eat-rice') {
     const services = pet.services; const itemId = params.itemId;
     assert(typeof itemId === 'string' && e.itemId === itemId && e.played === true && services && Array.isArray(services.inventory), '吃饭回执无效');

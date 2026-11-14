@@ -1,3 +1,4 @@
+import {checkSimulatedSpending,settleSimulatedSpending} from './simulated-spending.js';
 import { createHash } from 'node:crypto';
 import { redactDadNames } from '../../vendor/pet-plugins/behavior/memory-privacy.mjs';
 import { rebuildRelationships } from '../kernel/index.js';
@@ -34,6 +35,7 @@ export class CanonicalChat {
       const legacy=draft.legacy as Record<string,any>; legacy.chatTurns ||= {};
       const prior=legacy.chatTurns[id];
       if(prior){if(prior.fingerprint!==fingerprint)throw new Error('对话标识冲突'); if(prior.status==='completed'){if(Array.isArray(prior.sources) && prior.sources.some((source:string)=>Object.hasOwn(draft.life.invalidSources,source)))throw new Error('对话来源已失效');return {reply:String(prior.reply)};} throw new Error(prior.status==='running'?'对话正在处理':'对话未完成，请使用新请求标识');}
+      checkSimulatedSpending(draft,'chat');
       for(const attachment of input.attachments??[]) {const event=draft.life.events.find(e=>e.eventId===attachment.sourceEventId);if(!event||event.type!=='attachment.shared'||(event.payload as any)?.attachmentId!==attachment.id||Object.hasOwn(draft.life.invalidSources,attachment.sourceEventId))throw Error('图片附件来源无效');}
       for(const source of input.sourceEventIds??[]) if(!draft.life.events.some(e=>e.eventId===source)||Object.hasOwn(draft.life.invalidSources,source))throw new Error('对话来源不可用');
       const now=new Date().toISOString(),userId='chat-user:'+id;
@@ -105,6 +107,7 @@ export class CanonicalChat {
         const legacy=draft.legacy as Record<string,any>, turn=legacy.chatTurns?.[id];
         if(!turn||turn.status!=='running'||turn.fingerprint!==fingerprint)throw new Error('对话状态已变化');
         if(sources.some(source=>Object.hasOwn(draft.life.invalidSources,source)||!draft.life.events.some(e=>e.eventId===source)))throw new Error('对话依赖的记忆已变化');
+        settleSimulatedSpending(draft,'chat','chat:'+id);
         const now=new Date().toISOString(), userId='chat-user:'+id, assistantId='chat-assistant:'+id;
         if(!draft.life.events.some(e=>e.eventId===userId) || draft.life.events.some(e=>e.eventId===assistantId))throw Error('对话事件冲突');
         draft.life.events.push({eventId:assistantId,petId:input.petId,type:'conversation.assistant',source:input.channel,occurredAt:now,receivedAt:now,evidenceLevel:'inferred',causationId:userId,payload:{text:output,channel:input.channel,...(typeof groupId==='string'?{groupId}:{}),sourceIds:sources}});

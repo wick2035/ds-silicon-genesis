@@ -1,7 +1,7 @@
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=v=>typeof v==='number'&&Number.isFinite(v)?new Intl.NumberFormat('zh-CN',{maximumFractionDigits:2}).format(v):'暂不可用';
 const date=v=>{const d=new Date(v);return Number.isNaN(d.valueOf())?'时间未知':d.toLocaleString('zh-CN',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});};
-const costLabels={chat:'聊天',whisper:'碎碎念',feed:'喂一口饭',diary:'整理与日记',explore:'一次探索'};
+const costLabels={chat:'聊天',whisper:'碎碎念',feed:'喂一口饭',diary:'日记',explore:'一次探索'};
 const stateLabels={offered:'商量中',working:'工作中',paused:'已暂停',unpaid:'等待结薪',paid:'已结清',declined:'已取消'};
 let current=null,pending=null,busy=false;
 

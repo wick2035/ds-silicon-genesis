@@ -1,3 +1,4 @@
+import {checkSimulatedSpending,settleSimulatedSpending} from './simulated-spending.js';
 import {randomUUID} from 'node:crypto';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 import type {PetGate,UnitOfWork} from '../storage/uow.js';
@@ -19,6 +20,7 @@ export function createDevelopment(store:Reader,gate:PetGate,uow:UnitOfWork,budge
       const events=state.life.events.filter(e=>!used.has(e.eventId)&&!Object.hasOwn(state.life.invalidSources,e.eventId)&&['observed','verified','reported'].includes(e.evidenceLevel)&&!e.type.startsWith('development.')&&e.occurredAt.slice(0,10)<=date).slice(-30);
       if(!events.length)return null;
       const key=kind+':'+date;if(pet.developmentClaims?.[key])return null;
+      if(kind==='diary')checkSimulatedSpending(state,'diary');
       await uow.apply(id,state.version,draft=>{const p=draft.legacy as Record<string,any>;p.developmentClaims||={};if(p.developmentClaims[key])throw Error('整理已领取');p.developmentClaims[key]={status:'running',at:Date.now()};return {};});
       return {key,events:events.map(e=>({id:e.eventId,type:e.type,at:e.occurredAt,text:JSON.stringify(e.payload).slice(0,450)}))};
     });
@@ -31,6 +33,7 @@ export function createDevelopment(store:Reader,gate:PetGate,uow:UnitOfWork,budge
       await gate.run(id,async()=>{const state=await store.loadEnvelope(id);if(!state||signal.aborted||gate.signal.aborted)throw Error('整理已取消');
         await uow.apply(id,state.version,draft=>{const p=draft.legacy as Record<string,any>,record=p.developmentClaims?.[claim.key];if(!record||record.status!=='running'||(!manual && draft.life.constraints.paused)||data.sources.some((s:string)=>Object.hasOwn(draft.life.invalidSources,s)||!draft.life.events.some(e=>e.eventId===s)))throw Error('整理来源或状态已变化');
           const at=new Date().toISOString(),eventId='development:'+randomUUID(),memoryId='development-memory:'+randomUUID(),sources=[...new Set<string>(data.sources)];
+          if(kind==='diary')settleSimulatedSpending(draft,'diary','diary:'+date);
           if(kind==='diary'){if(p.diaries?.[date]||p.deletedDays?.includes(date))throw Error('日记已变化');p.diaries||={};p.diaries[date]={date,text:data.text.trim(),sources,revision:1,updatedAt:Date.now(),canonicalMemoryId:memoryId};}
           draft.life.events.push({eventId,petId:id,type:'development.'+kind,source:'model',occurredAt:at,receivedAt:at,evidenceLevel:'inferred',payload:{sourceIds:sources}});
           draft.life.memories.push({id:memoryId,kind:kind==='diary'?'autobiographical':'semantic',content:data.text.trim(),sourceIds:[eventId,...sources],evidenceLevel:'inferred',valid:true,createdAt:at});
