@@ -44,7 +44,7 @@ export function createLegacyServiceActions(store:{loadEnvelope(id:string):Promis
       state=await store.loadEnvelope(petId);action=state?.life.actions.find(a=>a.id===id);
       const status=action?.status,reason=state?.life.receipts.find(r=>r.actionId===id)?.details?.reason;
       const careReason=kind.startsWith('care.')&&typeof reason==='string'&&['睡眠、恢复、学习或爸爸正在互动','爸爸的互动或新动作打断了这次尝试','动作被其他互动打断','动作素材播放超时','照料动画素材不可用'].includes(reason)?reason:undefined;
-      return {key,command,ok:status==='COMPLETED'||status==='PENDING'||status==='DISPATCHED',status:status==='COMPLETED'?'done':status==='PENDING'||status==='DISPATCHED'?'pending':String(status||'unknown').toLowerCase(),message:status==='COMPLETED'?(kind==='service.buy-rice'?'已得到一碗饭':kind==='service.eat-rice'?'已确认吃完':kind.startsWith('care.')?'照料已完成':kind==='body.sleep'?'已经休息':kind==='body.wake'?'已经醒来':'已读取真实资料，来源可在记忆中查看'):status==='PENDING'||status==='DISPATCHED'?'行动正在等待桌宠完成':status==='UNKNOWN'?'结果待确认，不能重复执行':careReason||'行动未完成'};
+      return {key,command,actionId:id,ok:status==='COMPLETED'||status==='PENDING'||status==='DISPATCHED',status:status==='COMPLETED'?'done':status==='PENDING'||status==='DISPATCHED'?'pending':String(status||'unknown').toLowerCase(),message:status==='COMPLETED'?(kind==='service.buy-rice'?'已得到一碗饭':kind==='service.eat-rice'?'已确认吃完':kind.startsWith('care.')?'照料已完成':kind==='body.sleep'?'已经休息':kind==='body.wake'?'已经醒来':'已读取真实资料，来源可在记忆中查看'):status==='PENDING'||status==='DISPATCHED'?'行动正在等待桌宠完成':status==='UNKNOWN'?'结果待确认，不能重复执行':careReason||'行动未完成'};
     });
   };
 }

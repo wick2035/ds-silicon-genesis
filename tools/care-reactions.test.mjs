@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHumanity,describeHumanity,advanceHumanity} from '../vendor/dsh-pet/src/host/humanity.mjs';
-import {createCareReactions} from '../dist/host/care-reactions.js';
+import {createCareReactions,careReactionLeaf} from '../dist/host/care-reactions.js';
+import {createLegacyRequestAdapter} from '../dist/host/legacy-request-adapter.js';
 import {createDeterministicLife} from '../dist/host/deterministic-life.js';
 import {createDesktopCommandChannel} from '../dist/host/desktop-command-channel.js';
 import {projectOutcome} from '../dist/host/outcome-projector.js';
@@ -125,14 +126,40 @@ test('被打断的照料保留桌面回执中的可解释原因',async()=>{
   const result=await pending;assert.equal(result.status,'cancelled');assert.equal(result.evidence.reason,'动作被其他互动打断');channel.close();
 });
 
-test('照料回应走桌面可见气泡，不触发随机说话动画',async()=>{
+test('照料回应走桌面可见气泡，并按语音设置决定是否朗读',async()=>{
   const source=await readFile(new URL('../vendor/dsh-pet/runtime/electron-helper/events.js',import.meta.url),'utf8');
   const start=source.indexOf('function applySayLeaf('),end=source.indexOf('\n/** 工作状态叶子',start);
   assert.ok(start>=0&&end>start);
-  const shown=[],sprite={pet:{id:'main'},showInnerThought:text=>shown.push(['care',text]),showWhisper:()=>shown.push(['random'])};
-  const context={sprites:[sprite],S:{readSay:leaf=>({kind:'say',text:leaf.data.text}),playSayVoice:()=>{}}};
-  vm.runInNewContext(source.slice(start,end)+'\napplySayLeaf("main",{data:{text:"喝到了",careReaction:true}});',context);
-  assert.deepEqual(shown,[['care','喝到了']]);
+  const shown=[],sprite={pet:{id:'main'},showCareReaction:(text,duration)=>shown.push(['care',text,duration]),showWhisper:()=>shown.push(['random'])};
+  const data=careReactionLeaf('喝到了',true),context={sprites:[sprite],S:{readSay:leaf=>({kind:'say',...leaf.data}),playSayVoice:said=>shown.push(['voice',said.voiceTo])}};
+  context.leaf={data};vm.runInNewContext(source.slice(start,end)+'\napplySayLeaf("main",leaf);',context);
+  assert.deepEqual(shown,[['care','喝到了',12000],['voice','desktop']]);
+  assert.equal(careReactionLeaf('喝到了',false).voiceTo,undefined);
+});
+
+test('照料完成后面板显示她的回应，而不是只显示完成状态',async()=>{
+  const gate={signal:new AbortController().signal,run:async(_id,fn)=>fn()};
+  const waits=[];
+  const adapter=createLegacyRequestAdapter({store:{loadEnvelope:async()=>null},gate,domain:{},humanity:{snapshot:async()=>({lastThought:'备用回应'})},
+    resolvePet:()=>({petId:'main',name:'大肥鱼'}),service:async()=>({ok:true,status:'done',actionId:'drink-id',message:'照料已完成'}),
+    waitCareResponse:async id=>{waits.push(id);return '咕噜，谢谢爸爸。';}});
+  const result=await adapter('http://localhost/humanity/care?pet=main','POST',JSON.stringify({action:'water'}));
+  assert.equal(result.obj.text,'咕噜，谢谢爸爸。');assert.deepEqual(waits,['care-water:drink-id']);
+});
+
+test('模型返回空内容时照料回应仍可见，且等待者拿到同一句',async()=>{
+  const base={petId:'main',humanity:{lastThought:'喝到啦'},life:{events:[],invalidSources:{}}},shown=[];
+  const observe=createCareReactions(base,async()=>'',text=>shown.push(text));
+  observe({...base,life:{...base.life,events:[{eventId:'care-water:test',type:'social.care',payload:{action:'water'}}]}});
+  assert.equal(await observe.wait('care-water:test'),'喝到啦');assert.deepEqual(shown,['喝到啦']);
+});
+
+test('照料回应显示期间不会被普通心情气泡盖掉',async()=>{
+  const source=await readFile(new URL('../vendor/dsh-pet/runtime/electron-helper/sprite/desktop-body.js',import.meta.url),'utf8');
+  const shown=[];class Sprite{showWhisper(text){shown.push(text);}playIdle(){}switchTo(){}dispose(){}}
+  vm.runInNewContext(source,{PetSprite:Sprite});const sprite=new Sprite();
+  sprite.showCareReaction('喝到啦，谢谢爸爸。',12000);sprite.showInnerThought('其他心情');
+  assert.deepEqual(shown,['喝到啦，谢谢爸爸。']);
 });
 
 test('喝水请求经过排队、桌面播放和可信回执后才落账',async()=>{

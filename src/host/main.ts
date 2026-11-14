@@ -1,6 +1,6 @@
 import {createCanonicalTodos,createTodoRoute} from './canonical-todos.js';
 import {createLegacyResponses} from './legacy-responses.js';
-import {createCareReactions} from './care-reactions.js';
+import {createCareReactions,careReactionLeaf} from './care-reactions.js';
 import {projectLegacySnapshot} from './legacy-snapshot.js';
 import {readFile,writeFile,rename,realpath,stat} from 'node:fs/promises';
 import {createRequire} from 'node:module';
@@ -148,7 +148,8 @@ export async function main():Promise<void> {
     const development=createDevelopment(store,lease,unitOfWork,budget,model);
     const responses=createLegacyResponses(store,lease,unitOfWork,budget,model,persona);
     semanticResponse=async(id,requestId,detail)=>{const d=detail as any;const descriptions:Record<string,string>={'drag-start':'爸爸开始拖动我','drag-end':'爸爸松开了我','flight-start':'我开始飞行，尚不知道是否发生碰撞','flight-end':'飞行结束','prop-take':'爸爸拿起我的饭碗','prop-release':'爸爸放下我的饭碗','menu-anim':'爸爸选择了一个动画','go-home':'爸爸选择回家','open-chat':'爸爸打开聊天','open-care':'爸爸打开照料面板','open-todo':'爸爸打开待办','show-balance':'爸爸查看余额'};const description=descriptions[d?.action];if(!description)throw Error('互动类型无效');const event:any=await domain.record(id,requestId,'interaction',description,requestId,{},observerAuthority);if(!event?.id)throw Error('互动来源未保存');const text=await responses(id,'physical',lease.signal,{eventId:`legacy:event:${encodeURIComponent(event.id)}`,description});return {ok:true,reaction:{text}};};
-    const adapter=createLegacyRequestAdapter({store,gate:lease,domain,humanity,service,development,responses,interrupt:id=>dispatcher.interrupt(id),tokenSnapshot:id=>tokens.snapshot(id),providers:{search:true,fetch:true,bili:true,image:true,model:true},view:id=>commandChannel.view(id),resolvePet:url=>{
+    let waitCareResponse:((eventId:string)=>Promise<string|undefined>)|undefined;
+    const adapter=createLegacyRequestAdapter({store,gate:lease,domain,humanity,service,development,responses,waitCareResponse:eventId=>waitCareResponse?.(eventId)??Promise.resolve(undefined),interrupt:id=>dispatcher.interrupt(id),tokenSnapshot:id=>tokens.snapshot(id),providers:{search:true,fetch:true,bili:true,image:true,model:true},view:id=>commandChannel.view(id),resolvePet:url=>{
       const selected=url.searchParams.get('pet')||petId;if(selected!==petId)throw Error('宠物不存在');return {petId,name:'大肥鱼'};}});
     companionManagement=createCompanionManagement(adapter,domain,id=>dispatcher.interrupt(id));
     const cognition=new Cognition(createCognitiveModel(model.llm,()=>model!.agentDefaultModel.currentSelection()),budget,retrieval);
@@ -181,7 +182,8 @@ export async function main():Promise<void> {
       hostReady:(deps,helpers)=>{
         configuredPetIds=()=>{const cfg=helpers.readAllConfig(deps.configPaths),ids=new Set<string>([petId]);if(!cfg||typeof cfg!=='object'||!Object.keys(cfg).length)throw Error('宠物配置不可用');for(const conf of Object.values(cfg) as any[]){if(!Array.isArray(conf?.pets))throw Error('宠物配置结构无效');for(const pet of conf.pets){if(typeof pet?.id!=='string'||!pet.id)throw Error('宠物配置标识无效');ids.add(pet.id);}}return ids;};
         publishWhisper=(text:string,image?:string,surface?:string)=>{const cfg=helpers.readAllConfig(deps.configPaths);const voiceTo=cfg.main?.voiceEnabled===true&&(surface==='web'||surface==='desktop')?surface:undefined;deps.state.writePet(petId,'say',{text,companionWhisper:true,...(image?{image}:{}),...(voiceTo?{voiceTo}:{})});};
-        const reactToCare=createCareReactions(reactionBaseline,(id,event)=>responses(id,'care',lease.signal,event),text=>deps.state.writePet(petId,'say',{text,careReaction:true,anim:false,duration:6500}));
+        const reactToCare=createCareReactions(reactionBaseline,(id,event,signal)=>responses(id,'care',AbortSignal.any([lease.signal,signal]),event),text=>deps.state.writePet(petId,'say',careReactionLeaf(text,helpers.readAllConfig(deps.configPaths).main?.voiceEnabled===true)));
+        waitCareResponse=eventId=>reactToCare.wait(eventId);
         unitOfWork.onCommit(reactToCare);dispatcher.onCommit(reactToCare);
         validateWhisperSurface=(surface?:string)=>{const params=new URLSearchParams({pet:petId,...(surface?{surface}:{})});if(!deps.requirePet(params,()=>helpers.readAllConfig(deps.configPaths),{surface:true}).ok)throw Error('当前显示端不可用');};
         resolveWhisperImage=async(name:string,surface?:string)=>{const key=name.trim();if(!key||key.length>120||/[\/\\:\x00-\x1f]/.test(key)||key==='.'||key==='..')throw Error('表情名称无效');const params=new URLSearchParams({pet:petId,...(surface?{surface}:{})});const who=deps.requirePet(params,()=>helpers.readAllConfig(deps.configPaths),{surface:true});if(!who.ok)throw Error('当前显示端不可用');const memes=who.conf?.memes;if(!memes||!Object.hasOwn(memes,key)||typeof memes[key]!=='string'||!memes[key].trim())throw Error('表情不在当前素材池');for(const dir of deps.memeDirsFor(who.entry)){try{const base=await realpath(dir),file=await realpath(join(dir,key+'.png')),rel=relative(base,file);if(!rel||rel==='..'||rel.startsWith('..'+(process.platform==='win32'?'\\':'/'))||isAbsolute(rel))continue;const info=await stat(file);if(info.isFile())return key;}catch{}}throw Error('表情图片不可用');};

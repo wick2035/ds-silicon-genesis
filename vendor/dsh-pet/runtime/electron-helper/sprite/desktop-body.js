@@ -4,7 +4,8 @@
   const proto=PetSprite.prototype, old={idle:proto.playIdle,switchTo:proto.switchTo,dispose:proto.dispose,whisper:proto.showWhisper};
   // Spoken words live in the serialized chat. The overhead bubble is thought only.
   proto.showWhisper=function(...args){if(this.renderingInnerThought)return old.whisper.apply(this,args);};
-  proto.showInnerThought=function(text){this.renderingInnerThought=true;try{return this.showWhisper(text,undefined,undefined,6500,false);}finally{this.renderingInnerThought=false;}};
+  proto.showInnerThought=function(text){if(Date.now()<(this.careBubbleUntil||0))return;this.renderingInnerThought=true;try{return this.showWhisper(text,undefined,undefined,6500,false);}finally{this.renderingInnerThought=false;}};
+  proto.showCareReaction=function(text,duration=12000){this.careBubbleUntil=Date.now()+duration;this.renderingInnerThought=true;try{return this.showWhisper(text,undefined,undefined,duration,false);}finally{this.renderingInnerThought=false;}};
   proto.playIdle=function(...args){if(this.bodyProtected || this.bodyExecuting || this.phoneUsing)return;if(this.playAffectIdle?.())return;for(const video of [this.videoA,this.videoB])if(video)video.playbackRate=1;return old.idle.apply(this,args);};
   proto.switchTo=function(name,...args){if(this.bodyProtected && name!=='工作状态-垂头叹气冒汗')return;if(this.phoneUsing&&!this.bodyProtected&&name!=='原地小憩沉眠')return;for(const video of [this.videoA,this.videoB])if(video){video.defaultPlaybackRate=this.affectIdleRate||1;video.playbackRate=this.affectIdleRate||1;}return old.switchTo.call(this,name,...args);};
   proto.switchAffectPose=function(name,once,pace){this.affectIdleRate=pace;try{return this.switchTo(name,once);}finally{this.affectIdleRate=null;}};

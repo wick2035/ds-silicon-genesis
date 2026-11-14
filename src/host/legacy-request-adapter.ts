@@ -7,7 +7,7 @@ import {projectLegacySnapshot} from './legacy-snapshot.js';
 
 type JsonResult = {kind:'json';status:number;obj:unknown;headers:Record<string,string>};
 type Reader = {loadEnvelope(petId:string):Promise<CanonicalEnvelope|null>};
-type Options = {store:Reader;gate:PetGate;domain:LegacyDomain;humanity:CanonicalHumanityAdapter;providers?:Record<string,boolean>;view?:(petId:string)=>unknown;service?:(petId:string,input:Record<string,unknown>)=>Promise<unknown>;tokenSnapshot?:(petId:string)=>Promise<unknown>;interrupt?:(petId:string)=>void;responses?:(id:string,kind:'help'|'say'|'sleep-refused',signal:AbortSignal)=>Promise<string>;development?:{task:(id:string,kind:'diary'|'reflection',signal:AbortSignal,manual?:boolean,date?:string)=>Promise<boolean>};
+type Options = {store:Reader;gate:PetGate;domain:LegacyDomain;humanity:CanonicalHumanityAdapter;providers?:Record<string,boolean>;view?:(petId:string)=>unknown;service?:(petId:string,input:Record<string,unknown>)=>Promise<unknown>;waitCareResponse?:(eventId:string)=>Promise<string|undefined>;tokenSnapshot?:(petId:string)=>Promise<unknown>;interrupt?:(petId:string)=>void;responses?:(id:string,kind:'help'|'say'|'sleep-refused',signal:AbortSignal)=>Promise<string>;development?:{task:(id:string,kind:'diary'|'reflection',signal:AbortSignal,manual?:boolean,date?:string)=>Promise<boolean>};
   /** Authenticate and resolve the pet for BOTH HTTP and helper-origin requests. */
   resolvePet:(url:URL)=>Promise<{petId:string;name:string}>|{petId:string;name:string}};
 const json=(obj:unknown,status=200):JsonResult=>({kind:'json',status,obj,headers:{'cache-control':'no-store'}});
@@ -15,7 +15,7 @@ const json=(obj:unknown,status=200):JsonResult=>({kind:'json',status,obj,headers
 /** Replacement for the old synchronous route, not a wrapper around its global
  * singleton. Unmigrated endpoints fail closed. Domain methods commit before they
  * return; external desktop actions can only originate from the canonical outbox. */
-export function createLegacyRequestAdapter({store,gate,domain,humanity,resolvePet,providers,view,service,tokenSnapshot,interrupt,development,responses}:Options) {
+export function createLegacyRequestAdapter({store,gate,domain,humanity,resolvePet,providers,view,service,waitCareResponse,tokenSnapshot,interrupt,development,responses}:Options) {
   return async (rawUrl:string,method:string,body?:string,signal?:AbortSignal):Promise<JsonResult> => {
     try {
       if (signal?.aborted || gate.signal.aborted) throw Error('请求或写入租约已结束');
@@ -52,7 +52,10 @@ export function createLegacyRequestAdapter({store,gate,domain,humanity,resolvePe
       if(path==='humanity/care'&&['feed','water','pet','play','soothe','accompany'].includes(input.action)){
         const commands:Record<string,string>={feed:'/喂',water:'/喝水',pet:'/摸摸',play:'/玩',soothe:'/安慰',accompany:'/陪伴'};
         if(!service)throw Error('照料服务尚未接入');const outcome:any=await service(petId,{key:requestId,command:commands[input.action]});
-        if(!outcome.ok)throw Error(outcome.message||'照料未完成');return json({ok:true,text:outcome.message,pending:outcome.status==='pending',state:await humanity.snapshot(petId)});
+        if(!outcome.ok)throw Error(outcome.message||'照料未完成');
+        const reply=outcome.status==='done'&&typeof outcome.actionId==='string'?await waitCareResponse?.('care-'+input.action+':'+outcome.actionId):undefined;
+        const state=await humanity.snapshot(petId),text=reply||(outcome.status==='done'&&typeof state.lastThought==='string'?state.lastThought:outcome.message);
+        return json({ok:true,text,pending:outcome.status==='pending',state});
       }
       if(path==='humanity/care'&&input.action==='explore'){
         if(!service)throw Error('探索服务尚未接入');const outcome:any=await service(petId,{key:requestId,command:'/手机 想知道鲸鱼为什么会唱歌',careAction:'explore'});
