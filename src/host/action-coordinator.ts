@@ -15,6 +15,7 @@ export class ActionCoordinator {
       const matches = draft.life.actions.filter(action => action.id === actionId);
       if (matches.length !== 1 || matches[0].status !== 'PROPOSED') throw new Error('行动不处于可排队状态');
       const action = matches[0];
+      if((draft.legacy as Record<string,any>).worksite?.inside && ['service.eat-rice','care.feed','body.sleep','body.wake','token.pickup'].includes(action.actionType))throw Error('她在网页工地里，请先接她回桌面');
       validateActionParameters(action.actionType,action.parameters);
       const state: LifeState = {...structuredClone(draft.life), petId, version:draft.version, ...this.body(draft)};
       const proposal={...action, expectedStateVersion:draft.version};

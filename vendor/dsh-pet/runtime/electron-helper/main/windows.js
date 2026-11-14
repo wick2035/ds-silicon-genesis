@@ -245,12 +245,12 @@ function createWindows({
     win.on('show', () => keepOffTaskbar(win));
     win.once('ready-to-show', () => {
       keepOffTaskbar(win);
-      win.showInactive();
+      if (!process.env.SILICON_HELPER_EPOCH) win.showInactive();
     });
     // 兜底显示：paintWhenInitiallyHidden:false 时可能不产出首帧，ready-to-show 永不触发
     win.webContents.once('did-finish-load', () => {
       setTimeout(() => {
-        if (!win.isDestroyed() && !win.isVisible()) win.showInactive();
+        if (!process.env.SILICON_HELPER_EPOCH && !win.isDestroyed() && !win.isVisible()) win.showInactive();
       }, 400);
     });
     const stopPointerFallback = startPointerFallback(win);

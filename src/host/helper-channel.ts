@@ -8,7 +8,7 @@ import type {createDesktopCommandChannel} from './desktop-command-channel.js';
  * to HTTP handlers. Observations travel on the spawned child's stdout bridge. */
 export function createHelperChannel(humanity:CanonicalHumanityAdapter, desktop:TrustedDesktopBridge,
   petIds:readonly string[], observerAuthority:object, sourceCapability:object,
-  commands:ReturnType<typeof createDesktopCommandChannel>, observeSpace?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, tokens?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, disturb?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, semantic?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>) {
+  commands:ReturnType<typeof createDesktopCommandChannel>, observeSpace?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, tokens?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, disturb?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, semantic?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, worksite?:(petId:string,action:string)=>Promise<unknown>) {
   const allowed=new Set(petIds), observers=new Map<string,HelperObserver>();
   const epochs=new Map<string,string>();
   let epoch='', pending=Promise.resolve();
@@ -25,6 +25,10 @@ export function createHelperChannel(humanity:CanonicalHumanityAdapter, desktop:T
     return pending;
   };
   return {
+    async worksite(sourceEpoch:string,input:{petId:string;action:string}) {
+      if(sourceEpoch!==epoch || !allowed.has(input?.petId) || !worksite || typeof input.action!=='string')throw Error('工地通道不可用');
+      return worksite(input.petId,input.action);
+    },
     opened(next:string) {
       if(!/^[a-f0-9]{32}$/.test(next))throw Error('桌宠通道标识无效');
       if(epoch)void disconnected(epoch).catch(()=>{});

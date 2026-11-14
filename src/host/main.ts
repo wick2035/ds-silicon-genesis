@@ -20,6 +20,7 @@ import {LegacyDomain} from './legacy-domain.js';
 import {createLegacyRequestAdapter} from './legacy-request-adapter.js';
 import {createDesktopCommandChannel} from './desktop-command-channel.js';
 import {createHelperChannel} from './helper-channel.js';
+import {createWorksite} from './worksite.js';
 import {createDomainExecutors} from './domain-executors.js';
 import {CanonicalActionLifecycle} from './action-lifecycle.js';
 import {ActionCoordinator} from './action-coordinator.js';
@@ -87,12 +88,14 @@ export async function main():Promise<void> {
     const domain=new LegacyDomain(store,unitOfWork,lease,observerAuthority);
     const tokens=createHelperTokens(store,domain,observerAuthority);
     const commandChannel=createDesktopCommandChannel(store,helperAuthority);
+    const worksite=createWorksite(store,lease,unitOfWork,id=>commandChannel.view(id),id=>commandChannel.cancelPet(id));
     let semanticResponse:((id:string,requestId:string,detail:unknown)=>Promise<unknown>)|undefined;
     const helper=createHelperChannel(humanity,commandChannel.bridge,[petId],observerAuthority,helperAuthority,commandChannel,
       (id,requestId,detail)=>domain.observeSpace(id,requestId,detail,observerAuthority),
       (id,requestId,detail)=>tokens.handle(id,requestId,detail),
       async(id,requestId,detail)=>{const d=detail as any;if(!d||typeof d.id!=='string'||typeof d.key!=='string'||![d.fromX,d.toX].every((n:unknown)=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=1))throw Error('搬砖拖动观察无效');await domain.laborAction(id,requestId,{action:'disturb',id:d.id,key:d.key,surface:'desktop',fromX:d.fromX,toX:d.toX},observerAuthority);const state=await store.loadEnvelope(id);if(!state)throw Error('状态不可用');return projectLegacySnapshot(state).labor;},
-      (id,requestId,detail)=>{if(!semanticResponse)throw Error('互动服务尚未就绪');return semanticResponse(id,requestId,detail);});
+      (id,requestId,detail)=>{if(!semanticResponse)throw Error('互动服务尚未就绪');return semanticResponse(id,requestId,detail);},
+      (id,action)=>action==='snapshot'?worksite.snapshot(id):worksite.act(id,action as Parameters<typeof worksite.act>[1]));
     bili=createBiliReader(root);
     const executors=new Map(createDomainExecutors(commandChannel.bridge));
     executors.set('learning.observe',createExplorationExecutor(createPublicWeb(),bili));

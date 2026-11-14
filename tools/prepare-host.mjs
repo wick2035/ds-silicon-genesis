@@ -42,6 +42,11 @@ replaceOnce('const httpRoute = createHttpRoute(deps);\n\tregisterHttpRoute(ctx, 
 replaceOnce('\tregisterLoops({\n\t\tctx,','\tif (!ctx.siliconRoute) registerLoops({\n\t\tctx,');
 replaceOnce('\tregisterTodoReminders({\n\t\tctx,','\tif (!ctx.siliconRoute) registerTodoReminders({\n\t\tctx,');
 replaceOnce('bridgeHandler: async (req) => {\n\t\t\t\tconst result = await getHandlePetRoute()',`bridgeHandler: async (req) => {
+        if(req.url === "/__silicon/worksite" && req.method === "POST") {
+          try { const result=await ctx.siliconHelper.worksite(siliconEpoch,JSON.parse(req.body||"null"));
+            return {id:req.id,status:200,contentType:"application/json",body:JSON.stringify(result)};
+          } catch(e) {return {id:req.id,status:409,contentType:"application/json",body:JSON.stringify({ok:false,message:String(e?.message||e)})};}
+        }
         if(req.url === "/__silicon/interaction" && req.method === "POST") {
           try {
             if(!ctx.siliconHelper?.interaction) throw Error("未接入互动通道");

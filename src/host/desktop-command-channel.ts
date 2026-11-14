@@ -15,7 +15,7 @@ export function createDesktopCommandChannel(store:Reader,sourceCapability:object
     if(!legacy)throw Error('桌宠状态不可用');
     if(command.kind==='labor.step') {
       const world=legacy.world?.command,p=command.parameters;
-      if(!world || world.id!==p.commandId || world.labor?.id!==p.contractId || !Number.isSafeInteger(world.index) || world.surface!=='desktop')throw Error('桌宠工作命令已变化');
+      if(!world || world.id!==p.commandId || world.labor?.id!==p.contractId || !Number.isSafeInteger(world.index) || !['desktop','web'].includes(world.surface))throw Error('桌宠工作命令已变化');
     } else if(command.kind==='token.pickup') {
       const coin=legacy.tokens?.coins?.find((c:any)=>c.id===command.parameters.coinId && c.status==='floor' && c.surface==='desktop');
       if(!coin || !Number.isFinite(coin.x) || !Number.isFinite(coin.y))throw Error('桌面碎片不可用');
@@ -60,17 +60,17 @@ export function createDesktopCommandChannel(store:Reader,sourceCapability:object
         bridge.accept({petId:c.petId,actionId:c.actionId,kind:c.kind,status:value.status,played:value.played===true,itemId:value.itemId},sourceCapability);
         return {ok:true};
       }
-      if(!c || c.kind!=='labor.step'||value.id!==c.parameters.commandId || value.surface!=='desktop' || !Number.isSafeInteger(value.index) || !['playing','completed','interrupted'].includes(value.status))throw Error('桌宠回执没有对应行动');
+      if(!c || c.kind!=='labor.step'||value.id!==c.parameters.commandId || value.surface!==item?.world?.surface || !Number.isSafeInteger(value.index) || !['playing','completed','interrupted'].includes(value.status))throw Error('桌宠回执没有对应行动');
       const state=await store.loadEnvelope(c.petId), world=(state?.legacy as Record<string,any>|undefined)?.world?.command;
       if(!world || world.id!==value.id || world.index!==value.index)throw Error('桌宠回执版本已变化');
       if(value.status==='playing'){item!.startedAt ??= Date.now();return {ok:true};}
-      const effortSeconds=item!.startedAt===undefined?undefined:Math.max(0,Math.min(30,(Date.now()-item!.startedAt)/1000));
+      const effortSeconds=item!.startedAt===undefined?0:Math.max(0,Math.min(30,(Date.now()-item!.startedAt)/1000));
       clearTimeout(item!.timer);pending.delete(c.petId);
       bridge.accept({petId:c.petId,actionId:c.actionId,kind:'labor.step',status:value.status==='completed'?'completed':'interrupted',
-        played:value.played===true,commandId:value.id,index:value.index,surface:'desktop',x:value.x,...(effortSeconds===undefined?{}:{effortSeconds,intensity:item!.intensity})},sourceCapability);
+        played:value.played===true,commandId:value.id,index:value.index,surface:value.surface,x:value.x,...(effortSeconds===undefined?{}:{effortSeconds,intensity:item!.intensity})},sourceCapability);
       return {ok:true};
     },
-    cancelPet(petId:string){const item=pending.get(petId);if(!item)return;clearTimeout(item.timer);pending.delete(petId);if(item.command.kind==='labor.step' && item.startedAt!==undefined){try{bridge.accept({petId,actionId:item.command.actionId,kind:'labor.step',status:'interrupted',effortSeconds:Math.max(0,Math.min(30,(Date.now()-item.startedAt)/1000)),intensity:item.intensity},sourceCapability);}catch{bridge.interruptPet(petId,sourceCapability);}}else bridge.interruptPet(petId,sourceCapability);},
+    cancelPet(petId:string){const item=pending.get(petId);if(!item)return;clearTimeout(item.timer);pending.delete(petId);if(item.command.kind==='labor.step'){try{bridge.accept({petId,actionId:item.command.actionId,kind:'labor.step',status:'interrupted',effortSeconds:item.startedAt===undefined?0:Math.max(0,Math.min(30,(Date.now()-item.startedAt)/1000)),intensity:item.intensity},sourceCapability);}catch{bridge.interruptPet(petId,sourceCapability);}}else bridge.interruptPet(petId,sourceCapability);},
     close(){for(const item of pending.values())clearTimeout(item.timer);pending.clear();}
   };
 }

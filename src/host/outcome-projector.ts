@@ -57,6 +57,7 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
   if (intent.type === 'labor.step') {
     if(receipt.status==='cancelled') {
       assert(finite(e.effortSeconds) && e.effortSeconds>=0 && e.effortSeconds<=30 && finite(e.intensity) && e.intensity>=1 && e.intensity<=1.7 && human.stats && human.emotions,'体力回执无效');
+      const interrupted=pet.world?.command;if(interrupted?.id===params.commandId&&['queued','running'].includes(interrupted.status)){interrupted.status='interrupted';interrupted.interruptedReason='execution-interrupted';}
       const next=advanceHumanity(human,at),effort=e.effortSeconds*e.intensity;next.stats.stamina=clamp(next.stats.stamina-effort*.08);next.stats.energy=clamp(next.stats.energy-effort*.045);next.stats.satiety=clamp(next.stats.satiety-effort*.015);draft.humanity=next;return;
     }
     const cmd = pet.world?.command, contract = pet.labor?.contracts?.find((value: Obj) => value.id === params.contractId);

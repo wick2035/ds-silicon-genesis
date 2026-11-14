@@ -55,6 +55,8 @@ contextBridge.exposeInMainWorld('petBridge', {
   },
   // 右键菜单「打开网站」：去向由主进程按宿主形态决定——桌面应用宿主唤起主窗口，否则用系统浏览器打开站点。
   openHumanity() { ipcRenderer.send('pet:open-humanity'); },
+  openWorksite() { ipcRenderer.send('pet:open-worksite'); },
+  dropInWorksite() { return ipcRenderer.invoke('pet:drop-worksite'); },
   openDshSite(url) {
     ipcRenderer.send('pet:open-site', { url });
   },

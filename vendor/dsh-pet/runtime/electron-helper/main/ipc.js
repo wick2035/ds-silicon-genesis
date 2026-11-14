@@ -1,5 +1,5 @@
 'use strict';
-const { BrowserWindow, desktopCapturer, screen } = require('electron');
+const { app, BrowserWindow, desktopCapturer, screen } = require('electron');
 const { decideWindowIgnore } = require('../pointer-target.js');
 /**
  * 渲染端到主进程的 ipc：窗口跟随、飞行状态、碰撞转发、穿透翻转、输入租约与菜单首项（打开软件 / 打开 AI 设置）。
@@ -18,6 +18,7 @@ const { decideWindowIgnore } = require('../pointer-target.js');
  * @param deps.petRoute - 宠物路由前缀。
  */
 function registerIpc({ ipcMain, petWindows, shell, openTarget, petRoute, hostRequest }) {
+  require('./worksite.js').register({ipcMain,petWindows,hostRequest,BrowserWindow,screen,app});
   const epoch = process.env.SILICON_HELPER_EPOCH || '';
   const restraint = new Map();
   ipcMain.handle('pet:interaction', async(event,input) => {

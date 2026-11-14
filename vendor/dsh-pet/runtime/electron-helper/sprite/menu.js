@@ -31,6 +31,7 @@ Object.assign(PetSprite.prototype, {
       },
       // 「查看余额」无条件显示：关了 balanceEnabled 的宠物也能点，手动请求不受开关限制，点了一定给答复。
       { label: '身心小记', action: 'humanity' },
+      { label: '打开搬砖工地', action: 'worksite' },
       { label: '查看余额', action: 'show-balance' },
       // 「待办事项」是待办面板的唯一入口（单击宠物不再弹面板），排在余额之后。
       { label: '待办事项', action: 'todo', hint: S.TODO_HOTKEY_HINT },
@@ -93,6 +94,7 @@ Object.assign(PetSprite.prototype, {
     this.closeMenu();
     if (!leaf || typeof leaf !== 'object') return;
     if (leaf.action === 'humanity') { window.petBridge?.openHumanity(); return; }
+    if (leaf.action === 'worksite') { window.petBridge?.openWorksite(); return; }
     // 睡觉：打扰类动作在点击这一刻就拒绝——弹一句台词，什么都不执行。持锁时让路（锁=控制权交给第三方）。
     // 对话弹窗、待办面板、点播动画都是渲染端行为，宿主闸门拦不到；两端用同一份放行判定。
     if (this.sleeping && !this.frozen && !fromHost && !S.isSleepAllowedAction(leaf.action)) {
