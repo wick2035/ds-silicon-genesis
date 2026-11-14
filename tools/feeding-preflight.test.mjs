@@ -17,7 +17,7 @@ test('零饱腹时休息或冷却会在投喂动作前明确提示', async () =>
     {dispatch:async()=>{throw Error('不能播放');}},
   );
   const request={key:'feed-test-123',command:'/喂'};
-  await assert.rejects(service('main',request),/正在休息，请先叫醒/);
+  await assert.rejects(service('main',request),/正在休息，请等休息结束/);
   human.sleeping=false;
   human.awakeUntil=now+60000;
   human.cooldowns.feed=now+60000;
