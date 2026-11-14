@@ -100,7 +100,9 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
     assert(typeof e.content === 'string' && e.content.trim().length > 0 && e.content.length <= 4000 && typeof e.documentUrl === 'string' && /^https?:\/\//i.test(e.documentUrl), '学习结果缺少真实资料');
     const id = `knowledge:${intent.id}`, sourceId = sourceEventId;
     assert(!draft.life.memories.some(m => m.id === id), '学习结果已记录');
-    draft.life.memories.push({id,kind:'semantic',content:'外部资料（未经验证，来源：' + e.documentUrl + '）：' + e.content,sourceIds:[sourceId],evidenceLevel:'observed',valid:true,createdAt:occurredAt});
+    const action=draft.life.actions.find(item=>item.id===intent.id);
+    const sources=[...new Set([sourceId,...(action?.sourceIds??[])])];
+    draft.life.memories.push({id,kind:'semantic',content:'探索问题：'+String(params.query).slice(0,300)+'\n外部资料（未经验证，来源：' + e.documentUrl + '）：' + e.content,sourceIds:sources,evidenceLevel:'observed',valid:true,createdAt:occurredAt});
     if(typeof params.wishId==='string') {
       const wish=pet.wishes?.find((w:Obj)=>w.id===params.wishId);
       assert(wish && wish.status==='pending' && wish.topic===params.query,'探索念想已变化');

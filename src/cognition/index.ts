@@ -66,7 +66,11 @@ export class Cognition {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const snapshot = workspace(state);
-      snapshot.recentEvents = state.events.filter(e=>!Object.hasOwn(state.invalidSources,e.eventId)).slice(-12).map(e=>({eventId:e.eventId,type:e.type,occurredAt:e.occurredAt,evidenceLevel:e.evidenceLevel,payload:JSON.stringify(e.payload)?.slice(0,500) ?? ''}));
+      const visible=state.events.filter(e=>!Object.hasOwn(state.invalidSources,e.eventId));
+      // Financial bookkeeping and scheduler events must not crowd the actual
+      // conversation out of the next autonomous decision.
+      const selected=new Set([...visible.filter(e=>['conversation.user','conversation.assistant'].includes(e.type)).slice(-10),...visible.filter(e=>!['conversation.user','conversation.assistant'].includes(e.type)).slice(-8)]);
+      snapshot.recentEvents = visible.filter(e=>selected.has(e)).map(e=>({eventId:e.eventId,type:e.type,occurredAt:e.occurredAt,evidenceLevel:e.evidenceLevel,payload:JSON.stringify(e.payload)?.slice(0,700) ?? ''}));
       snapshot.relevantMemories = await this.retrieval.forCognition(state);
       snapshot.environment = await this.retrieval.world(state);
       const evaluated = await contextGraph.invoke({ state, snapshot, observation: [], recall: [], appraisal: [], motivations: [], rankedGoals: [] });

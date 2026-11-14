@@ -26,7 +26,8 @@ export class CanonicalMemoryRetrieval {
     return {space,inventory,images,capabilities:state.constraints.capabilities.filter(c=>c.enabled&&c.name!=='care.feed'),recentResults:state.receipts.slice(-10).map(r=>({actionId:r.actionId,status:r.status,occurredAt:r.occurredAt}))};
   }
   async forCognition(state:LifeState):Promise<Memory[]> {
-    const query=[...state.goals.filter(g=>g.status==='active').map(g=>g.title),...state.events.slice(-8).map(e=>{const p=e.payload as Record<string,unknown>;return typeof p?.text==='string'?p.text:'';})].join(' ').slice(0,500);
+    const conversations=state.events.filter(e=>e.type==='conversation.user'&&!Object.hasOwn(state.invalidSources,e.eventId)).slice(-3);
+    const query=[...conversations.reverse().map(e=>{const p=e.payload as Record<string,unknown>;return typeof p?.text==='string'?p.text:'';}),...state.goals.filter(g=>g.status==='active').map(g=>g.title)].join(' ').slice(0,500);
     const matches=await this.search(state.petId,query,12), recent=state.memories.filter(m=>m.valid&&m.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id))).slice(-6);
     const unique=new Map([...matches,...recent].map(m=>[m.id,m]));let remaining=9000;
     return [...unique.values()].filter(m=>{if(m.content.length>remaining)return false;remaining-=m.content.length;return true;});
