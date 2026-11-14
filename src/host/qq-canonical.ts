@@ -9,6 +9,19 @@ interface Reader { loadEnvelope(petId:string): Promise<CanonicalEnvelope|null> }
 type Obj = Record<string,any>;
 const hash = (s:string) => createHash('sha256').update(s).digest('hex');
 const key = (s:unknown): s is string => typeof s === 'string' && s.length > 0 && s.length <= 200 && !/[\x00-\x1f]/.test(s);
+const relayKey = (eventId:string,part:number) => hash('desktop-relay:'+eventId+':'+part);
+function relayParts(draft:CanonicalEnvelope,eventId:string):string[] {
+  const event=draft.life.events.find(e=>e.eventId===eventId);
+  if(!event || event.source!=='desktop' || !['conversation.user','conversation.assistant'].includes(event.type) || Object.hasOwn(draft.life.invalidSources,eventId))return [];
+  if(event.type==='conversation.assistant' && !draft.life.events.some(e=>e.eventId===event.causationId && e.type==='conversation.user' && e.source==='desktop' && !Object.hasOwn(draft.life.invalidSources,e.eventId)))return [];
+  const text=String((event.payload as Obj)?.text||'').trim(); if(!text)return [];
+  const chars=Array.from(redactDadNames(text)), chunks:string[]=[];
+  for(let i=0;i<chars.length;i+=800)chunks.push(chars.slice(i,i+800).join(''));
+  return chunks.map((chunk,i)=>`【生命空间·${event.type==='conversation.user'?'我':'大肥鱼'}${chunks.length>1?` ${i+1}/${chunks.length}`:''}】${chunk}`);
+}
+function nextReplySeq(draft:CanonicalEnvelope,replyTo:string,scene:string):number {
+  return Math.max(0,...draft.life.actions.filter(a=>a.actionType==='qq.send' && (a.parameters as Obj).replyTo===replyTo && (a.parameters as Obj).scene===scene).map(a=>Number((a.parameters as Obj).replySeq)||1))+1;
+}
 export interface QQIdentity { appId:string; ownerOpenid?:string; groupOpenid?:string; groupOwnerOpenid?:string; groupEnabled:boolean; groupMode:'owner'|'mentions'|'all' }
 export interface QQIncoming { messageId:string; scene:'c2c'|'group'; actorOpenid:string; groupOpenid?:string; text:string; occurredAt:string; mentioned?:boolean }
 
@@ -117,7 +130,8 @@ export class CanonicalQQ {
       if(replyTo && (!source || (source.payload as Obj)?.messageId!==replyTo)) throw new Error('QQ 回复来源不匹配');
       const actionId='qq-send:'+id;
       const content=redactDadNames(text.trim());
-      const proposal:ActionProposal={id:actionId,petId,actionType:'qq.send',parameters:{scene,destination,content,...(replyTo ? {replyTo}: {})},priority:50,interruptPolicy:'noninterruptible',requiredCapabilities:['qq.send'],expectedStateVersion:draft.version,sourceIds:[sourceEventId]};
+      const replySeq=nextReplySeq(draft,replyTo,scene);if(replySeq>5)throw Error('QQ 回复次数已用完');
+      const proposal:ActionProposal={id:actionId,petId,actionType:'qq.send',parameters:{scene,destination,content,replyTo,replySeq},priority:50,interruptPolicy:'noninterruptible',requiredCapabilities:['qq.send'],expectedStateVersion:draft.version,sourceIds:[sourceEventId]};
       const state:LifeState={...structuredClone(draft.life),petId,version:draft.version,...this.body(draft)};
       qq.outbound[id]={at:Date.now(),state:'pending',actionId,fingerprint};
       validateQQReply(draft,state,proposal);
@@ -126,17 +140,57 @@ export class CanonicalQQ {
       return {value:actionId,intents:[{id:actionId,type:'qq.send',payload:{actionId,petId,actionType:'qq.send',parameters:proposal.parameters}}]};
     });
   }
+  /** Start once at the most recent private QQ exchange, allowing missed desktop turns to catch up. */
+  async enableRelay(petId:string):Promise<void> {
+    const current=await this.reader.loadEnvelope(petId);if((current?.legacy as Obj)?.qq?.relay?.startedAt)return;
+    await this.change(petId,draft=>{const qq=(draft.legacy as Obj).qq;if(!qq?.identity?.ownerOpenid)return {value:undefined};
+      const last=draft.life.events.filter(e=>e.source==='qq' && e.type==='social.message' && e.actorId==='dad' && (e.payload as Obj)?.scene==='c2c').at(-1);
+      qq.relay ||= {startedAt:last?.receivedAt||new Date().toISOString()};return {value:undefined};});
+  }
+  /** Queue the next unsent desktop conversation part against a live private reply window. */
+  async enqueueNextRelay(petId:string,authority:object):Promise<string|null> {
+    if(authority!==this.#ingress)throw Error('QQ 通道凭据无效');
+    return this.change(petId,draft=>{
+      const qq=(draft.legacy as Obj).qq, started=Date.parse(qq?.relay?.startedAt||'');
+      if(!Number.isFinite(started)||!key(qq?.identity?.ownerOpenid))return {value:null};
+      const anchor=draft.life.events.filter(e=>e.source==='qq' && e.type==='social.message' && e.actorId==='dad' && (e.payload as Obj)?.scene==='c2c' && !Object.hasOwn(draft.life.invalidSources,e.eventId) && Date.now()-Date.parse(e.occurredAt)<60*60*1000 && Date.now()>=Date.parse(e.occurredAt)-60000).at(-1);
+      if(!anchor)return {value:null};const replyTo=String((anchor.payload as Obj).messageId||'');if(!key(replyTo))return {value:null};
+      const seq=nextReplySeq(draft,replyTo,'c2c');
+      const hasReply=draft.life.actions.some(a=>a.actionType==='qq.send' && (a.parameters as Obj).replyTo===replyTo && !(a.parameters as Obj).relay);
+      if(seq>5 || (seq===5 && !hasReply))return {value:null};
+      for(const event of draft.life.events){
+        if(Date.parse(event.receivedAt)<started)continue;
+        const parts=relayParts(draft,event.eventId);
+        for(let part=0;part<parts.length;part++){
+          const logical=relayKey(event.eventId,part);
+          const attempts=Object.values(qq.outbound as Obj).filter((entry:any)=>entry.relayKey===logical) as Obj[];
+          // Unknown delivery must never be repeated. A known cancellation may
+          // be attempted again only against a different incoming QQ message.
+          if(attempts.some(entry=>!['cancelled','failed'].includes(entry.state)||entry.anchorId===anchor.eventId))continue;
+          const id=hash('desktop-relay-attempt:'+logical+':'+anchor.eventId);
+          const content=parts[part], actionId='qq-send:'+id, scene='c2c',sourceEventId=event.eventId;
+          const fingerprint=hash(JSON.stringify({scene,text:content,sourceEventId,replyTo}));
+          const proposal:ActionProposal={id:actionId,petId,actionType:'qq.send',parameters:{scene,destination:qq.identity.ownerOpenid,content,replyTo,replySeq:seq,relay:{part}},priority:50,interruptPolicy:'noninterruptible',requiredCapabilities:['qq.send'],expectedStateVersion:draft.version,sourceIds:[sourceEventId,anchor.eventId]};
+          qq.outbound[id]={at:Date.now(),state:'pending',actionId,fingerprint,relayKey:logical,anchorId:anchor.eventId};
+          const state:LifeState={...structuredClone(draft.life),petId,version:draft.version,...this.body(draft)};validateQQReply(draft,state,proposal);
+          const at=new Date().toISOString();draft.life.actions.push({...proposal,status:'PENDING',createdAt:at,updatedAt:at});
+          return {value:actionId,intents:[{id:actionId,type:'qq.send',payload:{actionId,petId,actionType:'qq.send',parameters:proposal.parameters}}]};
+        }
+      }
+      return {value:null};
+    });
+  }
 }
 
 /** Host supplies an authenticated transport using retained local credentials;
  * unknown delivery is never retried by this adapter. */
-export interface QQTransport { send(input:{scene:'c2c'|'group';destination:string;content:string;replyTo?:string},signal:AbortSignal):Promise<{messageId:string}> }
+export interface QQTransport { send(input:{scene:'c2c'|'group';destination:string;content:string;replyTo?:string;replySeq?:number},signal:AbortSignal):Promise<{messageId:string}> }
 export function createQQExecutor(transport:QQTransport) {
   return async (petId:string,intent:OutboxIntent,signal:AbortSignal):Promise<ExecutionReceipt>=>{
     const p=intent.payload.parameters as Obj;
     if(signal.aborted || intent.type!=='qq.send'||intent.payload.petId!==petId||intent.payload.actionId!==intent.id || !p || !['c2c','group'].includes(p.scene)||!key(p.destination)||typeof p.content!=='string'||!p.content.trim()||p.content.length>1800) return {status:'unknown',evidence:{reason:'QQ 发送意图无效'}};
     try {
-      const result=await transport.send({scene:p.scene,destination:p.destination,content:p.content,...(typeof p.replyTo==='string'?{replyTo:p.replyTo}:{})},signal);
+      const result=await transport.send({scene:p.scene,destination:p.destination,content:p.content,...(typeof p.replyTo==='string'?{replyTo:p.replyTo}:{}),...(Number.isInteger(p.replySeq)?{replySeq:p.replySeq}:{})},signal);
       if(!result || !key(result.messageId)) return {status:'unknown',evidence:{reason:'QQ 未返回消息回执'}};
       return {status:'completed',evidence:{actionId:intent.id,kind:'qq.send',messageId:result.messageId}};
     } catch { return {status:'unknown',evidence:{reason:'QQ 发送结果不明，必须先对账'}}; }
@@ -156,10 +210,12 @@ export function createQQExecutor(transport:QQTransport) {
  * continue while autonomous behavior is paused. All other validation remains. */
 export function validateQQReply(draft:CanonicalEnvelope,state:LifeState,proposal:ActionProposal):void {
   const p=proposal.parameters as Obj, qq=(draft.legacy as Obj).qq;
-  const source=proposal.sourceIds.length===1 ? draft.life.events.find(e=>e.eventId===proposal.sourceIds[0]) : undefined;
+  const source=draft.life.events.find(e=>e.eventId===proposal.sourceIds[0]);
   const entry=Object.values(qq?.outbound||{}).find((x:any)=>x.actionId===proposal.id) as Obj|undefined;
   const fingerprint=hash(JSON.stringify({scene:p.scene,text:p.content,sourceEventId:proposal.sourceIds[0],replyTo:p.replyTo}));
-  if(proposal.actionType!=='qq.send' || !entry || entry.fingerprint!==fingerprint || !source || source.source!=='qq' || source.evidenceLevel!=='observed' || !['social.message','social.paired'].includes(source.type) || (source.payload as Obj)?.messageId!==p.replyTo || (source.payload as Obj)?.scene!==p.scene) throw Error('QQ 会话回复来源无效');
+  const anchor=p.relay ? draft.life.events.find(e=>e.eventId===proposal.sourceIds[1]):source;
+  const validRelay=!!p.relay && proposal.sourceIds.length===2 && Number.isInteger(p.relay.part) && entry?.relayKey===relayKey(proposal.sourceIds[0],p.relay.part) && entry?.anchorId===anchor?.eventId && relayParts(draft,proposal.sourceIds[0])[p.relay.part]===p.content && p.scene==='c2c' && p.destination===qq?.identity?.ownerOpenid && anchor?.actorId==='dad' && Date.now()-Date.parse(anchor.occurredAt)<60*60*1000;
+  if(proposal.actionType!=='qq.send' || !entry || entry.fingerprint!==fingerprint || !anchor || anchor.source!=='qq' || anchor.evidenceLevel!=='observed' || !['social.message','social.paired'].includes(anchor.type) || (anchor.payload as Obj)?.messageId!==p.replyTo || (anchor.payload as Obj)?.scene!==p.scene || (p.relay?!validRelay:proposal.sourceIds.length!==1) || (p.replySeq!==undefined&&(!Number.isInteger(p.replySeq)||p.replySeq<1||p.replySeq>5))) throw Error('QQ 会话回复来源无效');
   const interactive={...state,constraints:{...state.constraints,paused:false}};
   validateProposal(interactive,proposal);
 }

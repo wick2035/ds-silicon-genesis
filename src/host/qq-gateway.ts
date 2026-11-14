@@ -50,10 +50,10 @@ export class CanonicalQQGateway extends QQPetBridge {
     if(!response.ok) { if(response.status===401)this.expiresAt=0; throw new Error('QQ 平台请求失败'); }
     return response.json();
   }
-  private async sendMessage(input:{scene:'c2c'|'group';destination:string;content:string;replyTo?:string},signal:AbortSignal):Promise<{messageId:string}> {
+  private async sendMessage(input:{scene:'c2c'|'group';destination:string;content:string;replyTo?:string;replySeq?:number},signal:AbortSignal):Promise<{messageId:string}> {
     if(input.scene==='group' && [...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(input.content)].length>15) throw new Error('群回复超过 15 字');
     const route=(input.scene==='group'?'/v2/groups/':'/v2/users/')+encodeURIComponent(input.destination)+'/messages';
-    const result=await this.request(route,{content:input.content,msg_type:0,...(input.replyTo?{msg_id:input.replyTo,msg_seq:1}:{})},signal);
+    const result=await this.request(route,{content:input.content,msg_type:0,...(input.replyTo?{msg_id:input.replyTo,msg_seq:input.replySeq??1}:{})},signal);
     if(typeof result?.id!=='string'||!result.id) throw new Error('QQ 未返回消息回执');
     return {messageId:result.id};
   }

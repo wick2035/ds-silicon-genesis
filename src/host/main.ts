@@ -249,7 +249,20 @@ export async function main():Promise<void> {
       const shared={canonical,ingressAuthority,signal:lease.signal,onTurn:chat.qqTurn.bind(chat),dispatch:(id:string)=>dispatcher.dispatch(id)};
       const takeover=freshQQ ? await prepareFreshQQ({...shared,home:targetHome,petId}) :
         await prepareQQTakeover({...shared,legacyHome:targetHome,stopHook:{stopAndVerify:async()=>await verifyOldQQAbsent(root)?'absent':'unknown'}});
-      if(takeover.status==='ready') {qq=takeover.gateway;executors.set('qq.send',takeover.executor);await qq.start();}
+      if(takeover.status==='ready') {
+        qq=takeover.gateway;executors.set('qq.send',takeover.executor);await qq.start();
+        await canonical.enableRelay(petId);
+        let signature='',running=false,dirty=false,timer:ReturnType<typeof setTimeout>|undefined;
+        const run=async()=>{timer=undefined;if(running){dirty=true;return;}running=true;
+          try {await canonical.enableRelay(petId);do {dirty=false;while(!lease.signal.aborted){const id=await canonical.enqueueNextRelay(petId,ingressAuthority);if(!id)break;await dispatcher.dispatch(id);}}while(dirty&&!lease.signal.aborted);}
+          catch(error){console.error('QQ 消息转发暂未完成：'+(error instanceof Error?error.message:'未知错误'));}
+          finally {running=false;}};
+        const wake=(state:any)=>{if(state.petId!==petId||lease.signal.aborted)return;const events=state.life.events,actions=state.life.actions;const next=events.length+':'+(events.at(-1)?.eventId||'')+':'+actions.length;
+          if(next===signature)return;signature=next;if(running){dirty=true;return;}if(!timer){timer=setTimeout(()=>void run(),100);timer.unref();}};
+        unitOfWork.onCommit(wake);dispatcher.onCommit(wake);
+        lease.signal.addEventListener('abort',()=>{if(timer)clearTimeout(timer);},{once:true});
+        const current=await store.loadEnvelope(petId);if(current)wake(current);
+      }
     }
     let closing=false;
     const close=async()=>{if(closing)return;closing=true;qq?.stop();model?.dispose();bili?.close();tokens.close();commandChannel.cancelPet(petId);commandChannel.close();
