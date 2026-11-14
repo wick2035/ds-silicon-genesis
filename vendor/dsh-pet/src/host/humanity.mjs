@@ -252,7 +252,8 @@ export function actHumanity(input, action, now = Date.now()) {
   if (action === 'water' && s.stats.hydration > 92) return fail('full', '刚喝够水，先放旁边吧');
   if (['play', 'explore'].includes(action) && (s.stats.stamina < 25 || s.stats.energy < 25 || s.stats.pain > 35)) return fail('tired', '它现在需要休息和照料');
   if (['play', 'explore'].includes(action) && injuryPosture(s, now).mobility === 0) return fail('recovering', '还在护着身体，先陪它缓一缓');
-  if (describeHumanity(s, now).resting && !['rest', 'soothe', 'wake'].includes(action)) return fail('resting', '正在休息，先让它睡一会儿');
+  const hungryAndAwake = action === 'feed' && !s.sleeping && s.stats.satiety <= 30;
+  if (describeHumanity(s, now).resting && !hungryAndAwake && !['rest', 'soothe', 'wake'].includes(action)) return fail('resting', s.sleeping && action === 'feed' ? '正在睡觉，请先叫醒再投喂' : '正在休息，先让它歇一会儿');
   const beforeEmotions = { ...s.emotions }, gradual = {};
   for (const [k, v] of Object.entries(spec.stats)) {
     if (v < 0 && ['stamina', 'energy', 'satiety'].includes(k)) s.stats[k] = humanClamp(s.stats[k] + v);

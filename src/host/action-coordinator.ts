@@ -4,6 +4,7 @@ import type { LifeState } from '../kernel/types.js';
 import type { BodyProjection } from '../storage/postgres.js';
 import type { UnitOfWork } from '../storage/uow.js';
 import { validateActionParameters } from './action-parameters.js';
+import {projectActionBody} from './body-projection.js';
 
 /** Converts an already-persisted proposal into an atomic pending intent. */
 export class ActionCoordinator {
@@ -17,7 +18,7 @@ export class ActionCoordinator {
       const action = matches[0];
       if((draft.legacy as Record<string,any>).worksite?.inside && ['service.eat-rice','care.feed','body.sleep','body.wake','token.pickup'].includes(action.actionType))throw Error('她在网页工地里，请先接她回桌面');
       validateActionParameters(action.actionType,action.parameters);
-      const state: LifeState = {...structuredClone(draft.life), petId, version:draft.version, ...this.body(draft)};
+      const state: LifeState = {...structuredClone(draft.life), petId, version:draft.version, ...projectActionBody(draft,this.body(draft),action.actionType)};
       const proposal={...action, expectedStateVersion:draft.version};
       if(action.actionType==='care.feed' && !(draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])throw Error('喂饭须由用户手动发起');
       if((draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])validateManualService(draft,state,proposal);else validateProposal(state,proposal);

@@ -1,4 +1,13 @@
 import type { BodyProjection, CanonicalEnvelope } from '../storage/postgres.js';
+import {actHumanity} from '../../vendor/dsh-pet/src/host/humanity.mjs';
+
+/** Rest is not physical sleep; an awake, hungry pet can accept a meal. */
+export function projectActionBody(envelope: Readonly<CanonicalEnvelope>, projection: ReturnType<BodyProjection>, actionType: string) {
+  const human=envelope.humanity as Record<string,any>;
+  if (projection.body.sleeping && human.sleeping !== true && ['care.feed','service.eat-rice'].includes(actionType) && actHumanity(human,'feed').ok)
+    return {...projection,body:{...projection.body,sleeping:false}};
+  return projection;
+}
 
 /** Pure projection of the last committed body state; never advances time. */
 export const projectBody: BodyProjection = (envelope: Readonly<CanonicalEnvelope>) => {

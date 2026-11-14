@@ -2,6 +2,7 @@ import {completeReceiptGoals} from '../kernel/goal-lifecycle.js';
 import {rebuildOutcomeDevelopment} from '../kernel/outcome-development.js';
 import {validateManualService} from './manual-service-validation.js';
 import { validateQQReply } from './qq-canonical.js';
+import {projectActionBody} from './body-projection.js';
 import { validateProposal } from '../kernel/index.js';
 import { projectOutcome } from './outcome-projector.js';
 import type { ActionReceipt, LifeAction, LifeEvent, LifeState } from '../kernel/types.js';
@@ -82,7 +83,7 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
   prepare(draft: CanonicalEnvelope, intent: OutboxIntent): {allowed: boolean; reason?: string} {
     const action = this.action(draft, intent);
     assert(action.status === 'PENDING', '行动不处于待执行状态');
-    const projection = this.projectBody(draft);
+    const projection = projectActionBody(draft,this.projectBody(draft),action.actionType);
     const state: LifeState = {...structuredClone(draft.life), petId:draft.petId, version:draft.version, ...projection};
     try {
       // A proposal was accepted earlier. Revalidate it against the locked latest
