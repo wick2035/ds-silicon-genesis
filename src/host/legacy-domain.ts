@@ -127,7 +127,14 @@ export class LegacyDomain {
       return result;
     });
   }
-  wallet(petId: string, requestId: string, input: Record<string, unknown>): Promise<unknown> { return this.call(petId,requestId,'wallet',[input]); }
+  wallet(petId: string, requestId: string, input: Record<string, unknown>): Promise<unknown> {
+    return this.mutate(petId,requestId,'wallet',[input],store=>{
+      const wallet=(store.read(petId) as Obj).wallet;
+      if (input.expectedBalance !== undefined && input.expectedBalance !== wallet.balance) throw Error('饭钱余额已变化，请刷新后重试');
+      if (input.expectedFrozen !== undefined && input.expectedFrozen !== wallet.frozen) throw Error('消耗状态已变化，请刷新后重试');
+      return store.wallet(petId,input);
+    });
+  }
   configure(petId: string, requestId: string, input: Record<string, unknown>): Promise<unknown> { return this.call(petId,requestId,'configure',[input]); }
   grant(petId: string, requestId: string, ability: string, action: string): Promise<unknown> { return this.call(petId,requestId,'grant',[ability,action]); }
   configureNetwork(petId: string, requestId: string, enabled: boolean): Promise<unknown> { return this.call(petId,requestId,'configureNetwork',[enabled]); }
@@ -212,6 +219,20 @@ export class LegacyDomain {
       }
       return result;
     });
+  }
+  laborDecision(petId:string,requestId:string,input:{id:string;trips:number;wage:number;choice:'accept'|'bargain'|'decline';counterTrips?:number;counterWage?:number}):Promise<unknown> {
+    return this.mutate(petId,requestId,'labor-decision',input,(store,draft)=>store.update(petId,(pet:Obj)=>{
+      const c=pet.labor?.contracts?.find((item:Obj)=>item.id===input.id && item.status==='offered');
+      if(!c||c.trips!==input.trips||c.wage!==input.wage||c.accepted||c.counter)throw Error('工作约定已变化，请刷新后重试');
+      c.accepted=input.choice==='accept';
+      c.counter=input.choice==='bargain'?{trips:input.counterTrips,wage:input.counterWage}:null;
+      if(input.choice==='decline')c.status='declined';
+      const text=input.choice==='accept'?'她答应了这份工作，等待确认开工。':input.choice==='bargain'?`她提出 ${input.counterTrips} 趟、${input.counterWage} token 的还价。`:'她拒绝了这份工作。';
+      store.eventIn(pet,'labor',text,'labor-decision:'+requestId);
+      const at=new Date(store.clock()).toISOString();
+      draft.life.events.push({eventId:'labor-response:'+requestId,petId,type:'labor.offer.decision',source:'model',occurredAt:at,receivedAt:at,evidenceLevel:'inferred',payload:{contractId:c.id,choice:input.choice,trips:c.trips,wage:c.wage}});
+      return {choice:input.choice};
+    }));
   }
   /** A dropped fragment must be an authenticated observed physical event. */
   dropToken(petId: string, requestId: string, input: Record<string, unknown>, authority: object): Promise<unknown> {

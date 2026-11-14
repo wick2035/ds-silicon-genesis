@@ -14,6 +14,7 @@ export function createLifeRoutes(root: string, api: Handler): Route[] {
     '/life/style.css':['src/ui/style.css','text/css; charset=utf-8'],
     '/life/bridge.js':['src/ui/bridge.js','text/javascript; charset=utf-8'],
     '/life/app.js':['src/ui/app.js','text/javascript; charset=utf-8'],
+    '/life/finance.js':['src/ui/finance.js','text/javascript; charset=utf-8'],
     '/assets/main-character.png':['vendor/dsh-pet/assets/main-character.png','image/png']
   };
   const asset = async(req:IncomingMessage,res:ServerResponse) => {

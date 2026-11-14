@@ -30,6 +30,7 @@ import {createCognitiveModel} from './cognitive-model.js';
 import {CanonicalMemoryRetrieval} from './memory-retrieval.js';
 import {createPublicWeb,createBiliReader,createExplorationExecutor} from './network-services.js';
 import {createLifeApi,createLifeManagement} from './life-api.js';
+import {createFinanceManagement} from './finance-management.js';
 import {CanonicalChat,createChatHttp} from './chat-service.js';
 import {startStandalone} from './standalone.js';
 import {createLegacyServiceActions} from './legacy-service-actions.js';
@@ -103,7 +104,19 @@ export async function main():Promise<void> {
     executors.set('image.observe',createImageObserver(store,budget,model));
     const retrieval=new CanonicalMemoryRetrieval(lease), chat=new CanonicalChat(store,lease,unitOfWork,budget,model,(id,q)=>retrieval.search(id,q),(id,key,input)=>domain.laborAction(id,key,input),(id,input)=>service(id,input));
     let requestShutdown=()=>{};
-    const lifeApi=createLifeApi({authorize:()=>true,petId:()=>petId,getState:id=>kernel.getState(id),shutdown:()=>requestShutdown(),attachments,
+    const decideLaborOffer=async(id:string,requestId:string,contractId:string)=>{
+      const state=await lease.run(id,()=>store.loadEnvelope(id));
+      const contract=(state?.legacy as any)?.labor?.contracts?.find((c:any)=>c.id===contractId&&c.status==='offered');
+      if(!contract)throw Error('工作约定已变化，请刷新');
+      if(contract.accepted||contract.counter)return {alreadyDecided:true};
+      let raw='';
+      try{await budget.runAs(id,'interactive',async()=>{for await(const part of model!.llm.stream({...model!.agentDefaultModel.currentSelection(),system:persona+'\n根据身体状况和工作条件自主决定是否接受、还价或拒绝。只输出 JSON：{"choice":"accept|bargain|decline","trips":整数,"wage":整数}。还价时趟数为1–50，工钱为1–1000000；不假装工作或支付已完成。',messages:[{role:'user',content:JSON.stringify({trips:contract.trips,wage:contract.wage,stats:(state?.humanity as any)?.stats,emotions:(state?.humanity as any)?.emotions})}],signal:lease.signal,maxTokens:150}))if(part.type==='text'&&typeof part.text==='string')raw+=part.text;});}
+      catch{throw Error('她暂时无法回应，请检查模型连接后重试');}
+      let decision:any;try{decision=JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''));}catch{throw Error('她的回应无法确认，请重试');}
+      if(!decision||!['accept','bargain','decline'].includes(decision.choice)||decision.choice==='bargain'&&(!Number.isInteger(decision.trips)||decision.trips<1||decision.trips>50||!Number.isInteger(decision.wage)||decision.wage<1||decision.wage>1000000))throw Error('她的回应无法确认，请重试');
+      return domain.laborDecision(id,'labor-decision:'+createHash('sha256').update(requestId).digest('hex'),{id:contractId,trips:contract.trips,wage:contract.wage,choice:decision.choice,...(decision.choice==='bargain'?{counterTrips:decision.trips,counterWage:decision.wage}:{})});
+    };
+    const lifeApi=createLifeApi({authorize:()=>true,petId:()=>petId,getState:id=>kernel.getState(id),shutdown:()=>requestShutdown(),attachments,finance:createFinanceManagement(store,lease,domain,decideLaborOffer),
       manage:createLifeManagement(store,lease,unitOfWork,projectBody,id=>dispatcher.interrupt(id)),
       searchMemories:(id,q)=>retrieval.search(id,q),links:{play:`/dsh-pet-7340/humanity?pet=${encodeURIComponent(petId)}`}});
     const chatApi=createChatHttp(chat,()=>true,()=>petId);

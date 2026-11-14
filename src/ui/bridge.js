@@ -25,5 +25,7 @@ window.lifeApi = Object.freeze({
   getGrowth: () => request('growth'),
   searchMemories: query => request('memory-search?q='+encodeURIComponent(query)),
   getSettings: () => request('settings'),
+  getFinance: () => request('finance'),
+  updateFinance: input => request('finance', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(input)}),
   manage: command => request('manage', { method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(command) })
 });
