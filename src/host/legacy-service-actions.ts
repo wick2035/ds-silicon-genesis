@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+import {actHumanity} from '../../vendor/dsh-pet/src/host/humanity.mjs';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 import type {PetGate,UnitOfWork,OutboxDispatcher} from '../storage/uow.js';
 import type {ActionCoordinator} from './action-coordinator.js';
@@ -19,6 +20,10 @@ export function createLegacyServiceActions(store:{loadEnvelope(id:string):Promis
       const wish=typeof input.wishId==='string'?(state.legacy as any).wishes?.find((w:any)=>w.id===input.wishId):undefined;
       let action=state.life.actions.find(a=>a.id===id);
       if(action && (action.actionType!==kind || (action.parameters as any).legacyCommand!==command || (action.parameters as any).wishId!==input.wishId))throw Error('服务请求编号冲突');
+      if(kind==='care.feed' && (!action || action.status==='PROPOSED')) {
+        const result=actHumanity(state.humanity,'feed',Date.now());
+        if(!result.ok)throw Error(result.reason==='resting'?'正在休息，请先叫醒后再投喂':result.reason==='cooldown'?'刚投喂过，请稍等一分钟再试':result.message||'当前不能投喂');
+      }
       if(!action){
         if(input.wishId!==undefined && (!wish || wish.status!=='pending' || wish.topic!==phone?.[1].trim() || wish.ability!==input.ability || !['search','fetch','bili','image'].includes(wish.ability)))throw Error('念想或能力已变化');
         const item=kind==='service.eat-rice'?(state.legacy as any).services?.inventory?.find((x:any)=>x.status==='available'):null;
