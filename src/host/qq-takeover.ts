@@ -55,6 +55,34 @@ export async function prepareQQTakeover(options:QQTakeoverOptions):Promise<
   return {status:'ready',petId,gateway,executor:gateway.executor};
 }
 
+/** A separately created bot has its own OpenIDs and receipt namespace. Never
+ * import the old bot's bindings or receipts into it. An existing canonical
+ * identity for another app is rejected by importState. */
+export async function prepareFreshQQ(options:Omit<QQTakeoverOptions,'legacyHome'|'stopHook'> & {home:string;petId:string}):Promise<{
+  status:'ready';petId:string;gateway:CanonicalQQGateway;executor:CanonicalQQGateway['executor'];
+}> {
+  if(options.signal.aborted)throw Error('QQ 接入已取消');
+  const folder=join(options.home,'dsh-pet');
+  const config=await readQQConfig(join(folder,'qq-fresh-config.json'));
+  if(!/^\d+$/.test(config.appId) || typeof config.appSecret!=='string' || !config.appSecret.trim() ||
+    (config.groupMode!==undefined && !['owner','mentions','all'].includes(config.groupMode)) ||
+    (config.petId||'main')!==options.petId || config.ownerOpenid || config.groupOpenid || config.groupOwnerOpenid)
+    throw Error('新 QQ 机器人配置必须重新配对');
+  try {
+    const old=JSON.parse((await readFile(join(folder,'qq-config.json'),'utf8')).replace(/^\uFEFF/,''));
+    if(old?.appId===config.appId)throw Error('旧机器人不能以新机器人模式接入');
+  } catch(error) {if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+  const identity:QQIdentity={appId:config.appId,groupEnabled:config.groupEnabled===true,groupMode:config.groupMode??'owner'};
+  await options.canonical.importState(options.petId,identity,[],[]);
+  const codes:{owner?:{code:string;expiresAt:number};group?:{code:string;expiresAt:number}}={};
+  if(config.pairingCode && Number.isFinite(config.pairingExpiresAt) && config.pairingExpiresAt!>Date.now())codes.owner={code:config.pairingCode,expiresAt:config.pairingExpiresAt!};
+  if(config.groupPairingCode && Number.isFinite(config.groupPairingExpiresAt) && config.groupPairingExpiresAt!>Date.now())codes.group={code:config.groupPairingCode,expiresAt:config.groupPairingExpiresAt!};
+  if(codes.owner || codes.group)await options.canonical.configurePairing(options.petId,codes);
+  if(options.signal.aborted)throw Error('QQ 接入已取消');
+  const gateway=new CanonicalQQGateway({config,canonical:options.canonical,ingressAuthority:options.ingressAuthority,signal:options.signal,onTurn:options.onTurn,dispatch:options.dispatch,onStatus:options.onStatus});
+  return {status:'ready',petId:options.petId,gateway,executor:gateway.executor};
+}
+
 /** Checks only the imported target files. Runtime ownership still requires the
  * independently supplied stop hook and the host's exclusive writer lease. */
 export async function verifyQQCutoverProof(targetHome:string):Promise<boolean> {

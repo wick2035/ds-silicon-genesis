@@ -14,9 +14,11 @@
 
 `tools/database.mjs` 提供新 schema 的导出与恢复；恢复只允许写入空目标。原始备份和新版本导出都是敏感文件，请与程序目录一样保护。数据库本身不包含在此目录，搬迁还需要迁移数据库并更新本地连接配置。
 
-已保存的 `data/backups/legacy-source-2026-11-14.json` 是迁移前原档备份；`data/backups/lifeos-initial-2026-11-14.json` 是新版独立 schema 的初始导出，供下方 restore 命令恢复到空目标。QQ 已完成配置切换，但新版尚未首次启动，因此本地 QQ 回执尚待首次接管时导入。
+已保存的 `data/backups/legacy-source-2026-11-14.json` 是迁移前原档备份；`data/backups/lifeos-initial-2026-11-14.json` 是新版独立 schema 的初始导出，供下方 restore 命令恢复到空目标。旧 QQ 配置曾完成切换；新建机器人时使用下方的独立配对流程。
 
 QQ 切换是单独的一次操作。`tools/cutover-qq.mjs <旧 DSH_HOME> <目标 DSH_HOME>` 会检查旧实例和数据库锁、备份旧配置并停用旧配置中的连接；不结束旧桌宠。新版只在目标目录证明通过且启动时再次确认旧桥不存在时接管。不能确认时 QQ 保持离线。
+
+也可以使用独立创建的 QQ 机器人。先在 QQ 开放平台创建机器人并设置 WebSocket 回调，再将其 AppID 和 AppSecret 放入本机私有目录 `data/dsh/dsh-pet/.qq-new-pending.json`，格式为 `{"appId":"你的 AppID","appSecret":"你的 AppSecret"}`；不要提交或分享该文件。停止新版后运行 `runtime\node\node.exe tools/setup-new-qq.mjs`。工具持有写入租约、备份生命状态并初始化全新的 QQ 身份和 24 小时配对码；如果已有其他机器人身份或未完成的 QQ 发送，它会拒绝切换。配对步骤保存在同目录 `qq-fresh-pairing.txt`：启动新版后先完成私聊绑定，再完成群绑定。新机器人不继承旧机器人的 OpenID 和回执，旧配置及备份保留；新机器人配置存在时优先使用新机器人。配对码过期后需要重新设置，不能继续使用旧码。
 
 生产构建命令：`runtime\node\node.exe runtime\node\node_modules\npm\bin\npm-cli.js run build`。请参阅 `实现状态.md` 了解状态归属与尚未完成的功能。
 

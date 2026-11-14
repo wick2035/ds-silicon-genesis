@@ -40,7 +40,7 @@ import {createDeterministicLife} from './deterministic-life.js';
 import {createHelperTokens} from './helper-tokens.js';
 import {isPresentationRoute} from './visual-routes.js';
 import {CanonicalQQ} from './qq-canonical.js';
-import {prepareQQTakeover,verifyQQCutoverProof} from './qq-takeover.js';
+import {prepareFreshQQ,prepareQQTakeover,verifyQQCutoverProof} from './qq-takeover.js';
 import {verifyOldQQAbsent} from './qq-process-inventory.js';
 import type {CanonicalQQGateway} from './qq-gateway.js';
 import {createDevelopment} from './development.js';
@@ -216,11 +216,14 @@ export async function main():Promise<void> {
       }});
     await scheduler.start();
     const targetHome=join(root,'data','dsh');
-    if(await verifyQQCutoverProof(targetHome)) {
+    let freshQQ=false;
+    try {await stat(join(targetHome,'dsh-pet','qq-fresh-config.json'));freshQQ=true;} catch(error) {if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+    if(freshQQ || await verifyQQCutoverProof(targetHome)) {
       const ingressAuthority={};
       const canonical=new CanonicalQQ(store,unitOfWork,lease,projectBody,ingressAuthority);
-      const takeover=await prepareQQTakeover({legacyHome:targetHome,canonical,ingressAuthority,signal:lease.signal,
-        stopHook:{stopAndVerify:async()=>await verifyOldQQAbsent(root)?'absent':'unknown'},onTurn:chat.qqTurn.bind(chat),dispatch:id=>dispatcher.dispatch(id)});
+      const shared={canonical,ingressAuthority,signal:lease.signal,onTurn:chat.qqTurn.bind(chat),dispatch:(id:string)=>dispatcher.dispatch(id)};
+      const takeover=freshQQ ? await prepareFreshQQ({...shared,home:targetHome,petId}) :
+        await prepareQQTakeover({...shared,legacyHome:targetHome,stopHook:{stopAndVerify:async()=>await verifyOldQQAbsent(root)?'absent':'unknown'}});
       if(takeover.status==='ready') {qq=takeover.gateway;executors.set('qq.send',takeover.executor);await qq.start();}
     }
     let closing=false;
