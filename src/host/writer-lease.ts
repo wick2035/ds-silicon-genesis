@@ -39,6 +39,9 @@ export class WriterLease implements PetGate, Pool, Queryable {
   assertHeld(): void { if (!this.client || !this.alive) throw new Error('写入租约不可用'); }
   get signal(): AbortSignal { return this.controller.signal; }
 
+  /** Background work triggered by a commit must acquire its own gate turn. */
+  detach<T>(operation:()=>T):T { return this.context.exit(operation); }
+
   /** Every write transaction must use this checkout, not the underlying pool.
    * Transactions and the advisory lock therefore share the same PG session. */
   async connect(): Promise<Client> {
