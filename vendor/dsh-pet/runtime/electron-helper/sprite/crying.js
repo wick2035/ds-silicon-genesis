@@ -56,6 +56,9 @@ Object.assign(PetSprite.prototype, {
   },
 
   syncPainState(state) {
+    // A care animation can proceed while an existing injury remains recorded.
+    // A new impact still interrupts it through showPainReaction.
+    if (this.careVisual) return;
     if (this.sleeping) { this.stopPainReaction(); return; }
     if (!state.body) {
       const remaining=state.cryingUntil-Date.now();

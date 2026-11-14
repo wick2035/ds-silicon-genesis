@@ -59,7 +59,9 @@ export function createDesktopCommandChannel(store:Reader,sourceCapability:object
         if(value.status==='playing')return {ok:true};
         if(value.status==='completed' && value.played!==true)throw Error('照料动画未完成');
         clearTimeout(item!.timer);pending.delete(c.petId);
-        bridge.accept({petId:c.petId,actionId:c.actionId,kind:c.kind,status:value.status,played:value.played===true,itemId:value.itemId},sourceCapability);
+        const reasons=['睡眠、恢复、学习或爸爸正在互动','爸爸的互动或新动作打断了这次尝试','动作被其他互动打断','动作素材播放超时','照料动画素材不可用'];
+        const reason=typeof value.reason==='string'&&reasons.includes(value.reason)?value.reason:undefined;
+        bridge.accept({petId:c.petId,actionId:c.actionId,kind:c.kind,status:value.status,played:value.played===true,itemId:value.itemId,...(reason?{reason}:{})},sourceCapability);
         return {ok:true};
       }
       if(!c || c.kind!=='labor.step'||value.id!==c.parameters.commandId || value.surface!==item?.world?.surface || !Number.isSafeInteger(value.index) || !['playing','completed','interrupted'].includes(value.status))throw Error('桌宠回执没有对应行动');

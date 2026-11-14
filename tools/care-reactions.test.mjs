@@ -13,6 +13,33 @@ import {projectBody} from '../dist/host/body-projection.js';
 import {ActionCoordinator} from '../dist/host/action-coordinator.js';
 import {CanonicalActionLifecycle} from '../dist/host/action-lifecycle.js';
 import {createLegacyServiceActions} from '../dist/host/legacy-service-actions.js';
+import {CanonicalHumanityAdapter} from '../dist/host/humanity-adapter.js';
+
+test('身体快照按当前时间恢复姿态，且不改写已保存状态',async()=>{
+  const then=Date.parse('2026-11-14T06:05:41Z'),now=then+180000,human=createHumanity(then);
+  human.injury={at:then,curlUntil:then+47000,guardUntil:then+108000};
+  const original=structuredClone(human);
+  const adapter=new CanonicalHumanityAdapter({loadEnvelope:async()=>({humanity:human})},{}, {},{},{},()=>now);
+  assert.equal((await adapter.snapshot('main')).body.phase,'well');
+  assert.deepEqual(human,original);
+});
+
+test('受伤保护姿态中喝水仍播放对应动作，完成后恢复原保护状态',async()=>{
+  const source=await readFile(new URL('../vendor/dsh-pet/runtime/electron-helper/sprite/desktop-body.js',import.meta.url),'utf8');
+  const crying=await readFile(new URL('../vendor/dsh-pet/runtime/electron-helper/sprite/crying.js',import.meta.url),'utf8');
+  const receipts=[],classes=new Set(['is-crying']);
+  const video={readyState:2,paused:false,playbackRate:1,addEventListener(name,cb){if(name==='ended')setImmediate(cb);}};
+  class Sprite {playIdle(){} switchTo(name){this.anim=name;} dispose(){} showWhisper(){}}
+  const context={PetSprite:Sprite,window:{petBridge:{reportActionReceipt:async r=>{receipts.push(r);}}},document:{hidden:false},
+    requestAnimationFrame:fn=>setImmediate(fn),cancelAnimationFrame:clearImmediate,setTimeout,clearTimeout,performance};
+  vm.runInNewContext(crying+'\n'+source,context);
+  const sprite=new Sprite();Object.assign(sprite,{ac:new AbortController(),pet:{id:'main'},bodyProtected:true,dragState:{active:false},
+    humanity:{body:{phase:'guarded'},crying:false},painStage:{dataset:{bodyPhase:'guarded'},classList:{add:x=>classes.add(x),remove:x=>classes.delete(x)}},
+    stopMove(){},front:0,videoA:video,videoB:video,pos:{x:0,y:0}});
+  await sprite.executeBody({id:'drink',actionId:'drink',itemId:'water',index:0,source:'silicon-eat',steps:[{action:'drink'}]},{drink:['喝水']});
+  assert.deepEqual(receipts.map(r=>r.status),['playing','completed']);
+  assert.equal(receipts[1].played,true);assert.equal(sprite.bodyProtected,true);assert.ok(classes.has('is-crying'));
+});
 
 test('时段会影响困意，但不自动休息或按睡眠恢复体力',()=>{
   const now=Date.parse('2026-11-14T05:00:00Z'),state=createHumanity(now);
@@ -88,6 +115,14 @@ test('手动照料动作各自使用对应的桌面动作',async()=>{
     assert.equal((await pending).status,'cancelled');
   }
   channel.close();
+});
+
+test('被打断的照料保留桌面回执中的可解释原因',async()=>{
+  const channel=createDesktopCommandChannel({loadEnvelope:async()=>({legacy:{}})},{});
+  const id='interrupted-drink',intent={id,type:'care.water',payload:{petId:'main',actionId:id,parameters:{}}};
+  const pending=channel.bridge.execute('main',intent,new AbortController().signal);await new Promise(setImmediate);
+  await channel.receipt({petId:'main',id,actionId:id,itemId:'water',index:0,surface:'desktop',status:'interrupted',reason:'动作被其他互动打断'});
+  const result=await pending;assert.equal(result.status,'cancelled');assert.equal(result.evidence.reason,'动作被其他互动打断');channel.close();
 });
 
 test('照料回应走桌面可见气泡，不触发随机说话动画',async()=>{

@@ -6,6 +6,7 @@ export interface DesktopReceipt {
   petId:string; actionId:string; kind:DesktopActionKind; status:'completed'|'failed'|'interrupted';
   played?:boolean; itemId?:string; commandId?:string; index?:number; surface?:string; x?:number; y?:number; coinId?:string;
   effortSeconds?:number; intensity?:number;
+  reason?:string;
 }
 interface Pending { petId:string; kind:DesktopReceipt['kind']; resolve:(receipt:DesktopReceipt)=>void; reject:(error:Error)=>void }
 /** A host must bind accept() exclusively to an authenticated helper process IPC
@@ -50,7 +51,7 @@ export class TrustedDesktopBridge {
       // Start listening before dispatch, so a fast helper cannot race the waiter.
       await this.send({actionId:intent.id,petId,kind,parameters:structuredClone(intent.payload.parameters as Record<string,unknown>)},signal);
       const result = await response;
-      if (result.status !== 'completed') return {status:result.status === 'failed' ? 'failed' : 'cancelled',evidence:{actionId:intent.id,kind,reason:result.status,...(kind==='labor.step' && result.effortSeconds!==undefined?{confirmed:true,effortSeconds:result.effortSeconds,intensity:result.intensity}:{})}};
+      if (result.status !== 'completed') return {status:result.status === 'failed' ? 'failed' : 'cancelled',evidence:{actionId:intent.id,kind,reason:result.reason||result.status,...(kind==='labor.step' && result.effortSeconds!==undefined?{confirmed:true,effortSeconds:result.effortSeconds,intensity:result.intensity}:{})}};
       const evidence: Record<string,unknown> = {actionId:intent.id,kind,confirmed:true,played:true};
       if (kind === 'service.eat-rice'||kind.startsWith('care.')) evidence.itemId = result.itemId;
       else if(kind==='body.sleep'||kind==='body.wake')Object.assign(evidence,{restKind:kind==='body.sleep'?'sleep':'wake'});

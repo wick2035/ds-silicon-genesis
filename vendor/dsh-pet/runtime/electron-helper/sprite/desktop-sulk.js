@@ -8,7 +8,7 @@
     const s=this.softView?.current,stage=this.painStage;
     if(!stage)return;
     const pose=this.softPlaying || s?.pose;
-    const visible=pose && !this.sleeping && !this.bodyProtected && !this.phoneUsing && !this.frozen && !this.dragState.active && !document.hidden && !this.laborArtActive;
+    const visible=pose && !this.sleeping && !this.bodyProtected && !this.phoneUsing && !this.frozen && !this.dragState.active && !document.hidden && !this.laborArtActive && !this.careVisual;
     if(!visible){stage.classList.remove('has-soft-art');if(this.softChoices)this.softChoices.hidden=true;return;}
     if(!this.softArt){const art=document.createElement('img');art.className='pet-sulk-art';art.alt='';art.draggable=false;stage.append(art);this.softArt=art;art.onload=()=>{if(this.softArt===art)this.paintSoft();};art.onerror=()=>stage.classList.remove('has-soft-art');}
     const key=poses[pose];if(!key)return;

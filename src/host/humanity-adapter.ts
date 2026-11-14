@@ -43,7 +43,7 @@ export class CanonicalHumanityAdapter {
   async snapshot(petId: string): Promise<HumanState> {
     const envelope=await this.reader.loadEnvelope(petId),human=envelope?.humanity;
     if(!human?.stats||!human?.emotions||!Number.isFinite(human.updatedAt))throw Error('生命身体状态不存在或无效');
-    return describeHumanity(structuredClone(human),Number(human.updatedAt));
+    return describeHumanity(structuredClone(human),this.now());
   }
   async prompt(petId: string): Promise<string> { const state = await this.get(petId); return humanityPrompt(state, this.now()); }
   async act(petId: string, action: string, requestId: string): Promise<HumanState> {

@@ -53,12 +53,15 @@
     }catch(e){if(!this.ac.signal.aborted)console.warn('[大肥鱼身体]',e.message);}finally{this.bodyPolling=false;}
   };
   proto.executeBody=async function(c,actions){
-    const step=c.steps[c.index],asset=actions[step.action]?.[0];if(!asset){if(c.source==='silicon-eat')await window.petBridge.reportActionReceipt({id:c.id,actionId:c.actionId,itemId:c.itemId,index:c.index,surface:'desktop',status:'interrupted',reason:'吃饭动画素材不可用'}).catch(()=>{});return;}
+    const step=c.steps[c.index],asset=actions[step.action]?.[0];if(!asset){if(c.source==='silicon-eat')await window.petBridge.reportActionReceipt({id:c.id,actionId:c.actionId,itemId:c.itemId,index:c.index,surface:'desktop',status:'interrupted',reason:'照料动画素材不可用'}).catch(()=>{});return;}
     const post=(status,extra={})=>c.source==='silicon-eat'
       ? window.petBridge.reportActionReceipt({id:c.id,actionId:c.actionId,itemId:c.itemId,index:c.index,surface:'desktop',status:status==='failed'?'interrupted':status,...extra})
       : fetch(BASE+'/humanity/companion/world?pet='+encodeURIComponent(this.pet.id),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'receipt',id:c.id,index:c.index,surface:'desktop',status,...extra}),signal:AbortSignal.any([this.ac.signal,AbortSignal.timeout(5000)])}).catch(()=>{});
-    if(this.sleeping||this.frozen||this.bodyProtected||this.phoneUsing||this.dragState.active){await post('interrupted',{reason:'睡眠、恢复、学习或爸爸正在互动'});return;}
-    this.bodyExecuting=true;this.bodyCommandId=c.id;this.stopMove();
+    const gentleCare=c.source==='silicon-eat'&&['eat','drink','pet','soothe','accompany'].includes(step.action);
+    if(this.sleeping||this.frozen||(this.bodyProtected&&!gentleCare)||this.phoneUsing||this.dragState.active){await post('interrupted',{reason:'睡眠、恢复、学习或爸爸正在互动'});return;}
+    this.bodyExecuting=true;this.bodyCommandId=c.id;this.careVisual=gentleCare;
+    if(gentleCare){this.bodyProtected=false;this.painStage?.classList.remove('is-crying');this.paintSoft?.();}
+    this.stopMove();
     if(step.action==='beg')this.showRiceProp?.('bowl');
     const from={...this.pos};let cancelled=false,played=false,video,frame,timer;
     try{
@@ -88,7 +91,7 @@
       await done;
       await post('completed',{played,distance:Math.hypot(this.pos.x-from.x,this.pos.y-from.y)});
     }catch(e){await post(cancelled?'interrupted':'failed',{reason:e.message});}
-    finally{clearTimeout(timer);cancelAnimationFrame(frame);if(video)video.playbackRate=1;this.bodyExecuting=false;this.cancelBody=null;if(!this.ac.signal.aborted&&!this.bodyProtected&&!this.sleeping)this.playIdle();}
+    finally{clearTimeout(timer);cancelAnimationFrame(frame);if(video)video.playbackRate=1;this.bodyExecuting=false;this.cancelBody=null;this.careVisual=false;if(gentleCare&&this.humanity)this.syncPainState(this.humanity);this.paintSoft?.();if(!this.ac.signal.aborted&&!this.bodyProtected&&!this.sleeping)this.playIdle();}
   };
   proto.dispose=function(...args){this.cancelBody?.();return old.dispose.apply(this,args);};
 })();
