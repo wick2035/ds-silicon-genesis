@@ -89,19 +89,22 @@ export class CanonicalChat {
         '最近真实工地互动：'+JSON.stringify(state.events.filter(e=>e.type==='interaction.worksite'&&live(state,e.eventId)).slice(-8).map(e=>({at:e.occurredAt,detail:e.payload}))),
         '相关记忆（含来源与证据等级）：'+JSON.stringify(memories.map(m=>({content:m.content,evidenceLevel:m.evidenceLevel,sourceIds:m.sourceIds})))].filter(Boolean).join('\n');
       const selection=this.model.agentDefaultModel.currentSelection();if(!selection.provider||!selection.model)throw new Error('模型不可用');
-      const combined=AbortSignal.any([signal,this.gate.signal]);let output='';
-      await this.budget.runAs(input.petId,'interactive',async()=>{
+      const turnAbort=new AbortController(),combined=AbortSignal.any([signal,this.gate.signal,turnAbort.signal]);let output='';
+      const generateReply=this.budget.runAs(input.petId,'interactive',async()=>{
         for await(const part of this.model.llm.stream({...selection,system,messages:[...history,{role:'user',content:input.attachments?.length?[{type:'text',text},...input.attachments.map(a=>({type:'image',attachment:{petId:a.petId,id:a.id}}))]:text}],signal:combined,maxTokens:group?100:600})) {
           if(part?.type==='text' && typeof part.text==='string')output+=part.text;
         }
       });
       let laborProposal:Record<string,unknown>|undefined;
-      if(this.laborAction && input.channel!=='qq-group' && input.actorId==='dad' && /搬砖|工作|工钱|工资|讨薪|欠薪|还价|接工/u.test(text) && !combined.aborted) {
+      const extractLabor=async()=>{
+        if(this.laborAction && input.channel!=='qq-group' && input.actorId==='dad' && /搬砖|工作|工钱|工资|讨薪|欠薪|还价|接工/u.test(text) && !combined.aborted) {
         try {let raw='';await this.budget.runAs(input.petId,'interactive',async()=>{for await(const part of this.model.llm.stream({...selection,system:'仅将用户的工作谈判意图提取为 JSON，不执行操作。输出 null 或 {action:offer|confirm|counter|decline|pause|resume|nudge|pay,id?:string,trips?:number,wage?:number,amount?:number}。不要猜数字；支付不代表已经付款。当前工作：'+JSON.stringify(state.legacyContext?.labor??null),messages:[{role:'user',content:text}],signal:combined,maxTokens:200}))if(part?.type==='text'&&typeof part.text==='string')raw+=part.text;});
           const candidate=JSON.parse(raw.replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,''));
           if(candidate && typeof candidate==='object' && !Array.isArray(candidate) && ['offer','confirm','counter','decline','pause','resume','nudge','pay'].includes(candidate.action) && Object.keys(candidate).every(k=>['action','id','trips','wage','amount'].includes(k)) && (candidate.action!=='offer'||Number.isInteger(candidate.trips)&&candidate.trips>=1&&candidate.trips<=50&&Number.isInteger(candidate.wage)&&candidate.wage>=1&&candidate.wage<=1000000) && (candidate.action==='offer'||typeof candidate.id==='string'&&candidate.id.length>0) && (candidate.action!=='pay'||Number.isFinite(candidate.amount)&&candidate.amount>0))laborProposal=candidate;
         }catch{/* A failed extractor never changes a contract. */}
-      }
+        }
+      };
+      try {await Promise.all([generateReply,extractLabor()]);} catch(error) {turnAbort.abort();throw error;}
       output=redactDadNames(output.replace(/<(?:body|service)>[\s\S]*?<\/(?:body|service)>/gi,'').trim());if(!output || output.length>4000 || combined.aborted)throw new Error('模型没有给出完整回复');
       if(group && [...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(output)].length>15)throw new Error('群回复超过 15 字');
       if(laborProposal){const p=laborProposal as any;const description=p.action==='offer'?`搬 ${p.trips} 趟，工钱 ${p.wage} token`:p.action==='pay'?`结算 ${p.amount} token 工钱`:({confirm:'确认开工',counter:'接受还价',decline:'拒绝工作',pause:'暂停工作',resume:'继续工作',nudge:'催促工作'} as Record<string,string>)[p.action];output+='\n我理解的是：'+description+'。请说“确认”或发送 /确认工作 '+id.slice(0,12)+'。';}
