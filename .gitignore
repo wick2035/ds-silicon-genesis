@@ -24,3 +24,5 @@ __pycache__/
 *.backup
 *.bak
 *.log
+.playwright-cli/
+.workbuddy/
