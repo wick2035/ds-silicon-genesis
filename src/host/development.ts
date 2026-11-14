@@ -30,7 +30,9 @@ export function createDevelopment(store:Reader,gate:PetGate,uow:UnitOfWork,budge
     if(!claim)return false;
     try{
       const sel=model.agentDefaultModel.currentSelection(),system=kind==='diary'?'根据给出的真实事件写简短第一人称日记。不要编造未发生的事。只返回 JSON：{"text":"...","sources":["事件ID"]}。':'从真实事件中谨慎总结可能的兴趣与习惯，不要把一次经历当稳定性格。只返回 JSON：{"text":"...","sources":["事件ID"]}。';
-      let text='';await budget.runAs(id,manual?'interactive':kind,async()=>{for await(const chunk of model.llm.stream({...sel,system,messages:[{role:'user',content:JSON.stringify(claim.events)}],signal:AbortSignal.any([signal,gate.signal]),maxTokens:800,temperature:.3})){if(chunk.type==='text'&&typeof chunk.text==='string'){text+=chunk.text;if(text.length>10000)throw Error('整理结果过长');}}});
+      // Reasoning models count their thinking tokens toward the completion
+      // limit, even when the final diary itself is short.
+      let text='';await budget.runAs(id,manual?'interactive':kind,async()=>{for await(const chunk of model.llm.stream({...sel,system,messages:[{role:'user',content:JSON.stringify(claim.events)}],signal:AbortSignal.any([signal,gate.signal]),maxTokens:4096,temperature:.3,reasoningEffort:'low'})){if(chunk.type==='text'&&typeof chunk.text==='string'){text+=chunk.text;if(text.length>10000)throw Error('整理结果过长');}}});
       let data:any;try{data=JSON.parse(text.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''));}catch{throw Error('模型返回的整理内容格式无效，请重试');}
       const available=new Set(claim.events.map(e=>e.id));
       if(typeof data.text!=='string'||!data.text.trim()||data.text.length>5000||!Array.isArray(data.sources)||!data.sources.length||data.sources.some((s:unknown)=>typeof s!=='string'||!available.has(s)))throw Error('整理结果缺少真实来源');

@@ -10,7 +10,7 @@ export interface ImportedModelConfig {
 }
 type Provider = ImportedModelConfig['providers'][string];
 type Message = {role:'user'|'assistant'; content:string};
-type StreamOptions = {provider:string; model:string; system?:string; messages:unknown[]; signal?:AbortSignal; maxTokens?:number; temperature?:number; tools?:unknown[]};
+type StreamOptions = {provider:string; model:string; system?:string; messages:unknown[]; signal?:AbortSignal; maxTokens?:number; temperature?:number; reasoningEffort?:'low'; tools?:unknown[]};
 export interface ModelBudget { reserve(provider:string, model:string, signal:AbortSignal): Promise<() => void | Promise<void>> }
 export interface ModelFacadeOptions { leaseSignal:AbortSignal; budget:ModelBudget; resolveImage?:ImageResolver; timeoutMs?:number; persist?:(config:ImportedModelConfig)=>Promise<void> }
 const quiet = {debug() {}, info() {}, warn() {}, error() {}};
@@ -71,7 +71,8 @@ export function createModelFacade(config: ImportedModelConfig, options: ModelFac
         const shared={apiKey:p.apiKey,baseURL:base,maxRetries:0,timeout:timeoutMs,fetch:transport,logger:quiet,logLevel:'off' as const};
         if (p.api==='openai-completions') {
           const client=new OpenAI({...shared,organization:null,project:null,webhookSecret:null});
-          const stream=await client.chat.completions.create({model:o.model,messages:[...(system?[{role:'system' as const,content:system}]:[]),...messages] as any,stream:true,n:1,...(tools?.length?{tools:tools as any}:{}),max_tokens:maxTokens,...(o.temperature!==undefined?{temperature:o.temperature}:{})},{signal:controller.signal});
+          const lowEffort=o.reasoningEffort==='low' && /(?:^|\.)maas\.aliyuncs\.com$/i.test(new URL(base).hostname) && /^deepseek-v4\.1-flash(?:-\d+)?$/i.test(o.model);
+          const stream=await client.chat.completions.create({model:o.model,messages:[...(system?[{role:'system' as const,content:system}]:[]),...messages] as any,stream:true,n:1,...(tools?.length?{tools:tools as any}:{}),max_tokens:maxTokens,...(o.temperature!==undefined?{temperature:o.temperature}:{}),...(lowEffort?{reasoning_effort:'low' as const}:{})},{signal:controller.signal});
           for await(const chunk of stream) {
             if(controller.signal.aborted) throw new Error('cancelled');
             if(++events>4096) throw new Error('limit');
@@ -98,7 +99,7 @@ export function createModelFacade(config: ImportedModelConfig, options: ModelFac
         if(!chars && !toolEvents) throw new Error('empty');
       } catch (error) {
         const status=typeof error==='object' && error!==null && 'status' in error ? Number(error.status) : 0;
-        const message=controller.signal.aborted?'模型请求已取消或超时':error instanceof ModelResultError?error.message:status===401||status===403?'模型服务认证失败，请检查 API 密钥和访问权限':status===429?'模型服务额度不足或请求过于频繁':status>=500?'模型服务暂时不可用，请稍后重试':'模型请求未能完整完成，请检查服务配置';
+        const message=controller.signal.aborted?'模型请求已取消或超时':error instanceof ModelResultError?error.message:status===401||status===403?'模型服务认证失败，请检查 API 密钥和访问权限':status===404?'模型或接口不存在，请检查模型名称和服务地址':status===429?'模型服务额度不足或请求过于频繁':status>=500?'模型服务暂时不可用，请稍后重试':'模型请求未能完整完成，请检查服务配置';
         throw new Error(message);
       }
       finally {clearTimeout(timer);leaseSignal.removeEventListener('abort',abort);o.signal?.removeEventListener('abort',abort);controller.abort();active.delete(controller);if(release) await release();}
@@ -120,8 +121,20 @@ export function createModelFacade(config: ImportedModelConfig, options: ModelFac
   };
   const saveSettings=(input:Record<string,unknown>)=>{const task=saveQueue.then(()=>doSaveSettings(input));saveQueue=task.catch(()=>{});return task;};
   const matchesCurrent=(input:Record<string,unknown>)=>!input || ((!input.protocol||input.protocol===getSettings().protocol)&&(!input.baseUrl||input.baseUrl===getSettings().baseUrl)&&(!input.model||input.model===getSettings().model)&&!input.apiKey);
-  const discoverModels=async(input:Record<string,unknown>={})=>matchesCurrent(input)?({ok:true,models:providers[selection.provider].models.map(id=>({id,name:id}))}):({ok:false,code:'input',message:'请先保存设置，再查看本地模型列表'});
-  const testConnection=async(input:Record<string,unknown>={})=>{if(!matchesCurrent(input))return {ok:false,message:'请先保存设置，再测试当前模型'};try{let text='';for await(const part of llm.stream({...selection,messages:[{role:'user',content:'Hi'}],maxTokens:512,signal:leaseSignal}))if(part.type==='text')text+=part.text;return {ok:!!text,message:text?'模型连接正常':'模型未返回内容'};}catch(error){return {ok:false,message:error instanceof Error?error.message:'模型连接失败'};}};
+  const discoverModels=async(input:Record<string,unknown>={})=>{
+    if(!matchesCurrent(input))return {ok:false,code:'input',message:'请先保存设置，再查看模型列表'};
+    if(disposed||leaseSignal.aborted)return {ok:false,code:'unavailable',message:'模型服务不可用'};
+    const p=providers[selection.provider],base=p.baseURL.replace(/\/+$/,''),path=p.api==='anthropic-messages'&&!base.endsWith('/v1')?'/v1/models':'/models';
+    const headers:Record<string,string>=p.api==='anthropic-messages'?{'x-api-key':p.apiKey,'anthropic-version':'2023-06-01'}:{authorization:`Bearer ${p.apiKey}`};
+    try{
+      const response=await fetch(base+path,{headers,redirect:'error',signal:AbortSignal.any([leaseSignal,AbortSignal.timeout(15000)])});
+      if(!response.ok)return {ok:false,code:'provider',message:response.status===401||response.status===403?'模型服务认证失败，请检查 API 密钥和访问权限':'模型列表暂时不可用'};
+      const data:any=await response.json();if(!Array.isArray(data?.data))throw Error('invalid');
+      const ids=[...new Set<string>(data.data.map((x:any)=>x?.id).filter((id:unknown):id is string=>typeof id==='string'&&id.length>0&&id.length<=200))].slice(0,2000);
+      return {ok:true,models:ids.map(id=>({id,name:id}))};
+    }catch{return {ok:false,code:'provider',message:'模型列表暂时不可用'};}
+  };
+  const testConnection=async(input:Record<string,unknown>={})=>{if(!matchesCurrent(input))return {ok:false,message:'请先保存设置，再测试当前模型'};try{let text='';for await(const part of llm.stream({...selection,messages:[{role:'user',content:'Hi'}],maxTokens:1024,reasoningEffort:'low',signal:leaseSignal}))if(part.type==='text')text+=part.text;return {ok:!!text,message:text?'模型连接正常':'模型未返回内容'};}catch(error){return {ok:false,message:error instanceof Error?error.message:'模型连接失败'};}};
   const queryBalance=async()=>{if(!settings.balanceProvider)return {ok:false,provider:'',reason:'disabled'};const p=providers[selection.provider];if(p.api!=='openai-completions'||p.baseURL.replace(/\/+$/,'')!=='https://api.deepseek.com')return {ok:false,provider:'',reason:'unsupported'};try{const response=await fetch('https://api.deepseek.com/user/balance',{headers:{authorization:`Bearer ${p.apiKey}`},signal:AbortSignal.any([leaseSignal,AbortSignal.timeout(15000)]),redirect:'error'});if(!response.ok)throw Error('balance');const data:any=await response.json();if(!Array.isArray(data.balance_infos)||!data.balance_infos.length)throw Error('balance');const wallets=data.balance_infos.map((w:any)=>{if(typeof w.currency!=='string'||typeof w.total_balance!=='string'||typeof w.granted_balance!=='string'||typeof w.topped_up_balance!=='string')throw Error('balance');return {currency:w.currency,total:w.total_balance,granted:w.granted_balance,toppedUp:w.topped_up_balance};});return {ok:true,provider:'deepseek-official',shape:'money',data:{wallets}};}catch{return {ok:false,provider:'deepseek-official',reason:'fetch-error',message:'余额查询失败'};}};
   return {llm,getSettings,saveSettings,discoverModels,testConnection,queryBalance,agentDefaultModel:{currentSelection:()=>allowed(selection.provider,selection.model)?{...selection}:{provider:'',model:''}},dispose(){disposed=true;for(const c of active)c.abort();active.clear();}};
 }
