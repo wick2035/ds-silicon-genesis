@@ -5,7 +5,7 @@ import type { Queryable } from '../storage/postgres.js';
  * PostgreSQL simple FTS plus literal matching covers both segmented terms and
  * Chinese text which PostgreSQL may treat as a single token. */
 export class CanonicalMemoryRetrieval {
-  constructor(private readonly db:Queryable) {}
+  constructor(private readonly db:Queryable,private readonly idle?:{snapshot():{seconds:number}|undefined}) {}
   async search(petId:string, query:string, limit=12):Promise<Memory[]> {
     if(!petId||typeof query!=='string'||query.length>500||!Number.isInteger(limit)||limit<1||limit>30)throw new Error('记忆查询无效');
     const terms=[...new Set((query.toLowerCase().match(/[a-z0-9_]{2,}|[\p{Script=Han}]{2,}/gu)||[]).flatMap(t=>/[\p{Script=Han}]/u.test(t)&&t.length>2?Array.from({length:t.length-1},(_,i)=>t.slice(i,i+2)):[t]))].slice(0,12);
@@ -24,7 +24,8 @@ export class CanonicalMemoryRetrieval {
     const space=Object.fromEntries(['mode','confined','screens','area','home'].filter(k=>Object.hasOwn(source,k)).map(k=>[k,source[k]]));
     const inventory=Array.isArray(raw.inventory)?raw.inventory.slice(0,30).map((i:any)=>({id:i.id,name:i.name,status:i.status})):[];
     const images=state.events.filter(e=>e.type==='attachment.shared'&&!Object.hasOwn(state.invalidSources,e.eventId)&&typeof (e.payload as any)?.attachmentId==='string').slice(-10).map(e=>({attachmentId:(e.payload as any).attachmentId as string,sourceId:e.eventId}));
-    return {space,inventory,images,capabilities:state.constraints.capabilities.filter(c=>c.enabled&&c.name!=='care.feed'),recentResults:state.receipts.slice(-10).map(r=>({actionId:r.actionId,status:r.status,occurredAt:r.occurredAt}))};
+    const idle=this.idle?.snapshot();
+    return {...(idle?{userIdleSeconds:idle.seconds}:{}),space,inventory,images,capabilities:state.constraints.capabilities.filter(c=>c.enabled&&c.name!=='care.feed'),recentResults:state.receipts.slice(-10).map(r=>({actionId:r.actionId,status:r.status,occurredAt:r.occurredAt}))};
   }
   async forCognition(state:LifeState):Promise<Memory[]> {
     const conversations=state.events.filter(e=>e.type==='conversation.user'&&!Object.hasOwn(state.invalidSources,e.eventId)).slice(-3);

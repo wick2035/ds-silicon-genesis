@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, desktopCapturer, screen } = require('electron');
+const { app, BrowserWindow, desktopCapturer, screen, powerMonitor } = require('electron');
 const { decideWindowIgnore } = require('../pointer-target.js');
 /**
  * 渲染端到主进程的 ipc：窗口跟随、飞行状态、碰撞转发、穿透翻转、输入租约与菜单首项（打开软件 / 打开 AI 设置）。
@@ -21,6 +21,14 @@ function registerIpc({ ipcMain, petWindows, shell, openTarget, petRoute, hostReq
   require('./worksite.js').register({ipcMain,petWindows,hostRequest,BrowserWindow,screen,app});
   const epoch = process.env.SILICON_HELPER_EPOCH || '';
   const restraint = new Map();
+  // Only elapsed system input inactivity is observed; no keys or pointer positions are collected.
+  const idleTimer=setInterval(()=>{
+    let seconds;try{seconds=powerMonitor.getSystemIdleTime();}catch{return;}
+    const observedAt=Date.now();
+    for(const [petId,current] of restraint){if(current.failed || current.sequence<1)continue;
+      void current.chain.then(()=>hostRequest('POST','/__silicon/interaction',JSON.stringify({epoch:current.windowEpoch,petId,eventId:require('node:crypto').randomUUID(),kind:'idle',detail:{seconds,observedAt}}))).catch(()=>{});
+    }
+  },10000);idleTimer.unref?.();
   ipcMain.handle('pet:interaction', async(event,input) => {
     const sender=BrowserWindow.fromWebContents(event.sender);
     const petId=[...petWindows.state.windows].find(([,win])=>win===sender)?.[0], current=restraint.get(petId);
@@ -30,13 +38,19 @@ function registerIpc({ ipcMain, petWindows, shell, openTarget, petRoute, hostReq
     const response=await hostRequest('POST','/__silicon/interaction',JSON.stringify(payload));
     if(response.status!==200)throw Error('桌宠互动未保存');return JSON.parse(response.body||'{}');
   });
+  ipcMain.handle('pet:motion-ready', event => {
+    const sender=BrowserWindow.fromWebContents(event.sender);
+    const petId=[...petWindows.state.windows].find(([,win])=>win===sender)?.[0];
+    if(!petId || !restraint.get(petId) || !sender.isVisible())return false;
+    try{return powerMonitor.getSystemIdleTime()>=120;}catch{return false;}
+  });
   ipcMain.handle('pet:action-receipt', async (event, receipt) => {
     const sender=BrowserWindow.fromWebContents(event.sender);
     const petId=[...petWindows.state.windows].find(([,win])=>win===sender)?.[0];
     if(!petId || !/^[a-f0-9]{32}$/.test(epoch) || !receipt || typeof receipt!=='object' ||
        !['playing','completed','interrupted'].includes(receipt.status) || typeof receipt.id!=='string' ||
        !Number.isSafeInteger(receipt.index) || receipt.index<0 || receipt.surface!=='desktop' ||
-       (receipt.actionId!==undefined && (typeof receipt.actionId!=='string' || receipt.actionId!==receipt.id || (typeof receipt.itemId!=='string' && typeof receipt.coinId!=='string' && !['sleep','wake'].includes(receipt.restKind)) || (receipt.coinId===undefined && receipt.index!==0) || receipt.index>1))) throw Error('桌宠回执无效');
+       (receipt.actionId!==undefined && (typeof receipt.actionId!=='string' || receipt.actionId!==receipt.id || (typeof receipt.itemId!=='string' && typeof receipt.coinId!=='string' && receipt.motion!=='walk' && !['sleep','wake'].includes(receipt.restKind)) || (receipt.coinId===undefined && receipt.index!==0) || receipt.index>1))) throw Error('桌宠回执无效');
     const response=await hostRequest('POST','/__silicon/action-receipt',JSON.stringify({...receipt,petId,processEpoch:epoch}));
     if(response.status!==200)throw Error('桌宠回执未保存');
     return JSON.parse(response.body || '{}');

@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('petBridge', {
   worksiteOnly: !!process.env.SILICON_HELPER_EPOCH,
   reportRestraint(kind, restrained) { ipcRenderer.send('pet:restraint', {kind, restrained}); },
   onRestraintRetry(callback) { ipcRenderer.on('pet:restraint-retry', () => callback()); },
+  canStartIdleMotion() { return ipcRenderer.invoke('pet:motion-ready'); },
   reportActionReceipt(receipt) { return ipcRenderer.invoke('pet:action-receipt', receipt); },
   reportInteraction(kind, detail) { return ipcRenderer.invoke('pet:interaction', {kind,detail}); },
   // 宠物窗口逐帧跟随：x/y/width/height 是窗口内容区坐标（用于移动窗口），

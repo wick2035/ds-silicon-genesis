@@ -54,17 +54,20 @@
     }catch(e){if(!this.ac.signal.aborted)console.warn('[大肥鱼身体]',e.message);}finally{this.bodyPolling=false;}
   };
   proto.executeBody=async function(c,actions){
-    const step=c.steps[c.index],asset=actions[step.action]?.[0];if(!asset){if(c.source==='silicon-eat')await window.petBridge.reportActionReceipt({id:c.id,actionId:c.actionId,itemId:c.itemId,index:c.index,surface:'desktop',status:'interrupted',reason:'照料动画素材不可用'}).catch(()=>{});return;}
-    const post=(status,extra={})=>c.source==='silicon-eat'
+    const step=c.steps[c.index],asset=actions[step.action]?.[0];if(!asset){if(c.source==='silicon-walk')await window.petBridge.reportActionReceipt({id:c.id,actionId:c.actionId,motion:'walk',activity:step.action,index:c.index,surface:'desktop',status:'interrupted'}).catch(()=>{});if(c.source==='silicon-eat')await window.petBridge.reportActionReceipt({id:c.id,actionId:c.actionId,itemId:c.itemId,index:c.index,surface:'desktop',status:'interrupted',reason:'照料动画素材不可用'}).catch(()=>{});return;}
+    const post=(status,extra={})=>c.source==='silicon-walk'
+      ? window.petBridge.reportActionReceipt({id:c.id,actionId:c.actionId,motion:'walk',activity:step.action,index:c.index,surface:'desktop',status:status==='failed'?'interrupted':status,...extra}).catch(()=>{})
+      : c.source==='silicon-eat'
       ? window.petBridge.reportActionReceipt({id:c.id,actionId:c.actionId,itemId:c.itemId,index:c.index,surface:'desktop',status:status==='failed'?'interrupted':status,...extra})
       : fetch(BASE+'/humanity/companion/world?pet='+encodeURIComponent(this.pet.id),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'receipt',id:c.id,index:c.index,surface:'desktop',status,...extra}),signal:AbortSignal.any([this.ac.signal,AbortSignal.timeout(5000)])}).catch(()=>{});
+    if(c.source==='silicon-walk' && !await window.petBridge.canStartIdleMotion().catch(()=>false)){await post('interrupted');return;}
     const gentleCare=c.source==='silicon-eat'&&['eat','drink','pet','soothe','accompany'].includes(step.action);
     if(this.sleeping||this.frozen||(this.bodyProtected&&!gentleCare)||this.phoneUsing||this.dragState.active){await post('interrupted',{reason:'睡眠、恢复、学习或爸爸正在互动'});return;}
     this.bodyExecuting=true;this.bodyCommandId=c.id;this.careVisual=gentleCare;
     if(gentleCare){this.bodyProtected=false;this.painStage?.classList.remove('is-crying');this.paintSoft?.();}
     this.stopMove();
     if(step.action==='beg')this.showRiceProp?.('bowl');
-    const from={...this.pos};let cancelled=false,played=false,video,frame,timer;
+    const from={...this.pos};let cancelled=false,played=false,videoEnded=false,video,frame,timer;
     try{
       const done=new Promise((resolve,reject)=>{
         this.cancelBody=()=>{cancelled=true;this.stopMove();reject(Error('爸爸的互动或新动作打断了这次尝试'));};
@@ -75,16 +78,17 @@
           const front=this.front===0?this.videoA:this.videoB;
           if(this.anim===asset && !this.pending && front.readyState>=2 && !front.paused){
             if(!played){played=true;video=front;front.playbackRate=Math.max(.55,Math.min(1.12,c.affect?.pace||1));void post('playing');
-              if(['walk','approach'].includes(step.action)){
+              if(['walk','run','approach'].includes(step.action)){
                 const screen=S.screenOfBox(this.throwSpaceOf(),this.pos.x,this.pos.y),area=AREAS[screen]||AREAS[0];
                 let x=step.target==='left'?area.x+area.width*.22:step.target==='right'||step.target==='edge'?area.x+area.width*.78:area.x+area.width*.5;
                 if(Math.abs(x-this.pos.x-this.halfW)<8)x=area.x+area.width*((x-area.x)/area.width<.5?.65:.35);
                 this.facing=x<this.pos.x+this.halfW?'left':'right';
                 this.moveToCenter(x/VIEW.w,(this.pos.y+this.halfH)/VIEW.h,'line',Math.min(6500,Math.max(1600,front.duration*600))/front.playbackRate);
               }
-              front.addEventListener('ended',()=>resolve(),{once:true});
+              front.addEventListener('ended',()=>{videoEnded=true;},{once:true});
             }
           }
+          if(videoEnded && (!['walk','run','approach'].includes(step.action) || this.posFollow===null)){resolve();return;}
           if(played && (front!==video || this.anim!==asset)){reject(Error('动作被其他互动打断'));return;}
           frame=requestAnimationFrame(watch);
         };frame=requestAnimationFrame(watch);

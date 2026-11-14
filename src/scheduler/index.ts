@@ -26,6 +26,7 @@ export interface SchedulerOptions {
   reminders?: {run(petId:string,signal:AbortSignal):Promise<void>};
   whisper?: {settings():{automaticWhispers:boolean;whisperIntervalSec:number};run(petId:string,signal:AbortSignal):Promise<void>};
   cognitiveIntervalSeconds?: number;
+  idle?: {snapshot():{seconds:number;generation:number}|undefined};
   /** Must establish exclusive ownership and disable old autonomous writers before start. */
   assertExclusive: () => Promise<void>;
   onResult?: (result: CognitiveResult) => void;
@@ -94,11 +95,17 @@ export class LifeScheduler {
               this.nextWhisperAt=Date.now()+whisperSettings.whisperIntervalSec*1000;
               try{await whisper.run(this.options.petId,this.controller.signal);}catch{/* A failed utterance is not a completed action or a wakeup failure. */}
             }
+            const idleBefore=this.options.idle?.snapshot();
             const ongoing=(state.cognitivePlans||[]).some(p=>p.status==='active'||p.status==='failed') || state.goals.some(g=>g.status==='active');
-            if (!resumed && !state.constraints.paused && (claim.changed || hasCognitiveDemand(state) || ongoing) && await this.options.resultCoordinator.claimCognition(this.options.petId,this.options.cognitiveIntervalSeconds??1800,this.controller.signal)) {
+            if (!resumed && !state.constraints.paused && (claim.changed || hasCognitiveDemand(state) || ongoing || (idleBefore?.seconds??0)>=120) && await this.options.resultCoordinator.claimCognition(this.options.petId,this.options.cognitiveIntervalSeconds??1800,this.controller.signal)) {
               const fresh=await this.kernel.getState(this.options.petId);
               const result = await this.cognition.propose(fresh, this.controller.signal, () => this.kernel.getState(this.options.petId));
-              if (result.status === 'proposed' && !this.controller.signal.aborted) await this.options.resultCoordinator.accept(this.options.petId,result,this.controller.signal);
+              if (result.status === 'proposed' && !this.controller.signal.aborted) {
+                const idleAfter=this.options.idle?.snapshot();
+                const wantsWalk=result.proposal?.actionType==='body.activity' || result.candidates.plan.some(step=>step.actionType==='body.activity');
+                // The system input or a direct interaction may have changed while the model was thinking.
+                if(!wantsWalk || (result.proposal?.actionType==='body.activity' && !result.candidates.plan.some(step=>step.actionType==='body.activity') && idleBefore && idleAfter && idleBefore.seconds>=120 && idleAfter.seconds>=120 && idleBefore.generation===idleAfter.generation))await this.options.resultCoordinator.accept(this.options.petId,result,this.controller.signal);
+              }
               this.report(result);
             }
             if (this.controller.signal.aborted) throw new Error('Scheduler stopped');

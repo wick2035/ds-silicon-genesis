@@ -1,12 +1,12 @@
 import type { ExecutionReceipt, OutboxIntent } from '../storage/uow.js';
 
-export type DesktopActionKind='service.eat-rice'|'care.feed'|'care.water'|'care.pet'|'care.play'|'care.soothe'|'care.accompany'|'labor.step'|'token.pickup'|'body.sleep'|'body.wake';
+export type DesktopActionKind='body.activity'|'service.eat-rice'|'care.feed'|'care.water'|'care.pet'|'care.play'|'care.soothe'|'care.accompany'|'labor.step'|'token.pickup'|'body.sleep'|'body.wake';
 type Sender = (command: {actionId:string;petId:string;kind:DesktopActionKind;parameters:Record<string,unknown>}, signal:AbortSignal) => Promise<void>;
 export interface DesktopReceipt {
   petId:string; actionId:string; kind:DesktopActionKind; status:'completed'|'failed'|'interrupted';
   played?:boolean; itemId?:string; commandId?:string; index?:number; surface?:string; x?:number; y?:number; coinId?:string;
   effortSeconds?:number; intensity?:number;
-  reason?:string;
+  reason?:string; distance?:number; activity?:string;
 }
 interface Pending { petId:string; kind:DesktopReceipt['kind']; resolve:(receipt:DesktopReceipt)=>void; reject:(error:Error)=>void }
 /** A host must bind accept() exclusively to an authenticated helper process IPC
@@ -33,7 +33,7 @@ export class TrustedDesktopBridge {
   }
   async execute(petId:string, intent:OutboxIntent, signal:AbortSignal): Promise<ExecutionReceipt> {
     if (signal.aborted) return {status:'unknown',evidence:{reason:'写入租约已失去'}};
-    if (!['service.eat-rice','care.feed','care.water','care.pet','care.play','care.soothe','care.accompany','labor.step','token.pickup','body.sleep','body.wake'].includes(intent.type) || intent.payload.petId !== petId || intent.payload.actionId !== intent.id || !intent.payload.parameters || typeof intent.payload.parameters !== 'object' || Array.isArray(intent.payload.parameters)) throw new Error('桌宠行动无效');
+    if (!['body.activity','service.eat-rice','care.feed','care.water','care.pet','care.play','care.soothe','care.accompany','labor.step','token.pickup','body.sleep','body.wake'].includes(intent.type) || intent.payload.petId !== petId || intent.payload.actionId !== intent.id || !intent.payload.parameters || typeof intent.payload.parameters !== 'object' || Array.isArray(intent.payload.parameters)) throw new Error('桌宠行动无效');
     if (this.pending.has(intent.id)) throw new Error('桌宠行动正在等待回执');
     const kind = intent.type as DesktopReceipt['kind'];
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -53,7 +53,8 @@ export class TrustedDesktopBridge {
       const result = await response;
       if (result.status !== 'completed') return {status:result.status === 'failed' ? 'failed' : 'cancelled',evidence:{actionId:intent.id,kind,reason:result.reason||result.status,...(kind==='labor.step' && result.effortSeconds!==undefined?{confirmed:true,effortSeconds:result.effortSeconds,intensity:result.intensity}:{})}};
       const evidence: Record<string,unknown> = {actionId:intent.id,kind,confirmed:true,played:true};
-      if (kind === 'service.eat-rice'||kind.startsWith('care.')) evidence.itemId = result.itemId;
+      if(kind==='body.activity')Object.assign(evidence,{distance:result.distance,surface:result.surface,activity:result.activity});
+      else if (kind === 'service.eat-rice'||kind.startsWith('care.')) evidence.itemId = result.itemId;
       else if(kind==='body.sleep'||kind==='body.wake')Object.assign(evidence,{restKind:kind==='body.sleep'?'sleep':'wake'});
       else if(kind==='token.pickup')Object.assign(evidence,{coinId:result.coinId,x:result.x,y:result.y,surface:result.surface});
       else Object.assign(evidence,{commandId:result.commandId,index:result.index,surface:result.surface,x:result.x,...(result.effortSeconds === undefined ? {} : {effortSeconds:result.effortSeconds,intensity:result.intensity})});
@@ -75,6 +76,7 @@ export class TrustedDesktopBridge {
  * subsequent atomic commit, not an external purchase. */
 export function createDomainExecutors(bridge: TrustedDesktopBridge): ReadonlyMap<string,(petId:string,intent:OutboxIntent,signal:AbortSignal)=>Promise<ExecutionReceipt>> {
   return new Map<string,(petId:string,intent:OutboxIntent,signal:AbortSignal)=>Promise<ExecutionReceipt>>([
+    ['body.activity',(petId,intent,signal) => bridge.execute(petId,intent,signal)],
     ['service.buy-rice',async (petId,intent,signal) => {
       if (signal.aborted || intent.payload.petId !== petId || intent.payload.actionId !== intent.id || intent.type !== 'service.buy-rice') return {status:'unknown',evidence:{reason:'购买意图不可确认'}};
       return {status:'completed',evidence:{actionId:intent.id,kind:'service.buy-rice',confirmed:true}};

@@ -45,6 +45,7 @@ export function importLegacy(input: LegacyImportInput): LegacyImportResult {
     {name:'care.feed',enabled:true,physical:true,bodyLimits:{allowInjured:true,minStamina:-1,maxPain:101}},
     {name:'service.eat-rice',enabled:true,physical:true,bodyLimits:{allowInjured:true,minStamina:-1,maxPain:101}},
     {name:'labor.step',enabled:true,physical:true},
+    {name:'body.activity',enabled:true,physical:true},
     {name:'token.pickup',enabled:true,physical:true,bodyLimits:{allowInjured:true,minStamina:-1}},
     {name:'body.sleep',enabled:true,physical:true,bodyLimits:{allowInjured:true,minStamina:-1,maxPain:101}},
     {name:'body.wake',enabled:true,physical:true,bodyLimits:{allowSleeping:true,allowInjured:true,minStamina:-1,maxPain:101}},

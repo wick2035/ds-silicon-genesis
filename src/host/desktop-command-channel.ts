@@ -33,6 +33,7 @@ export function createDesktopCommandChannel(store:Reader,sourceCapability:object
     view(petId:string) {
       const c=pending.get(petId)?.command;
       if(!c)return undefined;
+      if(c.kind==='body.activity')return {id:c.actionId,actionId:c.actionId,index:0,surface:'desktop',status:'queued',source:'silicon-walk',expires:Date.now()+30000,steps:[{action:c.parameters.activity,...(c.parameters.target?{target:c.parameters.target}:{})}]};
       if(c.kind==='labor.step')return structuredClone(pending.get(petId)!.world);
       if(c.kind==='body.sleep'||c.kind==='body.wake')return {id:c.actionId,actionId:c.actionId,index:0,surface:'desktop',status:'queued',source:'silicon-rest',restKind:c.kind==='body.sleep'?'sleep':'wake',expires:Date.now()+30000,steps:[{action:'rest'}]};
       if(c.kind==='token.pickup'){const item=pending.get(petId)!;return {id:c.actionId,actionId:c.actionId,coinId:item.coin!.id,index:item.stage,surface:'desktop',status:'queued',source:'tokens',expires:Date.now()+30000,steps:[{action:'walk'},{action:'pickup'}],coin:item.coin,locomotion:'walk'};}
@@ -42,6 +43,12 @@ export function createDesktopCommandChannel(store:Reader,sourceCapability:object
     },
     async receipt(value:any) {
       const item=pending.get(value?.petId), c=item?.command;
+      if(c?.kind==='body.activity') {
+        if(value.id!==c.actionId || value.actionId!==c.actionId || value.index!==0 || value.surface!=='desktop' || !['playing','completed','interrupted'].includes(value.status))throw Error('走动回执不匹配');
+        if(value.status==='playing')return {ok:true};
+        if(value.status==='completed' && (value.played!==true || value.activity!==c.parameters.activity || (['walk','run'].includes(String(c.parameters.activity)) && (!Number.isFinite(value.distance) || value.distance<8 || value.distance>10000))))throw Error('桌面活动未确认');
+        clearTimeout(item!.timer);pending.delete(c.petId);bridge.accept({petId:c.petId,actionId:c.actionId,kind:c.kind,status:value.status,played:value.played===true,surface:'desktop',distance:value.distance,activity:value.activity},sourceCapability);return {ok:true};
+      }
       if(c?.kind==='body.sleep'||c?.kind==='body.wake') {
         if(value.id!==c.actionId || value.actionId!==c.actionId || value.restKind!==(c.kind==='body.sleep'?'sleep':'wake') || value.index!==0 || value.surface!=='desktop' || !['playing','completed','interrupted'].includes(value.status))throw Error('睡眠回执不匹配');
         if(value.status==='playing')return {ok:true};
@@ -74,7 +81,7 @@ export function createDesktopCommandChannel(store:Reader,sourceCapability:object
         played:value.played===true,commandId:value.id,index:value.index,surface:value.surface,x:value.x,...(effortSeconds===undefined?{}:{effortSeconds,intensity:item!.intensity})},sourceCapability);
       return {ok:true};
     },
-    cancelPet(petId:string){const item=pending.get(petId);if(!item)return;clearTimeout(item.timer);pending.delete(petId);if(item.command.kind==='token.pickup'){bridge.accept({petId,actionId:item.command.actionId,kind:'token.pickup',status:'interrupted'},sourceCapability);}else if(item.command.kind==='labor.step'){try{bridge.accept({petId,actionId:item.command.actionId,kind:'labor.step',status:'interrupted',effortSeconds:item.startedAt===undefined?0:Math.max(0,Math.min(30,(Date.now()-item.startedAt)/1000)),intensity:item.intensity},sourceCapability);}catch{bridge.interruptPet(petId,sourceCapability);}}else bridge.interruptPet(petId,sourceCapability);},
+    cancelPet(petId:string, reason='桌面活动被中断'){const item=pending.get(petId);if(!item)return;clearTimeout(item.timer);pending.delete(petId);if(item.command.kind==='body.activity'){bridge.accept({petId,actionId:item.command.actionId,kind:'body.activity',status:'interrupted',reason},sourceCapability);}else if(item.command.kind==='token.pickup'){bridge.accept({petId,actionId:item.command.actionId,kind:'token.pickup',status:'interrupted'},sourceCapability);}else if(item.command.kind==='labor.step'){try{bridge.accept({petId,actionId:item.command.actionId,kind:'labor.step',status:'interrupted',effortSeconds:item.startedAt===undefined?0:Math.max(0,Math.min(30,(Date.now()-item.startedAt)/1000)),intensity:item.intensity},sourceCapability);}catch{bridge.interruptPet(petId,sourceCapability);}}else bridge.interruptPet(petId,sourceCapability);},
     cancelToken(petId:string){if(pending.get(petId)?.command.kind==='token.pickup')this.cancelPet(petId);},
     close(){for(const item of pending.values())clearTimeout(item.timer);pending.clear();}
   };

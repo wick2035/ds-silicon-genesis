@@ -47,6 +47,7 @@ import {verifyOldQQAbsent} from './qq-process-inventory.js';
 import type {CanonicalQQGateway} from './qq-gateway.js';
 import {createDevelopment} from './development.js';
 import {createAttachmentStore} from './attachment-store.js';
+import {DesktopIdle} from './desktop-idle.js';
 import {createImageObserver} from './image-observer.js';
 
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
@@ -86,6 +87,8 @@ export async function main():Promise<void> {
         if(old && ['queued','running'].includes(old.status)){(legacy.world.commandHistory||=[]).push({...structuredClone(old),status:'interrupted',interruptedReason:'host-restarted'});legacy.world.commandHistory=legacy.world.commandHistory.slice(-50);old.status='interrupted';old.interruptedReason='host-restarted';}
         return {};
       });});
+    // Register the executable capability for existing archives without a schema migration.
+    await lease.run(petId,async()=>{const state=await store.loadEnvelope(petId);if(state&&!state.life.constraints.capabilities.some(c=>c.name==='body.activity'))await unitOfWork.apply(petId,state.version,draft=>{draft.life.constraints.capabilities.push({name:'body.activity',enabled:true,physical:true});return {};});});
     const authority={},observerAuthority={},helperAuthority={};
     const humanity=new CanonicalHumanityAdapter(store,unitOfWork,lease,authority,observerAuthority);
     const domain=new LegacyDomain(store,unitOfWork,lease,observerAuthority);
@@ -95,6 +98,7 @@ export async function main():Promise<void> {
     const worksite=createWorksite(store,lease,unitOfWork,id=>commandChannel.view(id),id=>commandChannel.cancelPet(id),id=>worksiteWake(id));
     let wakeTokenPickup:(id:string)=>void=()=>{};
     let semanticResponse:((id:string,requestId:string,detail:unknown)=>Promise<unknown>)|undefined;
+    const desktopIdle=new DesktopIdle();
     const helper=createHelperChannel(humanity,commandChannel.bridge,[petId],observerAuthority,helperAuthority,commandChannel,
       (id,requestId,detail)=>domain.observeSpace(id,requestId,detail,observerAuthority),
       async(id,requestId,detail)=>{const action=(detail as any)?.action;
@@ -105,7 +109,7 @@ export async function main():Promise<void> {
       },
       async(id,requestId,detail)=>{const d=detail as any;if(!d||typeof d.id!=='string'||typeof d.key!=='string'||![d.fromX,d.toX].every((n:unknown)=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=1))throw Error('搬砖拖动观察无效');await domain.laborAction(id,requestId,{action:'disturb',id:d.id,key:d.key,surface:'desktop',fromX:d.fromX,toX:d.toX},observerAuthority);const state=await store.loadEnvelope(id);if(!state)throw Error('状态不可用');return projectLegacySnapshot(state).labor;},
       (id,requestId,detail)=>{if(!semanticResponse)throw Error('互动服务尚未就绪');return semanticResponse(id,requestId,detail);},
-      (id,action)=>action==='snapshot'?worksite.snapshot(id):worksite.act(id,action as Parameters<typeof worksite.act>[1]));
+      (id,action)=>action==='snapshot'?worksite.snapshot(id):worksite.act(id,action as Parameters<typeof worksite.act>[1]),desktopIdle);
     bili=createBiliReader(root);
     const executors=new Map(createDomainExecutors(commandChannel.bridge));
     executors.set('learning.observe',createExplorationExecutor(createPublicWeb(),bili));
@@ -115,7 +119,7 @@ export async function main():Promise<void> {
     const attachments=createAttachmentStore(store,lease,unitOfWork);
     model=createModelFacade(modelConfig,{leaseSignal:lease.signal,budget,resolveImage:attachments.resolve,persist:async value=>{const file=join(root,'data','model-config.json'),temporary=file+'.tmp';await writeFile(temporary,JSON.stringify(value,null,2),{mode:0o600});await rename(temporary,file);}});
     executors.set('image.observe',createImageObserver(store,budget,model));
-    const retrieval=new CanonicalMemoryRetrieval(lease), chat=new CanonicalChat(store,lease,unitOfWork,budget,model,(id,q)=>retrieval.search(id,q),(id,key,input)=>domain.laborAction(id,key,input),(id,input)=>service(id,input),id=>worksiteWake(id));
+    const retrieval=new CanonicalMemoryRetrieval(lease,desktopIdle), chat=new CanonicalChat(store,lease,unitOfWork,budget,model,(id,q)=>retrieval.search(id,q),(id,key,input)=>domain.laborAction(id,key,input),(id,input)=>service(id,input),id=>worksiteWake(id));
     let requestShutdown=()=>{};
     const decideLaborOffer=async(id:string,requestId:string,contractId:string)=>{
       const state=await lease.run(id,()=>store.loadEnvelope(id));
@@ -175,7 +179,7 @@ export async function main():Promise<void> {
         }
       }catch(error){console.error('[tokens] pickup:',error);}finally{pickupRuns.delete(id);}})();
     };
-    scheduler=new LifeScheduler(kernel,cognition,{connectionString:connectionUri(dbConfig.connection),petId,intervalSeconds:60,signal:lease.signal,development,
+    scheduler=new LifeScheduler(kernel,cognition,{connectionString:connectionUri(dbConfig.connection),petId,intervalSeconds:60,cognitiveIntervalSeconds:300,idle:desktopIdle,signal:lease.signal,development,
       reminders:{run:(id,signal)=>todos.remind(id,signal,t=>{if(!publishWhisper)throw Error('桌宠显示尚未就绪');publishWhisper('提醒：'+t.text);})},
       whisper:{settings:()=>model!.getSettings(),run:async(id,signal)=>{if(!publishWhisper)throw Error('桌宠显示尚未就绪');const text=await responses(id,'whisper',signal,undefined,{autonomous:true});if(!signal.aborted)publishWhisper(text);}},
       wakeCoordinator:wakes,deterministic,resultCoordinator:coordinator,

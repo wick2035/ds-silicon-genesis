@@ -98,7 +98,7 @@ export class CognitiveResultCoordinator {
       catch(error){await this.rejectProposal(petId,actionId,error instanceof Error?error.message:'行动不可用');return;}
       try{await this.actions.queue(petId,actionId,state.version);}catch(error){
         const message=error instanceof Error?error.message:'';
-        if(!/探索权限不可用|探索额度配置无效|今日探索额度已用完|探索饭钱配置无效|模拟饭钱不足|图片来源无效/.test(message))throw error;
+        if(!/当前桌面空间或工作状态不允许走动|她在网页工地里|探索权限不可用|探索额度配置无效|今日探索额度已用完|探索饭钱配置无效|模拟饭钱不足|图片来源无效/.test(message))throw error;
         const fresh=await this.reader.loadEnvelope(petId);if(fresh?.life.actions.find(a=>a.id===actionId)?.status==='PROPOSED')await this.rejectProposal(petId,actionId,message);else throw error;return;
       }
     }

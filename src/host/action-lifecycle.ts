@@ -89,7 +89,8 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
       // A proposal was accepted earlier. Revalidate it against the locked latest
       // state, not against its historical proposal version.
       const proposal={...action, expectedStateVersion:draft.version};
-      if((draft.legacy as Record<string,any>).worksite?.inside && (action.actionType.startsWith('care.') || ['service.eat-rice','body.sleep','body.wake','token.pickup'].includes(action.actionType)))throw Error('她在网页工地里，请先接她回桌面');
+      if((draft.legacy as Record<string,any>).worksite?.inside && (action.actionType.startsWith('care.') || ['service.eat-rice','body.sleep','body.wake','token.pickup','body.activity'].includes(action.actionType)))throw Error('她在网页工地里，请先接她回桌面');
+      if(action.actionType==='body.activity' && ((draft.legacy as Record<string,any>).space?.mode!=='outside' || (draft.legacy as Record<string,any>).labor?.contracts?.some((c:any)=>c.status==='working')))throw Error('当前桌面空间或工作状态不允许走动');
       if(action.actionType==='labor.step' && (!(draft.legacy as Record<string,any>).worksite?.inside || (draft.legacy as Record<string,any>).world?.command?.surface!=='web'))throw Error('她不在网页工地里');
       if(action.actionType.startsWith('care.') && !(draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])throw Error('照料须由用户手动发起');
       if(action.actionType==='body.sleep' && !(draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])throw Error('休息须由用户手动发起');
@@ -134,7 +135,7 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
       occurredAt:now, source:'outbox', evidenceLevel:'observed', details:structuredClone(receipt.evidence)};
     const event: LifeEvent = {eventId, petId:draft.petId, type:'action.receipt', source:'outbox',
       occurredAt:now, receivedAt:now, causationId:receiptId,
-      payload:{actionId:action.id, status:outcome}, evidenceLevel:outcome === 'UNKNOWN' ? 'inferred' : 'observed'};
+      payload:{actionId:action.id, status:outcome,...(action.actionType==='body.activity'?{activity:action.parameters.activity,...(action.parameters.target?{target:action.parameters.target}:{}),...(receipt.evidence.reason?{interruption:receipt.evidence.reason}:{})}:{})}, evidenceLevel:outcome === 'UNKNOWN' ? 'inferred' : 'observed'};
     projectOutcome(draft, intent, receipt, now, eventId);
     updateQQ(draft, intent, outcome, receipt.evidence);
     settleExploration(draft, intent, outcome);

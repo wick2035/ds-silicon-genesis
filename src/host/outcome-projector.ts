@@ -18,8 +18,9 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
   const pet = draft.legacy as Obj, human = draft.humanity as Obj;
   assert(params && typeof params === 'object' && !Array.isArray(params), '行动参数无效');
   // Each recognized result is explicitly bound to this action and its executor.
-  if (!['service.buy-rice','care.feed','care.water','care.pet','care.play','care.soothe','care.accompany','service.eat-rice','labor.step','token.pickup','body.sleep','body.wake','image.observe','learning.observe'].includes(intent.type)) return;
+  if (!['body.activity','service.buy-rice','care.feed','care.water','care.pet','care.play','care.soothe','care.accompany','service.eat-rice','labor.step','token.pickup','body.sleep','body.wake','image.observe','learning.observe'].includes(intent.type)) return;
   assert(e && e.actionId === intent.id && e.kind === intent.type && e.confirmed === true, '缺少与行动绑定的可信执行结果');
+  if(intent.type==='body.activity'){assert(e.played===true && e.surface==='desktop' && e.activity===params.activity && (!['walk','run'].includes(params.activity) || finite(e.distance) && e.distance>=8 && e.distance<=10000),'桌面活动未完成');return;}
   if (intent.type === 'service.buy-rice') {
     const services = pet.services; const wallet = pet.wallet; const price = pet.config?.costs?.feed;
     assert(services && Array.isArray(services.inventory) && wallet && finite(wallet.balance) && finite(price) && price >= 0, '饭钱或库存状态无效');

@@ -8,11 +8,12 @@ import type {createDesktopCommandChannel} from './desktop-command-channel.js';
  * to HTTP handlers. Observations travel on the spawned child's stdout bridge. */
 export function createHelperChannel(humanity:CanonicalHumanityAdapter, desktop:TrustedDesktopBridge,
   petIds:readonly string[], observerAuthority:object, sourceCapability:object,
-  commands:ReturnType<typeof createDesktopCommandChannel>, observeSpace?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, tokens?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, disturb?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, semantic?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, worksite?:(petId:string,action:string)=>Promise<unknown>) {
+  commands:ReturnType<typeof createDesktopCommandChannel>, observeSpace?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, tokens?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, disturb?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, semantic?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, worksite?:(petId:string,action:string)=>Promise<unknown>, idle?:{update(seconds:number,observedAt:number):void;clear():void}) {
   const allowed=new Set(petIds), observers=new Map<string,HelperObserver>();
   const epochs=new Map<string,string>();
   let epoch='', pending=Promise.resolve();
   const disconnected=(old:string) => {
+    idle?.clear();
     for(const id of allowed) commands.cancelPet(id);
     for(const observer of observers.values())observer.close(sourceCapability);
     observers.clear();
@@ -44,9 +45,11 @@ export function createHelperChannel(humanity:CanonicalHumanityAdapter, desktop:T
     },
     /** Only the authenticated helper child transport may call this. HTTP and
      * model output are never accepted as observations. */
-    async interaction(sourceEpoch:string, event:{epoch:string;petId:string;eventId:string;kind:'semantic'|'labor-disturb'|'tokens'|'space'|'pet'|'feed'|'collision'|'impact'|'knock'|'utensil'|'sleep'|'wake';detail?:unknown}) {
+    async interaction(sourceEpoch:string, event:{epoch:string;petId:string;eventId:string;kind:'semantic'|'labor-disturb'|'tokens'|'space'|'pet'|'feed'|'collision'|'impact'|'knock'|'utensil'|'sleep'|'wake'|'idle';detail?:unknown}) {
       if(sourceEpoch!==epoch || !event || !allowed.has(event.petId) || epochs.get(event.petId)!==event.epoch || !/^[a-zA-Z0-9-]{8,48}$/.test(event.eventId))throw Error('互动观察来源不可信');
-      if(['collision','impact','knock','utensil','sleep'].includes(event.kind))commands.cancelPet(event.petId);
+      if(event.kind==='idle'){const d=event.detail as any;if(!idle || !d)throw Error('空闲观察不可用');idle.update(d.seconds,d.observedAt);return {ok:true};}
+      if(event.kind==='pet')commands.cancelPet(event.petId,'爸爸摸了我');
+      if(['collision','impact','knock','utensil','sleep'].includes(event.kind))commands.cancelPet(event.petId,event.kind==='collision'?'身体发生了实际边界碰撞':event.kind==='impact'?'身体受到晃动':event.kind==='knock'?'爸爸连续敲了我的身体':event.kind==='utensil'?'身体被物体碰到':'进入睡眠');
       const id=`helper:${event.epoch}:${event.eventId}`;
       if(event.kind==='semantic'){if(!semantic)throw Error('互动回应未接入');return semantic(event.petId,id,event.detail);}
       if(event.kind==='labor-disturb'){commands.cancelPet(event.petId);if(!disturb)throw Error('搬砖互动未接入');return {ok:true,labor:await disturb(event.petId,id,event.detail)};}
@@ -66,12 +69,12 @@ export function createHelperChannel(humanity:CanonicalHumanityAdapter, desktop:T
       if(sourceEpoch!==epoch || !event || !allowed.has(event.petId))throw Error('桌宠通道不匹配');
       if(event.kind==='closed') {
         if(epochs.get(event.petId)!==event.epoch) return;
-        commands.cancelPet(event.petId);observers.get(event.petId)?.close(sourceCapability);observers.delete(event.petId);epochs.delete(event.petId);
+        idle?.clear();commands.cancelPet(event.petId);observers.get(event.petId)?.close(sourceCapability);observers.delete(event.petId);epochs.delete(event.petId);
         await humanity.observeRestraint(event.petId,{requestId:`helper:${event.epoch}:${event.eventId}`,helperReady:false,restrained:true,observedAt:event.observedAt},observerAuthority);
         return;
       }
       // Wake a dispatcher holding the per-pet gate before attempting to persist.
-      if(event.kind==='grip')commands.cancelPet(event.petId);
+      if(event.kind==='grip'){idle?.clear();commands.cancelPet(event.petId,'爸爸按住了我的身体，暂时还不知道是轻点还是拖拽');}
       await pending;
       if(sourceEpoch!==epoch)throw Error('桌宠通道已结束');
       let observer=observers.get(event.petId);
