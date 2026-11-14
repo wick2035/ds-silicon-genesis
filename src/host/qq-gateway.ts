@@ -89,7 +89,15 @@ export class CanonicalQQGateway extends QQPetBridge {
   private async runTurn(scene:'c2c'|'group',items:Item[]):Promise<void> {
     items=items.filter(item=>Date.now()-item.receivedAt<=240000);
     if(!items.length||this.#closed||this.#options.signal.aborted)return;
-    const text=await this.#options.onTurn({petId:this.#options.config.petId||'main',scene,messages:items.map(({text,isOwner,eventId})=>({text,isOwner,eventId}))},this.#options.signal);
+    let text:string|null;
+    try {
+      text=await this.#options.onTurn({petId:this.#options.config.petId||'main',scene,messages:items.map(({text,isOwner,eventId})=>({text,isOwner,eventId}))},this.#options.signal);
+    } catch(error) {
+      this.statusSafe('message-failed');
+      if(this.#closed||this.#options.signal.aborted)return;
+      const walletEmpty=error instanceof Error && error.message==='模拟饭钱已用完，请先添加饭钱';
+      text=scene==='c2c'&&walletEmpty?'我的饭钱用完啦，请先加一点。':'我暂时没接上，请稍后再试。';
+    }
     if(text?.trim()&&!this.#closed&&!this.#options.signal.aborted) await this.respond(scene,items,text);
   }
   private async respond(scene:'c2c'|'group',items:Item[],text:string):Promise<void> {
