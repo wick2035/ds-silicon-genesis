@@ -18,7 +18,7 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
   const pet = draft.legacy as Obj, human = draft.humanity as Obj;
   assert(params && typeof params === 'object' && !Array.isArray(params), '行动参数无效');
   // Each recognized result is explicitly bound to this action and its executor.
-  if (!['service.buy-rice','care.feed','service.eat-rice','labor.step','token.pickup','body.sleep','body.wake','image.observe','learning.observe'].includes(intent.type)) return;
+  if (!['service.buy-rice','care.feed','care.water','care.pet','care.play','care.soothe','care.accompany','service.eat-rice','labor.step','token.pickup','body.sleep','body.wake','image.observe','learning.observe'].includes(intent.type)) return;
   assert(e && e.actionId === intent.id && e.kind === intent.type && e.confirmed === true, '缺少与行动绑定的可信执行结果');
   if (intent.type === 'service.buy-rice') {
     const services = pet.services; const wallet = pet.wallet; const price = pet.config?.costs?.feed;
@@ -33,6 +33,7 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
     return;
   }
   if(intent.type==='care.feed'){assert(e.played===true && e.itemId==='parent','投喂动画未完成');const result=actHumanity(human,'feed',at);assert(result.ok,result.message||'当前不能投喂');settleSimulatedSpending(draft,'feed',intent.id);draft.humanity=result.state;draft.life.events.push({eventId:'care-feed:'+intent.id,petId:draft.petId,type:'social.care',source:'executor',actorId:'dad',occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'observed',payload:{action:'feed'}});rebuildRelationships(draft.life);return;}
+  if(['care.water','care.pet','care.play','care.soothe','care.accompany'].includes(intent.type)){const action=intent.type.slice(5);assert(e.played===true && e.itemId===action,'照料动画未完成');const result=actHumanity(human,action,at);assert(result.ok,result.message||'当前不能照料');draft.humanity=result.state;draft.life.events.push({eventId:'care-'+action+':'+intent.id,petId:draft.petId,type:'social.care',source:'executor',actorId:'dad',occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'observed',payload:{action}});rebuildRelationships(draft.life);return;}
   if (intent.type === 'service.eat-rice') {
     const services = pet.services; const itemId = params.itemId;
     assert(typeof itemId === 'string' && e.itemId === itemId && e.played === true && services && Array.isArray(services.inventory), '吃饭回执无效');
@@ -43,6 +44,7 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
     assert(result.ok, '身体状态变化，不能结算这次进食');
     const next = result.state; next.serviceActions = {...human.serviceActions,[intent.id]:{ok:true,at,action:'feed'}};
     draft.humanity = next; item.status = 'eaten'; item.eatenAt = at; pet.lastInteraction = at;
+    draft.life.events.push({eventId:'meal:'+intent.id,petId:draft.petId,type:'body.meal',source:'executor',occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'observed',payload:{action:'feed'}});
     if (services.eating?.itemId === itemId) services.eating = null;
     return;
   }

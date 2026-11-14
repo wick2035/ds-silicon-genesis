@@ -331,7 +331,8 @@ function applySayLeaf(petId, leaf) {
       continue;
     }
     if (leaf.data?.humanity) { s.humanity = leaf.data.humanity; s.syncPainState(leaf.data.humanity); }
-    s.showWhisper(said.text, said.image, said.url, said.duration, said.anim);
+    if (leaf.data?.careReaction === true && s.showInnerThought) s.showInnerThought(said.text);
+    else s.showWhisper(said.text, said.image, said.url, said.duration, said.anim);
     // 两端各判各的：叶子点名 desktop 才念，没点名或点了网页端就只弹气泡。
     // 必须留在按 petId 过滤的循环里：每个窗口都收到全部叶子（全局计数器唤醒所有窗口），
     // 放到循环外会让没装这只宠物的窗口跟着一起念，N 只桌面宠物就是 N 份语音。

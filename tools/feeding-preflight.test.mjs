@@ -5,10 +5,10 @@ import {createLegacyServiceActions} from '../dist/host/legacy-service-actions.js
 import {projectBody,projectActionBody} from '../dist/host/body-projection.js';
 import {projectOutcome} from '../dist/host/outcome-projector.js';
 
-test('午休时饥饿可投喂，其他休息限制与冷却仍生效', () => {
+test('午休时段不会自动进入休息，吃喝与冷却按实际身体状态判断', () => {
   const now=Date.parse('2026-11-14T05:00:00Z'),human=createHumanity(now);
   human.stats.satiety=0;
-  assert.equal(describeHumanity(human,now).resting,true);
+  assert.equal(describeHumanity(human,now).resting,false);
   const fed=actHumanity(human,'feed',now);
   assert.equal(fed.ok,true);
   assert.ok(describeHumanity(fed.state,now+25000).stats.satiety>0);
@@ -16,11 +16,13 @@ test('午休时饥饿可投喂，其他休息限制与冷却仍生效', () => {
   human.stats.satiety=30;
   assert.equal(actHumanity(human,'feed',now).ok,true);
   human.stats.satiety=31;
-  assert.equal(actHumanity(human,'feed',now).reason,'resting');
+  assert.equal(actHumanity(human,'feed',now).ok,true);
   human.stats.satiety=0;
   human.sleeping=true;
   assert.equal(actHumanity(human,'feed',now).reason,'resting');
   human.sleeping=false;
+  assert.equal(actHumanity(human,'water',now).ok,true);
+  human.restingUntil=now+60000;
   assert.equal(actHumanity(human,'water',now).reason,'resting');
 });
 
@@ -58,6 +60,6 @@ test('睡眠或冷却会在投喂动作前明确提示', async () => {
   human.sleeping=false;
   human.awakeUntil=now+60000;
   human.cooldowns.feed=now+60000;
-  await assert.rejects(service('main',request),/刚投喂过/);
+  await assert.rejects(service('main',request),/刚照料过/);
   assert.equal(writes,0);
 });

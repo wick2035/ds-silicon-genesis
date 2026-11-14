@@ -44,17 +44,8 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     if(signal.aborted)return;
     const human=await humanity.get(petId);
     if(signal.aborted || !allowAutonomous || human.restrained || human.helperReady!==true)return;
-    const locationState=await reader.loadEnvelope(petId);
-    if(!locationState||signal.aborted)return;
-    const bodyInWorksite=(locationState.legacy as Record<string,any>).worksite?.inside===true;
-    const restKind=human.sleeping ? (human.stats?.stamina>=75 && human.stats?.energy>=75?'body.wake':null) : (human.stats?.stamina<20 || human.stats?.energy<20?'body.sleep':null);
-    if(restKind && !bodyInWorksite) {
-      await gate.run(petId,async()=>{let current=await reader.loadEnvelope(petId);if(!current||signal.aborted||current.life.constraints.paused||current.life.actions.some(a=>['body.sleep','body.wake'].includes(a.actionType)&&['PENDING','DISPATCHED','UNKNOWN'].includes(a.status)))return;
-        const id='rest:'+randomUUID(),at=new Date().toISOString();await uow.apply(petId,current.version,draft=>{draft.life.actions.push({id,petId,actionType:restKind,parameters:{},priority:70,interruptPolicy:'safe-point',requiredCapabilities:[restKind],expectedStateVersion:draft.version,sourceIds:[],status:'PROPOSED',createdAt:at,updatedAt:at});return {};});
-        current=await reader.loadEnvelope(petId);if(!current||signal.aborted)return;await actions.queue(petId,id,current.version);if(!signal.aborted)await dispatcher.dispatch(id);});return;
-    }
     if(human.sleeping)return;
-    if(human.resting)return;
+    if(Number.isFinite(human.restingUntil) && human.restingUntil>Date.now())return;
     const state=await reader.loadEnvelope(petId);
     if(signal.aborted || !state || state.life.constraints.paused)return;
     const legacy=state.legacy as Record<string,any>, inventory=legacy.services?.inventory;

@@ -89,9 +89,10 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
       // A proposal was accepted earlier. Revalidate it against the locked latest
       // state, not against its historical proposal version.
       const proposal={...action, expectedStateVersion:draft.version};
-      if((draft.legacy as Record<string,any>).worksite?.inside && ['service.eat-rice','care.feed','body.sleep','body.wake','token.pickup'].includes(action.actionType))throw Error('她在网页工地里，请先接她回桌面');
+      if((draft.legacy as Record<string,any>).worksite?.inside && (action.actionType.startsWith('care.') || ['service.eat-rice','body.sleep','body.wake','token.pickup'].includes(action.actionType)))throw Error('她在网页工地里，请先接她回桌面');
       if(action.actionType==='labor.step' && (!(draft.legacy as Record<string,any>).worksite?.inside || (draft.legacy as Record<string,any>).world?.command?.surface!=='web'))throw Error('她不在网页工地里');
-      if(action.actionType==='care.feed' && !(draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])throw Error('喂饭须由用户手动发起');
+      if(action.actionType.startsWith('care.') && !(draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])throw Error('照料须由用户手动发起');
+      if(action.actionType==='body.sleep' && !(draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])throw Error('休息须由用户手动发起');
       if(action.actionType==='qq.send')validateQQReply(draft,state,proposal);
       else if((draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])validateManualService(draft,state,proposal);
       else validateProposal(state,proposal);

@@ -5,7 +5,7 @@ import type {CanonicalEnvelope} from '../storage/postgres.js';
 export function conversationContext(state:LifeState, envelope:CanonicalEnvelope) {
   const pet=envelope.legacy as Record<string,any>, config=pet.config??{}, wallet=pet.wallet??{};
   const abilities=pet.abilities??{}, inventory=Array.isArray(pet.services?.inventory)?pet.services.inventory:[];
-  const actions=state.actions.filter(a=>['service.buy-rice','service.eat-rice','care.feed','learning.observe','image.observe','body.sleep','body.wake'].includes(a.actionType) && a.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id))).slice(-8).map(a=>{
+  const actions=state.actions.filter(a=>(a.actionType.startsWith('care.')||['service.buy-rice','service.eat-rice','learning.observe','image.observe','body.sleep','body.wake'].includes(a.actionType)) && a.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id))).slice(-8).map(a=>{
     const receipt=state.receipts.find(r=>r.actionId===a.id && r.receiptId===a.receiptId && state.events.some(e=>e.causationId===r.receiptId && !Object.hasOwn(state.invalidSources,e.eventId)));
     const details=receipt?.details as Record<string,unknown>|undefined;
     const status=receipt?.status??(['COMPLETED','FAILED','CANCELLED','UNKNOWN'].includes(a.status)?'UNCONFIRMED':a.status);

@@ -48,7 +48,7 @@ export class CanonicalHumanityAdapter {
   async prompt(petId: string): Promise<string> { const state = await this.get(petId); return humanityPrompt(state, this.now()); }
   async act(petId: string, action: string, requestId: string): Promise<HumanState> {
     if (!identifier(requestId)) throw new Error('照料操作需要稳定请求标识');
-    if (['feed', 'explore'].includes(action)) throw new Error('该行动必须经真实执行回执');
+    if (['feed', 'water', 'explore'].includes(action)) throw new Error('该行动必须经真实执行回执');
     return this.apply(petId, (human, now, draft) => {
       const prior = human.canonicalActions?.[requestId];
       if (prior) { if (prior.action !== action || prior.kind !== 'act') throw new Error('照料标识冲突'); return {state:human,result:{...prior.result,state:describeHumanity(human,now),duplicate:true}}; }

@@ -174,7 +174,7 @@ export function advanceHumanity(input, now = Date.now()) {
   if (t > s.updatedAt) { settleResponses(s, t); s.updatedAt = t; }
   while (t < now) {
     const end = Math.min(t + 15 * 60000, now), h = (end - t) / 3600000;
-    const rest = s.sleeping || t < s.restingUntil || (humanNight(t) && !(t < s.awakeUntil));
+    const rest = s.sleeping || t < s.restingUntil;
     const b = s.stats;
     b.satiety -= h * (rest ? 2.5 : 4); b.hydration -= h * (rest ? 2 : 3.2);
     b.stamina += h * (rest ? 13 : -3); b.energy += h * (rest ? 17 : -4.5);
@@ -204,7 +204,7 @@ export function advanceHumanity(input, now = Date.now()) {
 export function describeHumanity(s, now = Date.now()) {
   s = advanceHumanity(s, now);
   const b = s.stats;
-  const resting = s.sleeping || s.restingUntil > now || (humanNight(now) && !(s.awakeUntil > now));
+  const resting = s.sleeping || s.restingUntil > now;
   const desires = { food: humanClamp(Math.max(100 - b.satiety, Number.isFinite(s.lastFedAt) && now - s.lastFedAt >= 3600000 ? 55 + (now - s.lastFedAt - 3600000) / 3600000 * 8 : 0)), rest: humanClamp(Math.max(100 - b.energy, (100 - b.stamina) * .85) + (humanNight(now) ? 18 : 0)),
     company: humanClamp(18 + Math.max(0, now - s.lastInteraction) / 3600000 * 4 + b.pain * .12 + (100 - b.security) * .12),
     curiosity: humanClamp(26 + b.energy * .4 - b.stress * .3 - b.pain * .2 - (s.satisfaction?.curiosity || 0)), play: humanClamp(20 + b.stamina * .35 - b.pain * .5 - b.stress * .12 - (s.satisfaction?.play || 0)),
@@ -216,7 +216,7 @@ export function describeHumanity(s, now = Date.now()) {
   else if (s.cryingUntil > now) { mood = '撞疼哭了'; thought = s.lastThought; action = '照料一下'; }
   else if (b.hydration < 30) { mood = '口渴了'; thought = '爸爸，给我留一口水'; action = '喝点水'; }
   else if (b.satiety < 30 || desires.food >= 55) { mood = '肚子空空'; thought = '饭点是不是快到了呀'; action = '喂点饭'; }
-  else if (resting || b.energy < 28) { mood = '困困的'; thought = '再睡五分钟，醒来再陪你'; action = '安静休息'; }
+  else if (resting || b.energy < 28 || desires.rest >= 70) { mood = '困困的'; thought = resting ? '先安静歇一会儿' : '有点困了，想和爸爸商量歇一会儿'; action = '安静休息'; }
   else if (s.sensitivity?.hurt >= 10) { mood = s.sensitivity.softened ? '嘴硬着心软了' : '气鼓鼓的小委屈'; thought = s.sensitivity.softened ? '也没有那么生气了……再哄一句嘛' : s.sensitivity.kind === 'height' ? '半米怎么啦，也要认真看着我嘛' : s.sensitivity.kind === 'weight' ? '那是软乎乎……才不是胖呢' : '又叫大肥鱼……好听的名字呢'; action = '陪它待会儿'; }
   else if (s.reunion && now >= s.reunion.at && now - s.reunion.at < 10 * 60000) { mood = '重逢后的小欢喜'; thought = '爸爸回来啦……才没有一直等呢'; action = '陪它待会儿'; }
   else if (s.emotions.anger > 42) { mood = '有点小脾气'; thought = '我先把尾巴收起来，等一会儿再说'; action = '陪它待会儿'; }

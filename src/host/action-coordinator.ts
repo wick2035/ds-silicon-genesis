@@ -16,11 +16,12 @@ export class ActionCoordinator {
       const matches = draft.life.actions.filter(action => action.id === actionId);
       if (matches.length !== 1 || matches[0].status !== 'PROPOSED') throw new Error('行动不处于可排队状态');
       const action = matches[0];
-      if((draft.legacy as Record<string,any>).worksite?.inside && ['service.eat-rice','care.feed','body.sleep','body.wake','token.pickup'].includes(action.actionType))throw Error('她在网页工地里，请先接她回桌面');
+      if((draft.legacy as Record<string,any>).worksite?.inside && (action.actionType.startsWith('care.') || ['service.eat-rice','body.sleep','body.wake','token.pickup'].includes(action.actionType)))throw Error('她在网页工地里，请先接她回桌面');
       validateActionParameters(action.actionType,action.parameters);
       const state: LifeState = {...structuredClone(draft.life), petId, version:draft.version, ...projectActionBody(draft,this.body(draft),action.actionType)};
       const proposal={...action, expectedStateVersion:draft.version};
-      if(action.actionType==='care.feed' && !(draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])throw Error('喂饭须由用户手动发起');
+      if(action.actionType.startsWith('care.') && !(draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])throw Error('照料须由用户手动发起');
+      if(action.actionType==='body.sleep' && !(draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])throw Error('休息须由用户手动发起');
       if((draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])validateManualService(draft,state,proposal);else validateProposal(state,proposal);
       if(action.actionType==='learning.observe'||action.actionType==='image.observe') {
         const pet=draft.legacy as Record<string,any>, wallet=pet.wallet, cost=pet.config?.costs?.explore;

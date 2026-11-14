@@ -1,5 +1,6 @@
 import {createCanonicalTodos,createTodoRoute} from './canonical-todos.js';
 import {createLegacyResponses} from './legacy-responses.js';
+import {createCareReactions} from './care-reactions.js';
 import {projectLegacySnapshot} from './legacy-snapshot.js';
 import {readFile,writeFile,rename,realpath,stat} from 'node:fs/promises';
 import {createRequire} from 'node:module';
@@ -155,6 +156,7 @@ export async function main():Promise<void> {
     let resolveWhisperImage:((name:string,surface?:string)=>Promise<string>)|undefined;
     let validateWhisperSurface:((surface?:string)=>void)|undefined;
     let configuredPetIds:(()=>Set<string>)|undefined;
+    const reactionBaseline=await store.loadEnvelope(petId);if(!reactionBaseline)throw Error('生命状态不可用');
     const todos=createCanonicalTodos(store,lease,unitOfWork),todoRoute=createTodoRoute(todos,petId);
     const deterministic=createDeterministicLife(humanity,store,service,lease,unitOfWork,actions,dispatcher,id=>budget.refresh(id),id=>tokens.held(id));
     const pickupRuns=new Set<string>();
@@ -179,6 +181,8 @@ export async function main():Promise<void> {
       hostReady:(deps,helpers)=>{
         configuredPetIds=()=>{const cfg=helpers.readAllConfig(deps.configPaths),ids=new Set<string>([petId]);if(!cfg||typeof cfg!=='object'||!Object.keys(cfg).length)throw Error('宠物配置不可用');for(const conf of Object.values(cfg) as any[]){if(!Array.isArray(conf?.pets))throw Error('宠物配置结构无效');for(const pet of conf.pets){if(typeof pet?.id!=='string'||!pet.id)throw Error('宠物配置标识无效');ids.add(pet.id);}}return ids;};
         publishWhisper=(text:string,image?:string,surface?:string)=>{const cfg=helpers.readAllConfig(deps.configPaths);const voiceTo=cfg.main?.voiceEnabled===true&&(surface==='web'||surface==='desktop')?surface:undefined;deps.state.writePet(petId,'say',{text,companionWhisper:true,...(image?{image}:{}),...(voiceTo?{voiceTo}:{})});};
+        const reactToCare=createCareReactions(reactionBaseline,(id,event)=>responses(id,'care',lease.signal,event),text=>deps.state.writePet(petId,'say',{text,careReaction:true,anim:false,duration:6500}));
+        unitOfWork.onCommit(reactToCare);dispatcher.onCommit(reactToCare);
         validateWhisperSurface=(surface?:string)=>{const params=new URLSearchParams({pet:petId,...(surface?{surface}:{})});if(!deps.requirePet(params,()=>helpers.readAllConfig(deps.configPaths),{surface:true}).ok)throw Error('当前显示端不可用');};
         resolveWhisperImage=async(name:string,surface?:string)=>{const key=name.trim();if(!key||key.length>120||/[\/\\:\x00-\x1f]/.test(key)||key==='.'||key==='..')throw Error('表情名称无效');const params=new URLSearchParams({pet:petId,...(surface?{surface}:{})});const who=deps.requirePet(params,()=>helpers.readAllConfig(deps.configPaths),{surface:true});if(!who.ok)throw Error('当前显示端不可用');const memes=who.conf?.memes;if(!memes||!Object.hasOwn(memes,key)||typeof memes[key]!=='string'||!memes[key].trim())throw Error('表情不在当前素材池');for(const dir of deps.memeDirsFor(who.entry)){try{const base=await realpath(dir),file=await realpath(join(dir,key+'.png')),rel=relative(base,file);if(!rel||rel==='..'||rel.startsWith('..'+(process.platform==='win32'?'\\':'/'))||isAbsolute(rel))continue;const info=await stat(file);if(info.isFile())return key;}catch{}}throw Error('表情图片不可用');};
         const sync=(state:any)=>{if(state.petId!==petId)return;const sleeping=projectBody(state).body.sleeping;

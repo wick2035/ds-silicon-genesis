@@ -1,8 +1,9 @@
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 import {TrustedDesktopBridge} from './domain-executors.js';
+import type {DesktopActionKind} from './domain-executors.js';
 
 type Reader={loadEnvelope(petId:string):Promise<CanonicalEnvelope|null>};
-type Command={actionId:string;petId:string;kind:'service.eat-rice'|'care.feed'|'labor.step'|'token.pickup'|'body.sleep'|'body.wake';parameters:Record<string,unknown>};
+type Command={actionId:string;petId:string;kind:DesktopActionKind;parameters:Record<string,unknown>};
 type Pending={command:Command;timer:ReturnType<typeof setTimeout>;startedAt?:number;intensity?:number;stage?:number;coin?:{id:string;x:number;y:number};world?:Record<string,any>};
 
 /** Matches completed animation observations from the helper main process to the
@@ -35,8 +36,9 @@ export function createDesktopCommandChannel(store:Reader,sourceCapability:object
       if(c.kind==='labor.step')return structuredClone(pending.get(petId)!.world);
       if(c.kind==='body.sleep'||c.kind==='body.wake')return {id:c.actionId,actionId:c.actionId,index:0,surface:'desktop',status:'queued',source:'silicon-rest',restKind:c.kind==='body.sleep'?'sleep':'wake',expires:Date.now()+30000,steps:[{action:'rest'}]};
       if(c.kind==='token.pickup'){const item=pending.get(petId)!;return {id:c.actionId,actionId:c.actionId,coinId:item.coin!.id,index:item.stage,surface:'desktop',status:'queued',source:'tokens',expires:Date.now()+30000,steps:[{action:'walk'},{action:'pickup'}],coin:item.coin,locomotion:'walk'};}
-      if(c.kind!=='service.eat-rice' && c.kind!=='care.feed')return undefined;
-      return {id:c.actionId,actionId:c.actionId,itemId:c.kind==='care.feed'?'parent':c.parameters.itemId,index:0,surface:'desktop',status:'queued',source:'silicon-eat',expires:Date.now()+30000,steps:[{action:'eat'}]};
+      if(c.kind!=='service.eat-rice' && !c.kind.startsWith('care.'))return undefined;
+      const care=c.kind.slice(5),itemId=c.kind==='service.eat-rice'?c.parameters.itemId:care==='feed'?'parent':care;
+      return {id:c.actionId,actionId:c.actionId,itemId,index:0,surface:'desktop',status:'queued',source:'silicon-eat',expires:Date.now()+30000,steps:[{action:c.kind==='service.eat-rice'||care==='feed'?'eat':care==='water'?'drink':care}]};
     },
     async receipt(value:any) {
       const item=pending.get(value?.petId), c=item?.command;
@@ -52,10 +54,10 @@ export function createDesktopCommandChannel(store:Reader,sourceCapability:object
         if(value.status==='completed' && item!.stage===0){item!.stage=1;return {ok:true};}
         clearTimeout(item!.timer);pending.delete(c.petId);bridge.accept({petId:c.petId,actionId:c.actionId,kind:c.kind,status:value.status,played:value.played===true,coinId:coin.id,surface:'desktop',x:value.x,y:value.y},sourceCapability);return {ok:true};
       }
-      if(c?.kind==='service.eat-rice'||c?.kind==='care.feed') {
-        if(value.id!==c.actionId || value.actionId!==c.actionId || value.itemId!==(c.kind==='care.feed'?'parent':c.parameters.itemId) || value.index!==0 || value.surface!=='desktop' || !['playing','completed','interrupted'].includes(value.status))throw Error('吃饭回执没有对应行动');
+      if(c?.kind==='service.eat-rice'||c?.kind.startsWith('care.')) {
+        if(value.id!==c.actionId || value.actionId!==c.actionId || value.itemId!==(c.kind==='service.eat-rice'?c.parameters.itemId:c.kind==='care.feed'?'parent':c.kind.slice(5)) || value.index!==0 || value.surface!=='desktop' || !['playing','completed','interrupted'].includes(value.status))throw Error('照料回执没有对应行动');
         if(value.status==='playing')return {ok:true};
-        if(value.status==='completed' && value.played!==true)throw Error('吃饭动画未完成');
+        if(value.status==='completed' && value.played!==true)throw Error('照料动画未完成');
         clearTimeout(item!.timer);pending.delete(c.petId);
         bridge.accept({petId:c.petId,actionId:c.actionId,kind:c.kind,status:value.status,played:value.played===true,itemId:value.itemId},sourceCapability);
         return {ok:true};
