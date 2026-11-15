@@ -1,6 +1,7 @@
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
+import {speechIdentity,speechSources} from '../kernel/speech-provenance.js';
 import { rankGoals, validateProposal, workspace } from '../kernel/index.js';
 import type { ActionProposal, CognitiveWorkspace, LifeState, Memory } from '../kernel/types.js';
 
@@ -71,7 +72,7 @@ export class Cognition {
       // Financial bookkeeping and scheduler events must not crowd the actual
       // conversation out of the next autonomous decision.
       const selected=new Set([...visible.filter(e=>['conversation.user','conversation.assistant'].includes(e.type)).slice(-10),...visible.filter(e=>!['conversation.user','conversation.assistant'].includes(e.type)).slice(-8)]);
-      snapshot.recentEvents = visible.filter(e=>selected.has(e)).map(e=>({eventId:e.eventId,type:e.type,occurredAt:e.occurredAt,evidenceLevel:e.evidenceLevel,payload:JSON.stringify(e.payload)?.slice(0,700) ?? ''}));
+      snapshot.recentEvents = visible.filter(e=>selected.has(e)).map(e=>({eventId:e.eventId,type:e.type,occurredAt:e.occurredAt,...speechIdentity(e),speakers:speechSources([e.eventId],state),evidenceLevel:e.evidenceLevel,payload:JSON.stringify(e.payload)?.slice(0,700) ?? ''}));
       snapshot.relevantMemories = await this.retrieval.forCognition(state);
       snapshot.environment = await this.retrieval.world(state);
       const evaluated = await contextGraph.invoke({ state, snapshot, observation: [], recall: [], appraisal: [], motivations: [], rankedGoals: [] });

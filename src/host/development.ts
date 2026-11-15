@@ -2,6 +2,7 @@ import {developmentMaterial,DIARY_INSTRUCTION} from './development-material.js';
 import {COMPANION_PERSONALITY,companionContext} from './companion-personality.js';
 import {checkSimulatedSpending,settleSimulatedSpending} from './simulated-spending.js';
 import {randomUUID} from 'node:crypto';
+import {SPEAKER_MEMORY_RULE} from '../kernel/speech-provenance.js';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 import type {PetGate,UnitOfWork} from '../storage/uow.js';
 import type {DurableCognitiveBudget} from './cognitive-budget.js';
@@ -32,9 +33,10 @@ export function createDevelopment(store:Reader,gate:PetGate,uow:UnitOfWork,budge
     if(!claim)return false;
     try{
       const sel=model.agentDefaultModel.currentSelection(),system=COMPANION_PERSONALITY+'\n'+(kind==='diary'?DIARY_INSTRUCTION:'结合真实事件及其中标明为主观的 self.thought，保留当时感受，谨慎总结可能的兴趣与习惯，不要把一次经历当稳定性格。只返回 JSON：{"text":"...","sources":["事件ID"]}。')+'\n用大肥鱼自己的口吻记下当时真实的在意，可以是白饭、手机、爸爸或小委屈，没发生就不编。反思可以形成有来源、可放弃的小办法，不把一次经历变成固定台词、人格或操作指令；不改变账本、权限或核心身份。当前上下文只是此刻实况，不能当成过去当天的经历。';
+      const attributedSystem=system+'\n'+SPEAKER_MEMORY_RULE;
       // Reasoning models count their thinking tokens toward the completion
       // limit, even when the final diary itself is short.
-      let text='';await budget.runAs(id,manual?'interactive':kind,async()=>{for await(const chunk of model.llm.stream({...sel,system,messages:[{role:'user',content:JSON.stringify({date,events:claim.events,...(kind==='reflection'?{currentCompanion:claim.companion}:{})})}],signal:AbortSignal.any([signal,gate.signal]),maxTokens:4096,temperature:.3,reasoningEffort:'low'})){if(chunk.type==='text'&&typeof chunk.text==='string'){text+=chunk.text;if(text.length>10000)throw Error('整理结果过长');}}});
+      let text='';await budget.runAs(id,manual?'interactive':kind,async()=>{for await(const chunk of model.llm.stream({...sel,system:attributedSystem,messages:[{role:'user',content:JSON.stringify({date,events:claim.events,...(kind==='reflection'?{currentCompanion:claim.companion}:{})})}],signal:AbortSignal.any([signal,gate.signal]),maxTokens:4096,temperature:.3,reasoningEffort:'low'})){if(chunk.type==='text'&&typeof chunk.text==='string'){text+=chunk.text;if(text.length>10000)throw Error('整理结果过长');}}});
       let data:any;try{data=JSON.parse(text.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''));}catch{throw Error('模型返回的整理内容格式无效，请重试');}
       const available=new Set(claim.events.map(e=>e.id));
       if(typeof data.text!=='string'||!data.text.trim()||data.text.length>5000||!Array.isArray(data.sources)||!data.sources.length||data.sources.some((s:unknown)=>typeof s!=='string'||!available.has(s)))throw Error('整理结果缺少真实来源');

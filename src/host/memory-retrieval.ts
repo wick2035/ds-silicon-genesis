@@ -1,5 +1,6 @@
 import type { Memory, LifeState } from '../kernel/types.js';
 import type { Queryable } from '../storage/postgres.js';
+import {speechSources} from '../kernel/speech-provenance.js';
 
 /** Uses the canonical envelope only; the query is parameterized and bounded.
  * PostgreSQL simple FTS plus literal matching covers both segmented terms and
@@ -37,6 +38,6 @@ export class CanonicalMemoryRetrieval {
     const matches=await this.search(state.petId,query,12), recent=state.memories.filter(m=>m.valid&&m.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id))).slice(-6);
     const felt=state.memories.filter(m=>m.valid&&m.feeling&&m.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id))).sort((a,b)=>(b.salience??0)-(a.salience??0)||Date.parse(b.createdAt)-Date.parse(a.createdAt)).slice(0,4);
     const unique=new Map([...matches,...recent,...felt].map(m=>[m.id,m]));let remaining=9000;
-    return [...unique.values()].filter(m=>{if(m.content.length>remaining)return false;remaining-=m.content.length;return true;});
+    return [...unique.values()].map(m=>({...m,speakers:speechSources(m.sourceIds,state)})).filter(m=>{const size=JSON.stringify(m).length;if(size>remaining)return false;remaining-=size;return true;});
   }
 }

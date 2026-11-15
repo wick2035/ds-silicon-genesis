@@ -54,7 +54,9 @@ test('group turns identify each speaker from trusted source events',async()=>{
   assert.match(content,/爸爸/);assert.match(content,/群友-abcdef123456/);assert.match(content,/群友-999999999999/);
   assert.doesNotMatch(JSON.stringify(prompt.messages),/owner-private/);
   const stored=f.state().life.events.find(e=>e.type==='conversation.user'&&e.source==='qq-group');
-  assert.equal(stored.actorId,'qq-member:999999999999');
+  assert.equal(stored.actorId,undefined);
+  assert.deepEqual(stored.payload.sourceIds,['q1','q2','q3']);
+  assert.deepEqual(JSON.parse(content).map(item=>item.actorId),['dad','qq-member:abcdef123456','qq-member:999999999999']);
 });
 
 test('owner group commands stay executable and other members are rejected',async()=>{

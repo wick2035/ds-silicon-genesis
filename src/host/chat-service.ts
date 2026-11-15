@@ -1,4 +1,5 @@
 import {canChooseLabor} from './forced-labor.js';
+import {SPEAKER_MEMORY_RULE} from '../kernel/speech-provenance.js';
 import {privateConversationHistory,historicalMemory,CONVERSATION_CONTINUITY} from './conversation-history.js';
 import {setSpiritRest} from '../kernel/spirit.js';
 import {promptData} from './prompt-data.js';
@@ -72,7 +73,7 @@ export class CanonicalChat {
       if(draft.life.events.some(e=>e.eventId===userId))throw Error('对话事件冲突');
       const actor=input.channel==='desktop'?'dad':draft.life.events.find(e=>e.eventId===input.sourceEventIds?.at(-1))?.actorId;
       const groupId=input.channel==='qq-group'?(draft.life.events.find(e=>e.eventId===input.sourceEventIds?.at(-1))?.payload as Record<string,unknown>|undefined)?.groupId:undefined;
-      draft.life.events.push({eventId:userId,petId:input.petId,type:'conversation.user',source:input.channel,...(actor?{actorId:actor}:{}),occurredAt:now,receivedAt:now,evidenceLevel:'observed',payload:{text,channel:input.channel,...(typeof groupId==='string'?{groupId}:{}),...(input.channel==='qq-group' && (input.sourceEventIds?.length??0)>1?{groupBatch:true}:{})},...(input.sourceEventIds?.length?{causationId:input.sourceEventIds[0]}:{})});
+      draft.life.events.push({eventId:userId,petId:input.petId,type:'conversation.user',source:input.channel,...(actor&&!(input.channel==='qq-group'&&(input.sourceEventIds?.length??0)>1)?{actorId:actor}:{}),occurredAt:now,receivedAt:now,evidenceLevel:'observed',payload:{text,channel:input.channel,...(input.sourceEventIds?.length?{sourceIds:[...input.sourceEventIds]}:{}),...(typeof groupId==='string'?{groupId}:{}),...(input.channel==='qq-group' && (input.sourceEventIds?.length??0)>1?{groupBatch:true}:{})},...(input.sourceEventIds?.length?{causationId:input.sourceEventIds[0]}:{})});
       const memoryMatch=/^(?:请)?(?:记住|记得)[:：，,\s]*(.{1,1000})$/us.exec(text);
       if(memoryMatch && actor==='dad') {const content=memoryMatch[1].trim();if(content){const memoryId='chat-memory:'+id;draft.life.memories.push({id:memoryId,kind:'semantic',content,sourceIds:[userId],evidenceLevel:'reported',valid:true,createdAt:now});if(/(?:我会|我答应|我承诺|我保证)/u.test(content))draft.life.commitments.push({id:'chat-commitment:'+id,description:content,status:'open',sourceIds:[userId]});}}
       if(input.channel==='desktop')draft.life.events.push({eventId:'chat-social:'+id,petId:input.petId,type:'social.message',source:input.channel,actorId:'dad',occurredAt:now,receivedAt:now,evidenceLevel:'observed',causationId:userId,payload:{}});
@@ -166,6 +167,7 @@ export class CanonicalChat {
       const selection=this.model.agentDefaultModel.currentSelection();if(!selection.provider||!selection.model)throw new Error('模型不可用');
       const turnAbort=new AbortController(),combined=AbortSignal.any([signal,this.gate.signal,turnAbort.signal,reservationAbort.signal]);let output='',meme:string|undefined;
       if(process.env.SILICON_CHAT_TIMING==='1')console.info('[chat-prompt]',state.legacyContext.personaDescription.length,COMPANION_PERSONALITY.length,system.length);timing('generate');let firstText=true;const tokenUsage={inputTokens:0,outputTokens:0,cachedTokens:0};
+      system+='\n'+SPEAKER_MEMORY_RULE;
       const generate=async()=>{
         for await(const part of this.model.llm.stream({...selection,system,streamText:!group,embodiedSnapshot:envelope,beforeActions:initialCommit,embodied:{petId:input.petId,requestId:'chat:'+id,sourceIds:['chat-user:'+id],allowActions:true},messages:[...history,{role:'user',content:input.attachments?.length?[{type:'text',text},...input.attachments.map(a=>({type:'image',attachment:{petId:a.petId,id:a.id}}))]:text}],signal:combined,maxTokens:group?120:500,reasoningEffort:'low'})) {
           if(part?.type==='usage'){tokenUsage.inputTokens+=part.inputTokens??0;tokenUsage.outputTokens+=part.outputTokens??0;tokenUsage.cachedTokens+=part.cachedTokens??0;}
@@ -260,9 +262,9 @@ export class CanonicalChat {
       const state=await this.reader.loadEnvelope(input.petId);if(!state)throw Error('生命状态不可用');
       const groupMessages=messages.map(m=>{const event=state.life.events.find(e=>e.eventId===m.eventId);
         if(!event || event.source!=='qq' || event.type!=='social.message' || (event.payload as any)?.scene!=='group' || !event.actorId)throw Error('群聊来源不可用');
-        return {event,speaker:groupSpeaker(event.actorId),text:String((event.payload as any).text||'')};});
-      let start=0;let body=JSON.stringify(groupMessages.map(({speaker,text})=>({speaker,text})));
-      while(body.length>6000 && start<groupMessages.length-1)body=JSON.stringify(groupMessages.slice(++start).map(({speaker,text})=>({speaker,text})));
+        return {event,speaker:groupSpeaker(event.actorId),actorId:event.actorId,text:String((event.payload as any).text||'')};});
+      let start=0;let body=JSON.stringify(groupMessages.map(({speaker,actorId,text})=>({speaker,actorId,text})));
+      while(body.length>6000 && start<groupMessages.length-1)body=JSON.stringify(groupMessages.slice(++start).map(({speaker,actorId,text})=>({speaker,actorId,text})));
       messages=messages.slice(start);actorId=groupMessages.at(-1)!.event.actorId!;text=messages.length===1?groupMessages.at(-1)!.text:body;
     }
     const events=messages.map(m=>m.eventId);

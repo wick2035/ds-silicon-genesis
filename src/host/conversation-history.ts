@@ -1,4 +1,5 @@
 import {isOwnerPrivateConversation} from './chat-identity.js';
+import {speechSources} from '../kernel/speech-provenance.js';
 import type {LifeState,Memory} from '../kernel/types.js';
 
 type RecordState=Pick<LifeState,'events'|'invalidSources'>;
@@ -21,7 +22,7 @@ export function privateConversationHistory(state:RecordState, excludeIds:string[
 
 /** Source time describes the remembered event; recording time is not event time. */
 export function historicalMemory(memory:Pick<Memory,'content'|'sourceIds'|'evidenceLevel'>,state:RecordState) {
-  return {content:memory.content,evidenceLevel:memory.evidenceLevel,
+  return {content:memory.content,evidenceLevel:memory.evidenceLevel,speakers:speechSources(memory.sourceIds,state),
     sources:memory.sourceIds.map(id=>{const e=state.events.find(e=>e.eventId===id);return {id,at:e?.occurredAt??null,type:e?.type??null};})};
 }
 

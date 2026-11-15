@@ -2,6 +2,7 @@ import {COMPANION_PERSONALITY,TIME_AWARENESS} from './companion-personality.js';
 import type {CognitiveModel,CognitiveContext} from '../cognition/index.js';
 import type {CognitiveWorkspace} from '../kernel/types.js';
 import {actionCatalog} from './action-parameters.js';
+import {SPEAKER_MEMORY_RULE} from '../kernel/speech-provenance.js';
 
 type ModelStream={stream(input:unknown):AsyncIterable<{type:string;text?:string}>};
 type Selection={provider:string;model:string};
@@ -33,7 +34,7 @@ export function createCognitiveModel(llm:ModelStream, selection:()=>Selection):C
     }
     const messages=[{role:'user',content:input}];
     let text='';
-    for await(const chunk of llm.stream({provider:selected.provider,model:selected.model,system,messages,signal,maxTokens:4096,temperature:0.35,reasoningEffort:'low'})){
+    for await(const chunk of llm.stream({provider:selected.provider,model:selected.model,system:system+'\n'+SPEAKER_MEMORY_RULE,messages,signal,maxTokens:4096,temperature:0.35,reasoningEffort:'low'})){
       if(signal.aborted)throw Error('认知已取消');
       if(chunk.type==='text'&&typeof chunk.text==='string'){text+=chunk.text;if(text.length>32768)throw Error('认知回复过长');}
     }

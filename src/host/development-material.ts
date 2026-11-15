@@ -1,5 +1,6 @@
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 import {promptData} from './prompt-data.js';
+import {speechIdentity,speechSources} from '../kernel/speech-provenance.js';
 
 const calendar=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'});
 export const developmentDay=(at:string)=>Number.isFinite(Date.parse(at))?calendar.format(new Date(at)):'';
@@ -28,7 +29,7 @@ export function developmentMaterial(state:CanonicalEnvelope,date:string,used=new
   for(const e of [...selected.values()])if(e.type==='self.thought')for(const id of (e.payload as any)?.sourceIds??[]){const source=byId.get(id);if(source&&valid(source)&&developmentDay(source.occurredAt)===date&&selected.size<72)selected.set(id,source);}
   const ordered=[...selected.values()].sort((a,b)=>Date.parse(a.occurredAt)-Date.parse(b.occurredAt));
   for(const limit of [900,500,250,120]){
-    const material=ordered.map(e=>({id:e.eventId,type:e.type,at:e.occurredAt,subjective:['self.thought','conversation.assistant'].includes(e.type),text:promptData(e.payload,e.type==='self.thought'?Math.max(500,limit):limit)}));
+    const material=ordered.map(e=>({id:e.eventId,type:e.type,at:e.occurredAt,...speechIdentity(e),...((e.payload as any)?.groupBatch===true||e.type==='self.thought'?{speakers:speechSources([e.eventId],state.life).map(s=>({...s,text:s.text.slice(0,limit)}))}:{}),subjective:['self.thought','conversation.assistant'].includes(e.type),text:promptData(e.payload,e.type==='self.thought'?Math.max(500,limit):limit)}));
     if(JSON.stringify(material).length<=24000)return material;
   }
   throw Error('当天整理材料过长，请减少记录后重试');
