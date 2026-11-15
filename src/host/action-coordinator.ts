@@ -1,7 +1,7 @@
 import {reserveExploration} from './exploration-budget.js';
 import {hasActiveConversation} from './active-conversation.js';
 import {validateRicePurchase} from './rice-purchase.js';
-import {isForcedLabor,forcedLaborState} from './forced-labor.js';
+import {forcedLaborState} from './forced-labor.js';
 import {sweetPrice} from './spirit-activity.js';
 import {selfActionState} from './self-action-state.js';
 import {checkSpirit} from '../kernel/spirit.js';
@@ -28,7 +28,7 @@ export class ActionCoordinator {
       if(action.actionType==='body.sleep'&&hasActiveConversation(draft)&&!(draft.legacy as any).manualServiceRequests?.[action.id]&&!action.sourceIds.some(id=>id.startsWith('chat-user:')||id.startsWith('needs:')))throw Error('还有正在进行的决定，先完成这轮');
       if(action.actionType==='service.sweet')sweetPrice(draft);
       if(action.actionType==='service.buy-rice')validateRicePurchase(draft);
-      if(!isForcedLabor(draft,action))checkSpirit(draft.life,action.actionType,this.now().valueOf());
+      if(action.actionType!=='labor.step')checkSpirit(draft.life,action.actionType,this.now().valueOf());
       validateActionParameters(action.actionType,action.parameters);
       const state: LifeState = {...structuredClone(draft.life), petId, version:draft.version, ...projectActionBody(draft,this.body(draft),action.actionType)};
       const proposal={...action, expectedStateVersion:draft.version};

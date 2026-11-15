@@ -78,7 +78,7 @@ export function createDesktopCommandChannel(store:Reader,sourceCapability:object
       if(value.status==='playing'){item!.startedAt ??= Date.now();return {ok:true};}
       const effortSeconds=item!.startedAt===undefined?0:Math.max(0,Math.min(30,(Date.now()-item!.startedAt)/1000));
       clearTimeout(item!.timer);pending.delete(c.petId);
-      bridge.accept({petId:c.petId,actionId:c.actionId,kind:'labor.step',status:value.status==='completed'?'completed':'interrupted',
+      bridge.accept({petId:c.petId,actionId:c.actionId,kind:'labor.step',status:value.status==='completed'&&['queued','running'].includes(world.status)?'completed':'interrupted',
         played:value.played===true,commandId:value.id,index:value.index,surface:value.surface,x:value.x,...(effortSeconds===undefined?{}:{effortSeconds,intensity:item!.intensity})},sourceCapability);
       return {ok:true};
     },

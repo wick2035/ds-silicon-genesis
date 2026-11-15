@@ -55,9 +55,9 @@ test('the voluntary chat decision enters the page and dispatches a web labor ste
   assert.equal(f.get().life.actions.find(a=>a.id===dispatched).actionType,'labor.step');assert.equal(f.get().legacy.labor.contracts[0].done,2);
 });
 
-test('refusal and insufficient energy do not create a worksite entry',async()=>{
+test('refusal and total exhaustion do not create a worksite entry',async()=>{
   for(const [reply,tired] of [['我想休息。',false],['我去搬一趟。\n[愿意去工地]',true]]){
-    const f=fixture(reply,{tired});const turn=f.chat.turn({requestId:'rest-'+tired,petId:'main',channel:'desktop',actorId:'dad',text:'你想去工地吗？'},new AbortController().signal);
+    const f=fixture(reply,{tired});if(tired){Object.assign(f.get().humanity.stats,{stamina:0,energy:0,satiety:0});f.get().life.spirit={value:0,updatedAt:Date.now(),awakeSince:Date.now(),lastSleepHours:0,mode:'awake',config:{sleepHours:8,awakeHours:14,hourlyDrain:2,napPerHour:6,sweetGain:8,sweetCooldownHours:4}};}const turn=f.chat.turn({requestId:'rest-'+tired,petId:'main',channel:'desktop',actorId:'dad',text:'你想去工地吗？'},new AbortController().signal);
     const answer=await turn;if(tired){assert.match(answer,/不允许开工/);assert.doesNotMatch(answer,/我去搬一趟/);}
     assert.equal(f.get().legacy.labor.contracts[0].status,'paused');assert.equal(f.get().legacy.worksite.requested,undefined);
   }

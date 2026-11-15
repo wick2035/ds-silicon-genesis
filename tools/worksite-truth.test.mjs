@@ -49,7 +49,7 @@ test('催促得到愿意立即干的回答时，恢复约定并唤醒工地',asy
 
 test('拒绝、身体阻碍和没有真实回执时，回复与状态一致',async()=>{
   const no=fixture('我现在不干，我想休息。');await turn(no,'立马干','no');assert.equal(no.get().legacy.labor.contracts[0].status,'paused');
-  const tired=fixture('好，我马上干。',{tired:true});const blocked=await turn(tired,'立马干','tired');assert.match(blocked,/不允许开工/);assert.doesNotMatch(blocked,/马上干/);assert.equal(tired.get().legacy.labor.contracts[0].status,'paused');
+  const tired=fixture('好，我马上干。',{tired:true});const allowed=await turn(tired,'立马干','tired');assert.match(allowed,/马上干/);assert.equal(tired.get().legacy.labor.contracts[0].status,'working');
   for(const claim of ['我没偷懒！都搬了十八趟啦。','我刚刚搬完这一趟了。','我正在搬砖呢。']){
     const f=fixture(claim);const reply=await turn(f,'你现在在干嘛？',claim);assert.match(reply,/没有确认/);assert.notEqual(reply,claim);assert.equal(f.get().legacy.labor.contracts[0].done,18);
   }
@@ -70,4 +70,12 @@ test('一趟工作逐步等待实际回执后才增加进度并消耗体力',asy
   await turn(f,'立马干','trip');await first;
   for(let i=0;i<100 && count<4;i++)await new Promise(resolve=>setTimeout(resolve,5));controller.abort();
   assert.equal(buys,0);assert.equal(count,4);assert.equal(f.get().legacy.labor.contracts[0].done,19);assert.ok(f.get().humanity.stats.stamina<before);
+});
+
+
+test('已中断的旧派发步骤保留未知事实且不永久锁住新搬运',()=>{
+  const state=fixture('').get();state.legacy.world={command:{id:'old',status:'queued'}};
+  state.life.actions.push({actionType:'labor.step',status:'DISPATCHED',parameters:{commandId:'old'}});
+  assert.equal(blocksNewLabor(state),true);state.legacy.world.command.status='interrupted';assert.equal(blocksNewLabor(state),false);
+  assert.equal(state.life.actions[0].status,'DISPATCHED');assert.equal(state.legacy.labor.contracts[0].done,18);
 });

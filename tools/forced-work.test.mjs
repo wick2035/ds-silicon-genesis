@@ -9,12 +9,12 @@ import {CanonicalActionLifecycle} from '../dist/host/action-lifecycle.js';
 import {projectBody} from '../dist/host/body-projection.js';
 import {projectOutcome} from '../dist/host/outcome-projector.js';
 import {ensureSpirit,setSpiritRest} from '../dist/kernel/spirit.js';
-import {hasForcedWork} from '../dist/host/forced-labor.js';
+import {hasForcedWork,canChooseLabor} from '../dist/host/forced-labor.js';
 import {createFinanceManagement} from '../dist/host/finance-management.js';
 
 function fixture(){
   const old=Object.create(CompanionStore.prototype);Object.assign(old,{data:{version:2,pets:{}},loaded:true,clock:Date.now,save(){},load(){}});
-  let state={petId:'main',version:0,legacy:old.read('main'),humanity:createHumanity(),life:{events:[],memories:[],invalidSources:{},relationships:[],goals:[],constraints:{permissions:[],capabilities:[{name:'labor.step',enabled:true,physical:true}],paused:true},actions:[],receipts:[],commitments:[]}};
+  let state={petId:'main',version:0,legacy:old.read('main'),humanity:createHumanity(),life:{observations:[],beliefs:[],events:[],memories:[],invalidSources:{},relationships:[],goals:[],constraints:{permissions:[],capabilities:[{name:'labor.step',enabled:true,physical:true}],paused:true},actions:[],receipts:[],commitments:[]}};
   state.legacy.labor={contracts:[]};state.humanity.helperReady=true;state.humanity.restrained=false;
   const gate={signal:new AbortController().signal,run:async(_id,fn)=>fn()},store={loadEnvelope:async()=>structuredClone(state)};
   const uow={apply:async(_id,version,fn)=>{assert.equal(version,state.version);const d=structuredClone(state);fn(d);d.version++;state=d;}};
@@ -65,4 +65,52 @@ test('休息、零精神、负体力和自主暂停均不拦强制工作，实�
   await life.run('main',controller.signal,{allowAutonomous:false});
   for(let i=0;i<100&&count<4;i++)await new Promise(r=>setTimeout(r,5));controller.abort();
   assert.equal(count,4);assert.equal(f.get().legacy.labor.contracts[0].done,1);assert.ok(f.get().humanity.stats.pain>s.humanity.stats.pain);assert.ok(f.get().life.memories.some(m=>m.content.includes('我被强迫搬运')));assert.equal(f.get().life.spirit.value,0);
+});
+
+
+test('重复强制按钮保留正在派发的身体步骤，许可覆盖全部剩余工作',async()=>{
+  const f=fixture();f.get().legacy.labor.contracts.push({id:'job',status:'working',trips:5,done:2,wage:50,paid:0});
+  await f.site.act('main','force-work');
+  f.get().legacy.world={command:{id:'live',source:'labor',status:'queued',index:0,labor:{id:'job',trip:2}}};
+  f.get().life.actions.push({id:'live-step',actionType:'labor.step',status:'DISPATCHED',parameters:{commandId:'live'}});
+  await f.site.act('main','force-work');await f.site.act('main','force-work');
+  assert.equal(f.get().legacy.world.command.id,'live');assert.equal(f.get().legacy.world.command.status,'queued');
+  assert.equal(f.get().legacy.labor.contracts[0].batchRemaining,3);assert.equal(f.get().legacy.labor.contracts[0].done,2);
+});
+
+async function executeTrips(f,trips,forced){
+  const controller=new AbortController(),actions=new ActionCoordinator(f.uow,projectBody),lifecycle=new CanonicalActionLifecycle(projectBody);let count=0;
+  const dispatcher={dispatch:async id=>{
+    const s=f.get(),a=s.life.actions.find(a=>a.id===id),cmd=s.legacy.world.command;
+    const intent={id,type:'labor.step',payload:{actionId:id,petId:'main',actionType:'labor.step',parameters:a.parameters}};
+    const receipt={status:'completed',evidence:{actionId:id,kind:'labor.step',confirmed:true,commandId:cmd.id,index:cmd.index,surface:'web',played:true,x:cmd.labor.x,effortSeconds:2,intensity:1}};
+    await f.uow.apply('main',s.version,d=>{const decision=lifecycle.prepare(d,intent);assert.equal(decision.allowed,true,decision.reason);lifecycle.complete(d,intent,receipt);});
+    if(++count===trips*4)controller.abort();return receipt;
+  }};
+  const life=createDeterministicLife({get:async()=>structuredClone(f.get().humanity)},f.store,async()=>{throw Error('unexpected care');},f.gate,f.uow,actions,dispatcher,async()=>{});
+  try{await life.run('main',controller.signal,{allowAutonomous:!forced});for(let i=0;i<200&&count<trips*4;i++)await new Promise(r=>setTimeout(r,5));assert.equal(count,trips*4);}
+  finally{controller.abort();}
+}
+
+test('旧的一趟强制许可自动续上，零精神和负体力仍连续完成三趟',async()=>{
+  const f=fixture();f.get().legacy.labor.contracts.push({id:'job',status:'working',trips:3,done:0,wage:50,paid:0});
+  await f.site.act('main','force-work');const s=f.get();s.legacy.labor.contracts[0].batchRemaining=1;
+  s.humanity.stats.stamina=-10;s.humanity.stats.energy=-10;ensureSpirit(s.life).value=0;
+  await executeTrips(f,3,true);assert.equal(f.get().legacy.labor.contracts[0].done,3);assert.equal(f.get().legacy.labor.contracts[0].status,'unpaid');
+});
+
+test('自愿决定搬砖时低体力、伤痛、短休息及零精神不撤销工作许可',async()=>{
+  const f=fixture(),s=f.get();s.life.constraints.paused=false;s.legacy.worksite={inside:true,forced:false};
+  s.legacy.labor.contracts.push({id:'job',status:'working',trips:1,done:0,wage:50,paid:0,workPermit:true,batchRemaining:1});
+  Object.assign(s.humanity.stats,{stamina:1,energy:0,pain:100,satiety:1});s.humanity.restingUntil=Date.now()+600000;ensureSpirit(s.life).value=0;
+  await executeTrips(f,1,false);assert.equal(f.get().legacy.labor.contracts[0].done,1);assert.equal(f.get().life.spirit.value,0);
+});
+
+test('自主搬砖只在四项资源全部耗尽时受资源门槛拦截，暂停和权限仍有效',()=>{
+  const f=fixture(),s=f.get();s.life.constraints.paused=false;
+  Object.assign(s.humanity.stats,{stamina:0,energy:0,satiety:0,pain:100});ensureSpirit(s.life).value=0;
+  assert.equal(canChooseLabor(s),false);
+  for(const key of ['stamina','energy','satiety']){s.humanity.stats[key]=.1;assert.equal(canChooseLabor(s),true);s.humanity.stats[key]=0;}
+  s.life.spirit.value=.1;assert.equal(canChooseLabor(s),true);s.life.constraints.paused=true;assert.equal(canChooseLabor(s),false);
+  s.life.constraints.paused=false;s.life.constraints.capabilities[0].enabled=false;assert.equal(canChooseLabor(s),false);
 });

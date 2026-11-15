@@ -1,3 +1,4 @@
+import {canChooseLabor} from './forced-labor.js';
 import {privateConversationHistory,historicalMemory,CONVERSATION_CONTINUITY} from './conversation-history.js';
 import {setSpiritRest} from '../kernel/spirit.js';
 import {promptData} from './prompt-data.js';
@@ -29,8 +30,8 @@ function withEvidenceAge(facts:ReturnType<ReturnType<typeof createSemanticGround
   return {...facts,receipts:facts.receipts.map(r=>({...r,ageSeconds:age(r.at)})),payments:facts.payments.map(e=>({...e,ageSeconds:age(e.at)}))};
 }
 function workAvailability(draft:CanonicalEnvelope) {
-  const body=projectBody(draft).body, capability=draft.life.constraints.capabilities.find(c=>c.name==='labor.step'&&c.enabled);
-  return {canStart:!draft.life.constraints.paused && !!capability && (!capability.requiresPermission||draft.life.constraints.permissions.includes(capability.requiresPermission)) && !body.sleeping && !body.restrained && !body.injured && body.energy>=30 && body.stamina>=35 && body.pain<50,body};
+  const body=projectBody(draft).body;
+  return {canStart:canChooseLabor(draft),body};
 }
 /** One conversation for every channel. A durable running marker excludes
  * duplicates; no per-pet gate is held across the model call. */
@@ -223,10 +224,8 @@ export class CanonicalChat {
         let workDecision:Record<string,unknown>|undefined,workBlocked=false;
         if(worksiteIntent){
           const contract=legacy.labor?.contracts?.find((c:any)=>['working','paused'].includes(c.status) && Number.isFinite(c.done) && c.done<c.trips);
-          const body=projectBody(draft).body;
-          const capability=draft.life.constraints.capabilities.find(c=>c.name==='labor.step'&&c.enabled);
           const pending=blocksNewLabor(draft);
-          const blocked=draft.life.constraints.paused || !capability || !!capability.requiresPermission&&!draft.life.constraints.permissions.includes(capability.requiresPermission) || body.sleeping || body.restrained || body.injured || body.energy<30 || body.stamina<35 || body.pain>=50;
+          const blocked=!canChooseLabor(draft);
           if(!contract||blocked){workBlocked=true;worksiteIntent=false;output='现在身体或约定不允许开工，先让我缓一缓。';}
           else if(pending){workBlocked=true;}
           else {

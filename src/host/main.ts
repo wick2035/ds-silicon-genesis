@@ -1,3 +1,5 @@
+import {canChooseLabor} from './forced-labor.js';
+import {blocksNewLabor} from './labor-pending.js';
 import {createLaborCompletionNotices} from './labor-completion-notices.js';
 import {companionContext,COMPANION_PERSONALITY} from './companion-personality.js';
 import {createInteractionReactions} from './interaction-reactions.js';
@@ -141,14 +143,14 @@ export async function main():Promise<void> {
     const speech=createEmbodiedSpeech(store,lease,unitOfWork,actions,dispatcher,async(id,sources,key)=>{
       await lease.run(id,async()=>{const current=await store.loadEnvelope(id);if(!current)throw Error('生命状态不可用');
         await unitOfWork.apply(id,current.version,draft=>{
-          const p=draft.legacy as any,body=projectBody(draft).body,cap=draft.life.constraints.capabilities.find(c=>c.name==='labor.step'&&c.enabled);
-          if(draft.life.constraints.paused||!cap||cap.requiresPermission&&!draft.life.constraints.permissions.includes(cap.requiresPermission)||body.sleeping||body.restrained||body.injured||body.energy<30||body.stamina<35||body.pain>=50)throw Error('现在身体或权限不允许搬砖');
+          const p=draft.legacy as any;
+          if(!canChooseLabor(draft))throw Error('现在身体或权限不允许搬砖');
           if(sources.some(source=>Object.hasOwn(draft.life.invalidSources,source)||!draft.life.events.some(e=>e.eventId===source)))throw Error('决定来源不可用');
           const contract=p.labor?.contracts?.find((c:any)=>['working','paused'].includes(c.status)&&c.done<c.trips);if(!contract)throw Error('还没有确认的工作约定，先和爸爸商量');
-          if(draft.life.actions.some(a=>a.actionType==='labor.step'&&['PENDING','DISPATCHED','UNKNOWN'].includes(a.status)))throw Error('已有工作正在等待实际结果');
+          if(blocksNewLabor(draft))throw Error('已有工作正在等待实际结果');
           const eventId='speech-work:'+createHash('sha256').update(key).digest('hex');
           if(draft.life.events.some(e=>e.eventId===eventId))return {};
-          contract.status='working';contract.forced=false;contract.workPermit=true;contract.batchRemaining=1;contract.workDecisionEvent=eventId;contract.nextDecision=Date.now()+60000;
+          contract.status='working';contract.workPermit=true;contract.batchRemaining=1;contract.workDecisionEvent=eventId;contract.nextDecision=Date.now()+60000;
           const site=p.worksite||={inside:false,forced:false};site.suppressUntilDecision=false;if(!site.inside)site.requested=true;
           const at=new Date().toISOString();draft.life.events.push({eventId,petId:id,type:'labor.decision',source:'model',occurredAt:at,receivedAt:at,evidenceLevel:'inferred',payload:{contractId:contract.id,choice:'work',sourceIds:sources}});return {};
         });});worksiteWake(id);return {status:'PENDING',message:'已提出去搬一趟；进入和完成仍等待身体确认'};

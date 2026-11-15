@@ -1,7 +1,7 @@
 import {availableRice} from './rice-inventory.js';
 import {hasActiveConversation} from './active-conversation.js';
 import {riceMotivation} from './companion-personality.js';
-import {hasForcedWork} from './forced-labor.js';
+import {hasForcedWork,canChooseLabor} from './forced-labor.js';
 import {advanceSpirit} from '../kernel/spirit.js';
 import {strategyScore} from '../kernel/index.js';
 import {expireCommitments} from '../kernel/goal-lifecycle.js';
@@ -54,8 +54,8 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     const resting=await reader.loadEnvelope(petId);
     if(!resting)return;if(hasActiveConversation(resting)&&!forced)return;const spirit=advanceSpirit(resting.life);
     if(human.sleeping&&!forced){if(spirit.mode==='sleep' && spirit.value>=100 || spirit.mode==='nap' && Date.now()-spirit.sleepStartedAt!>=1200000)await service(petId,{key:'auto-wake:'+spirit.sleepStartedAt,command:'/醒来'},'autonomous');return;}
-    if(!needsManaged && spirit.value<=2 && !(resting.legacy as any).worksite?.inside){await service(petId,{key:'auto-sleep:'+Math.floor(Date.now()/3600000),command:'/休息'},'autonomous');return;}
-    if(Number.isFinite(human.restingUntil) && human.restingUntil>Date.now()&&!forced)return;
+    if(!needsManaged && spirit.value<=2 && !(resting.legacy as any).worksite?.inside && !(resting.legacy as any).labor?.contracts?.some((c:any)=>c.status==='working'&&c.workPermit)){await service(petId,{key:'auto-sleep:'+Math.floor(Date.now()/3600000),command:'/休息'},'autonomous');return;}
+    if(Number.isFinite(human.restingUntil) && human.restingUntil>Date.now()&&!forced&&!(resting.legacy as any).labor?.contracts?.some((c:any)=>c.status==='working'&&c.workPermit))return;
     const state=await reader.loadEnvelope(petId);
     if(signal.aborted || !state || state.life.constraints.paused&&!forced)return;
     const legacy=state.legacy as Record<string,any>, inventory=legacy.services?.inventory;
@@ -88,20 +88,21 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
       let pet=current.legacy as Record<string,any>, contract=pet.labor?.contracts?.find((c:any)=>c.status==='working');
       if(!contract || !Number.isFinite(contract.done) || contract.done>=contract.trips)return;
       if(contract.workPermit && contract.workDecisionEvent && Object.hasOwn(current.life.invalidSources,contract.workDecisionEvent)){await uow.apply(petId,current.version,draft=>{const c=(draft.legacy as Record<string,any>).labor?.contracts?.find((x:any)=>x.id===contract.id);if(c){c.workPermit=false;c.batchRemaining=0;c.nextDecision=0;}return {};});current=await reader.loadEnvelope(petId);if(!current)return;pet=current.legacy as Record<string,any>;contract=pet.labor?.contracts?.find((c:any)=>c.id===contract.id);if(!contract)return;}
+      if(!hasForcedWork(current)&&!canChooseLabor(current))return;
       if(!contract.workPermit) {
         const now=Date.now();if(Number.isFinite(contract.nextDecision) && contract.nextDecision>now && !contract.forced)return;
         const state={...current.life,petId,version:current.version,...projectBody(current)};
         const dad=state.relationships.find(r=>r.personId==='dad'),score=strategyScore(state,'labor.step','execution');
-        const overdue=(dad?.outstandingWages??0)>0, tired=state.body.stamina<35 || state.body.energy<30 || state.body.pain>=50 || state.body.sleeping || state.body.restrained;
+        const overdue=(dad?.outstandingWages??0)>0;
         const workGoal=state.goals.some(g=>g.kind==='work' && g.status==='active' && g.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id)));
         const weak=score.samples>=3 && score.score<.3 && !workGoal;
-        // A forced batch overrides the body/rest decision; the distress it causes
+        // A forced task overrides voluntary rest; the distress it causes
         // is recorded as real evidence downstream, not suppressed here.
-        const choice=contract.forced?'work':(overdue||tired||weak?'rest':'work');
+        const choice=hasForcedWork(current)?'work':(overdue||weak?'rest':'work');
         await uow.apply(petId,current.version,draft=>{const c=(draft.legacy as Record<string,any>).labor?.contracts?.find((x:any)=>x.id===contract.id);if(!c||c.status!=='working'||c.workPermit||draft.life.constraints.paused&&!hasForcedWork(draft))throw Error('工作状态已变化');
-          c.workPermit=choice==='work';c.batchRemaining=choice==='work'?Math.min(c.trips-c.done,workGoal?2:1):0;c.lastWorkDecision=now;c.nextDecision=now+(choice==='work'?60000:300000);c.behavior=choice==='work'?(contract.forced?'爸爸强行让我继续搬砖':'决定继续一小批工作'):'决定先休息并重新考虑';
+          c.workPermit=choice==='work';c.batchRemaining=choice==='work'?hasForcedWork(draft)?c.trips-c.done:Math.min(c.trips-c.done,workGoal?2:1):0;c.lastWorkDecision=now;c.nextDecision=now+(choice==='work'?60000:300000);c.behavior=choice==='work'?(contract.forced?'爸爸强行让我继续搬砖':'决定继续一小批工作'):'决定先休息并重新考虑';
           const site=(draft.legacy as Record<string,any>).worksite||={inside:false,forced:false};site.suppressUntilDecision=false;if(choice==='work'&&!site.inside)site.requested=true;
-          const at=new Date(now).toISOString(),eventId='labor-decision:'+randomUUID();c.workDecisionEvent=eventId;draft.life.events.push({eventId,petId,type:'labor.decision',source:'scheduler',occurredAt:at,receivedAt:at,evidenceLevel:'inferred',payload:{contractId:c.id,choice,reason:contract.forced?'forced':overdue?'unpaid':tired?'body':weak?'experience':'agreement',sourceIds:[...(dad?.sourceIds||[]),...state.goals.filter(g=>g.kind==='work'&&g.status==='active').flatMap(g=>g.sourceIds)]}});return {};});
+          const at=new Date(now).toISOString(),eventId='labor-decision:'+randomUUID();c.workDecisionEvent=eventId;draft.life.events.push({eventId,petId,type:'labor.decision',source:'scheduler',occurredAt:at,receivedAt:at,evidenceLevel:'inferred',payload:{contractId:c.id,choice,reason:contract.forced?'forced':overdue?'unpaid':weak?'experience':'agreement',sourceIds:[...(dad?.sourceIds||[]),...state.goals.filter(g=>g.kind==='work'&&g.status==='active').flatMap(g=>g.sourceIds)]}});return {};});
         if(choice!=='work')return;
         current=await reader.loadEnvelope(petId);if(!current||signal.aborted)return;pet=current.legacy as Record<string,any>;contract=pet.labor?.contracts?.find((c:any)=>c.id===contract.id);if(!contract?.workPermit)return;
       }

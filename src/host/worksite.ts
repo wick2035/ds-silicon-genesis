@@ -35,7 +35,7 @@ export function createWorksite(store:Reader,gate:PetGate,uow:UnitOfWork,view:(id
           delete site.speech;
           // Force a batch regardless of body condition. The pet's distress is
           // recorded as real evidence (pain/drain) downstream, not assumed here.
-          contract.status='working';contract.forced=true;contract.workPermit=true;contract.batchRemaining=1;
+          contract.status='working';contract.forced=true;contract.workPermit=true;contract.batchRemaining=contract.trips-contract.done;
           contract.lastWorkDecision=Date.now();contract.nextDecision=Date.now()+60000;
           contract.behavior='爸爸强行让我继续搬砖';
           draft.humanity=advanceHumanity(draft.humanity,Date.now());
@@ -66,10 +66,11 @@ export function createWorksite(store:Reader,gate:PetGate,uow:UnitOfWork,view:(id
           text=action==='touch'?'爸爸在搬砖网页里碰了碰我。':'爸爸在搬砖网页里拖动了我，当前动作被打断。';
         }
         const command=pet.world?.command;
-        if(['enter-forced','enter-voluntary','release','leave-voluntary','drag','force-work'].includes(action)&&command?.source==='labor'&&['queued','running'].includes(command.status)){
-          command.status='interrupted';command.interruptedReason=action==='force-work'?'force-work':'worksite-transition';
+        if(['enter-forced','enter-voluntary','release','leave-voluntary','drag'].includes(action)&&command?.source==='labor'&&['queued','running'].includes(command.status)){
+          command.status='interrupted';command.interruptedReason='worksite-transition';
           const c=pet.labor?.contracts?.find((x:any)=>x.id===command.labor?.id);if(c&&action==='drag')c.carrying=false;
         }
+        if(action==='force-work'&&command?.source==='labor'&&['queued','running'].includes(command.status))command.forcedLabor=true;
         const at=new Date().toISOString(),eventId='worksite:'+randomUUID();
         (pet.events||=[]).push({id:eventId,kind:'interaction',text,ts:Date.parse(at)});
         draft.life.events.push({eventId,petId:id,type:'interaction.worksite',source:action.includes('voluntary')?'scheduler':'user',...(action.includes('voluntary')?{}:{actorId:'dad'}),occurredAt:at,receivedAt:at,evidenceLevel:'observed',payload:{action,description:text}});

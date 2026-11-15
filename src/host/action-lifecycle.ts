@@ -1,7 +1,7 @@
 import {hasActiveConversation} from './active-conversation.js';
 import {validateRicePurchase} from './rice-purchase.js';
 import {validateRiceMeal} from './rice-inventory.js';
-import {isForcedLabor,forcedLaborState} from './forced-labor.js';
+import {forcedLaborState} from './forced-labor.js';
 import {sweetPrice} from './spirit-activity.js';
 import {selfActionState} from './self-action-state.js';
 import {checkSpirit,spendSpirit} from '../kernel/spirit.js';
@@ -99,7 +99,7 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
       if(action.actionType==='service.sweet')sweetPrice(draft);
       if(action.actionType==='service.buy-rice')validateRicePurchase(draft);
       if(action.actionType==='service.eat-rice')validateRiceMeal(draft,action.parameters.itemId);
-      if(!isForcedLabor(draft,action))checkSpirit(draft.life,action.actionType,this.clock().valueOf());
+      if(action.actionType!=='labor.step')checkSpirit(draft.life,action.actionType,this.clock().valueOf());
       const proposal={...action, expectedStateVersion:draft.version};
       if((draft.legacy as Record<string,any>).worksite?.inside && (action.actionType.startsWith('care.') || ['service.eat-rice','body.sleep','body.wake','token.pickup','body.activity'].includes(action.actionType)))throw Error('她在网页工地里，请先接她回桌面');
       if(action.actionType==='body.activity' && ((draft.legacy as Record<string,any>).space?.mode!=='outside' || (draft.legacy as Record<string,any>).labor?.contracts?.some((c:any)=>c.status==='working')))throw Error('当前桌面空间或工作状态不允许走动');
@@ -115,7 +115,7 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
     const now = this.now();
     const eventId = `action-dispatched:${action.id}`;
     assert(!draft.life.events.some(e => e.eventId === eventId), '行动派发事件冲突');
-    spendSpirit(draft.life,action.actionType,Date.parse(now),isForcedLabor(draft,action));
+    spendSpirit(draft.life,action.actionType,Date.parse(now),action.actionType==='labor.step');
     action.status = 'DISPATCHED'; action.updatedAt = now;
     if (intent.type === 'qq.send') {
       const qq = (draft.legacy as Record<string,any>).qq;

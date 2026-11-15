@@ -71,3 +71,19 @@ test('restored desktop contracts cannot draw bricks or expand the new desktop wi
   for(const event of [{type:'pointerup'},{type:'mousemove',buttons:0},{type:'lostpointercapture',buttons:0},{type:'pointercancel',buttons:0}]){sprite.dragState={dragging:true};sprite.onPointerUp(event);}
   assert.equal(drops,3,'normal and fallback releases enter the worksite, cancellation does not');
 });
+
+
+test('中断之后迟到的完成回执结算为取消，不留下永远派发中的步骤',async()=>{
+  const world={id:'cmd',source:'labor',surface:'web',status:'queued',index:0,labor:{id:'job',trip:0,leg:'load',x:.22}};
+  const channel=createDesktopCommandChannel({loadEnvelope:async()=>({legacy:{world:{command:structuredClone(world)}}})},{});
+  const controller=new AbortController();let result;
+  try{
+    result=channel.bridge.execute('main',{id:'step',type:'labor.step',payload:{actionId:'step',petId:'main',parameters:{commandId:'cmd',contractId:'job'}}},controller.signal);
+    for(let i=0;i<20&&!channel.view('main');i++)await new Promise(setImmediate);
+    assert.ok(channel.view('main'));
+    await channel.receipt({petId:'main',id:'cmd',surface:'web',index:0,status:'playing'});
+    world.status='interrupted';
+    await channel.receipt({petId:'main',id:'cmd',surface:'web',index:0,status:'completed',played:true,x:.22});
+    const receipt=await result;assert.equal(receipt.status,'cancelled');assert.equal(receipt.evidence.confirmed,true);assert.equal(channel.view('main'),undefined);
+  }finally{controller.abort();channel.close();if(result)await result;}
+});
