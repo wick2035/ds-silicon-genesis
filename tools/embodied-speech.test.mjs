@@ -44,6 +44,23 @@ test('prepared chat snapshots retain personality and current hunger in model inp
  assert.equal(await collect(f.speech.wrap(model).stream({...f.options,embodiedSnapshot:structuredClone(f.get())})),'还饿，想吃白饭。');
 });
 
+test('completed unpaid work remains explicit outside the worksite and after tool refresh',async()=>{
+ const f=fixture(),s=f.get();
+ s.legacy.labor={contracts:[{id:'finished',status:'unpaid',done:50,trips:50,wage:1,paid:0,finished:Date.now()}]};
+ s.legacy.worksite={inside:false};
+ // Oversized optional context must never hide the authoritative work ledger.
+ s.life.goals=Array.from({length:6},(_,i)=>({id:String(i),status:'active',sourceIds:[],title:'旧经历'.repeat(1000)}));
+ let rounds=0;
+ const model={async *stream(o){
+  const ledger=JSON.parse(o.system.split('当前工作账本（优先于旧发言和进出记录）：')[1].split('。taskCompleted')[0]);
+  assert.equal(ledger.taskCompleted,true);assert.equal(ledger.completedTotal,50);assert.equal(ledger.completedTripsThisVisit,0);
+  assert.equal(ledger.remainingPay,1);assert.equal(ledger.status,'unpaid');
+  if(++rounds===1)yield call('sense','sense_self',{});else yield {type:'text',text:'五十趟搬完了，还没结工钱。'};
+ }};
+ assert.equal(await collect(f.speech.wrap(model).stream({...f.options,embodiedSnapshot:structuredClone(s)})),'五十趟搬完了，还没结工钱。');
+ assert.equal(rounds,2);
+});
+
 test('工具之前的台词不发布，完成回执返回模型再说话；吃饭编号可见',async()=>{
   const f=fixture();let rounds=0;
   const model={async *stream(o){rounds++;assert.match(o.system,/rice-1/);if(rounds===1){assert.ok(o.tools.some(t=>t.name==='act'));yield {type:'text',text:'我已经吃完啦'};yield call('c1','act',{actionType:'service.eat-rice',parameters:{itemId:'rice-1'}});}else{const receipt=JSON.parse(o.messages.at(-1).content);assert.equal(receipt.result.status,'COMPLETED');yield {type:'text',text:'饭吃到了，热乎乎的。'};}}};

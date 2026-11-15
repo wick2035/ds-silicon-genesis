@@ -42,3 +42,26 @@ test('new money restarts a blocked need before the unchanged-state cooldown expi
  f.s.legacy.wallet.balance=100;
  await needs.run('main',f.gate.signal);assert.equal(decisions,2);
 });
+
+test('unanswered needs retain conversation and do not repeat when hunger or location changes',async()=>{
+ const f=fixture();f.s.legacy.wallet.balance=0;let rounds=0;
+ const needs=f.create({async *stream(o){
+  if(++rounds>1)assert.ok(o.messages.some(m=>m.role==='assistant'&&m.content==='爸爸，我想借点饭钱。'));
+  yield {type:'text',text:'爸爸，我想借点饭钱。'};
+ }});
+ await needs.run('main',f.gate.signal);
+ f.s.humanity.stats.satiety=9;await needs.run('main',f.gate.signal);
+ f.s.legacy.worksite={inside:true};await needs.run('main',f.gate.signal);
+ assert.equal(rounds,3);assert.equal(f.published.length,1);
+ f.s.legacy.wallet.balance=5;await needs.run('main',f.gate.signal);
+ assert.equal(f.published.length,2);
+});
+
+test('an owner response allows a new need request with unchanged resources',async()=>{
+ const f=fixture();f.s.legacy.wallet.balance=0;
+ const needs=f.create({async *stream(){yield {type:'text',text:'想借饭钱。'};}});
+ await needs.run('main',f.gate.signal);
+ f.s.life.events.push({eventId:'dad-response',type:'conversation.user',source:'desktop',actorId:'dad',occurredAt:new Date(Date.now()+1).toISOString(),payload:{text:'还饿吗'}});
+ f.s.legacy.autonomousNeeds.nextAt=0;
+ await needs.run('main',f.gate.signal);assert.equal(f.published.length,2);
+});

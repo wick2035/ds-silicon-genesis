@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {selfModelContext,STABLE_PERSONALITY} from './self-model-context.js';
 import {promptData} from './prompt-data.js';
 import {actionCatalog,validateActionParameters} from './action-parameters.js';
-import {conversationContext} from './conversation-context.js';
+import {conversationContext,worksiteFacts} from './conversation-context.js';
 import {humanityPrompt} from '../../vendor/dsh-pet/src/host/humanity.mjs';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 import type {PetGate,UnitOfWork,OutboxDispatcher} from '../storage/uow.js';
@@ -95,7 +95,8 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
     // Live body and actionable inventory are required inputs, never optional history.
     const liveFoodFor=(envelope:CanonicalEnvelope)=>{const pet=envelope.legacy as any;return {身体:envelope.humanity.stats,睡眠:{sleeping:envelope.humanity.sleeping,restingUntil:envelope.humanity.restingUntil},food:{...riceMotivation(envelope.humanity as any,pet.config??{}),price:pet.config?.costs?.feed,frozen:pet.wallet?.frozen===true},饭钱:pet.wallet?.balance,库存:riceInventory(envelope),食物可用性:riceAvailability(envelope)};};
     const system=options.system+'\n'+personality+'\n每次开口前，结合自己的感受、目标、刚才爸爸的操作和真实结果，判断此刻需不需要工具；可以只说话或安静，不必为了使用工具而行动。需要吃饭、喝水、睡觉、走动、学习或搬砖时调用工具，不能用台词冒充行动。失败后自己决定换办法、休息或向爸爸商量；条件未变不要重复失败的动作。感受和判断属于你，操作归因只依据真实来源，不知道是谁造成的就不要认定。通过真实结果理解自己喜欢什么、身体能做什么，不宣称凭空获得意识。每次工具返回后，由你继续决定调用下一项工具还是回答；例如买饭成功只代表饭已入库，你可以根据新库存中 status=available 的 id 再决定吃饭；unconfirmed 是旧碗结果未明，不选择它，吃饭必须等待自己的实际回执。无需让爸爸再发一条消息推动下一步，也不强制你购买后一定吃。工具后的回复针对结果自然地说，未知结果不能说完成。需要工具时先调用，工具调用之前不要输出面向对方的回答。';
-    let liveSystem=system+'\n此刻实况：'+promptData(context,2400)+'\n当前身体与食物（优先于旧对话和历史摘要）：'+JSON.stringify(liveFoodFor(initial.envelope));
+    const liveWorkFor=(envelope:CanonicalEnvelope)=>'\n当前工作账本（优先于旧发言和进出记录）：'+JSON.stringify(worksiteFacts(envelope))+'。taskCompleted=true 表示整份工作已经搬完；unpaid 仅表示等待结薪，不能说没搬完。completedTripsThisVisit=0 或 inside=false 只说明本次进场或此刻位置，不会抹掉 completedTotal。remainingPay 是尚欠工钱，不等于还要搬的趟数。';
+    let liveSystem=system+'\n此刻实况：'+promptData(context,2400)+liveWorkFor(initial.envelope)+'\n当前身体与食物（优先于旧对话和历史摘要）：'+JSON.stringify(liveFoodFor(initial.envelope));
     const seen=new Set<string>();let uncertainBody=false;
     for(let round=0;round<5;round++){
       if(signal.aborted)throw Error('发言已取消');
@@ -137,7 +138,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
       }
       // A purchase or meal changes current facts within the same model turn.
       const refreshed=await sense(speech.petId,speech.contextExcludeIds??speech.sourceIds,query);
-      liveSystem=system+'\n此刻实况：'+promptData(refreshed.context,2400)+'\n当前身体与食物（优先于旧对话和历史摘要）：'+JSON.stringify(liveFoodFor(refreshed.envelope));
+      liveSystem=system+'\n此刻实况：'+promptData(refreshed.context,2400)+liveWorkFor(refreshed.envelope)+'\n当前身体与食物（优先于旧对话和历史摘要）：'+JSON.stringify(liveFoodFor(refreshed.envelope));
     }
   }};}};
 }
