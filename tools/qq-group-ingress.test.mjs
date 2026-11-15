@@ -23,11 +23,12 @@ async function fixture(t) {
   return {gateway,state,sent,diagnosticPath,message};
 }
 
-for(const prefix of ['', '<@!bot-id> ', '<@bot-id>\n', '<@!222> ', '<@!opaque-group-mention> ', '<@!opaque-group-mention><@another-id> ']) {
+for(const prefix of ['', '<@!bot-id> ', '<@bot-id>\n', '<@!222> ', '<@!opaque-group-mention> ', '<@!opaque-group-mention><@another-id> ', '@大肥鱼 ', '@机器人 昵称 ']) {
   test(`group binding survives packet routing and bot mention ${JSON.stringify(prefix)}`,async t=>{
     const f=await fixture(t);
     const socket={};f.gateway.socket=socket;
-    await f.gateway.packet(JSON.stringify({op:0,s:1,t:'GROUP_AT_MESSAGE_CREATE',d:f.message(prefix+'/绑定群 private-code')}),socket);
+    const eventType=prefix.startsWith('@')?'GROUP_MESSAGE_CREATE':'GROUP_AT_MESSAGE_CREATE';
+    await f.gateway.packet(JSON.stringify({op:0,s:1,t:eventType,d:f.message(prefix+'/绑定群 private-code')}),socket);
     // The transport intentionally dispatches receives without blocking heartbeats.
     await new Promise(resolve=>setImmediate(resolve));
     assert.equal(f.state.legacy.qq.identity.groupOpenid,'private-group');
@@ -36,7 +37,7 @@ for(const prefix of ['', '<@!bot-id> ', '<@bot-id>\n', '<@!222> ', '<@!opaque-gr
     assert.equal(f.sent.length,1);
     assert.equal(f.sent[0][3],'群绑定好啦。');
     const raw=await readFile(f.diagnosticPath,'utf8'),status=JSON.parse(raw);
-    assert.equal(status.connection.lastGroupEventType,'GROUP_AT_MESSAGE_CREATE');
+    assert.equal(status.connection.lastGroupEventType,eventType);
     assert.equal(status.pairing.paired,true);
     assert.ok(status.recentInbound.some(item=>item.containsConfiguredGroupCode===true&&item.commandOffset>=0));
     assert.doesNotMatch(raw,/private-|bot-id|222|绑定群/);

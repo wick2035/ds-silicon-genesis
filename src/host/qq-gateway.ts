@@ -101,7 +101,8 @@ export class CanonicalQQGateway extends QQPetBridge {
     // command is authorized by its one-time code, not by the mentioned ID.
     // Keep the original text for ordinary conversation and normalize pairing only.
     const withoutMentions=scene==='group'?text.replace(/^(?:<@!?[^>\s]+>\s*)+/u,''):text;
-    const pairingText=scene==='group'&&withoutMentions.startsWith('/绑定群 ')?withoutMentions:text;
+    const plainMentionCommand=scene==='group'?/^@[^\r\n]*?\s+(\/绑定群 \S+)\s*$/u.exec(withoutMentions)?.[1]:undefined;
+    const pairingText=scene==='group'?(plainMentionCommand??(withoutMentions.startsWith('/绑定群 ')?withoutMentions:text)):text;
     const paired=await this.#options.canonical.pair(petId,{...input,text:pairingText},this.#options.ingressAuthority);
     if(/^\/绑定(?:群)?\s/u.test(pairingText))this.#diagnostic('pairing',{scene,paired:paired.paired});
     if(paired.paired && paired.eventId) { await this.respond(scene,[{text:'',isOwner:true,eventId:paired.eventId,messageId:message.id,receivedAt:Date.now()}],scene==='group'?'群绑定好啦。':'绑定好啦。'); return; }
