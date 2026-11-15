@@ -26,6 +26,7 @@ function diagnostics(path?:string) {
   return (stage:string,details:Record<string,unknown>)=>{
     if(!path)return;
     latest[stage]={at:new Date().toISOString(),...details};
+    if(stage==='inbound')latest.recentInbound=[...(Array.isArray(latest.recentInbound)?latest.recentInbound:[]),latest[stage]].slice(-12);
     try {writeFileSync(path+'.tmp',JSON.stringify(latest,null,2)+'\n',{mode:0o600});renameSync(path+'.tmp',path);}catch{}
   };
 }
@@ -89,9 +90,20 @@ export class CanonicalQQGateway extends QQPetBridge {
       if(mention && [this.botId,this.#options.config.appId].includes(mention[1]))text=text.slice(mention[0].length).trim();
     }
     const input:QQIncoming={messageId:message.id,scene,actorOpenid:actor,...(scene==='group'?{groupOpenid:message.group_openid,mentioned:eventType==='GROUP_AT_MESSAGE_CREATE'}:{}),text,occurredAt:message.timestamp};
+    this.#diagnostic('inbound',{scene,eventType,characters:text.length,
+      hasBindingWord:text.includes('绑定群'),commandOffset:text.indexOf('/绑定群'),
+      startsWithAt:text.startsWith('@'),startsWithStructuredMention:text.startsWith('<@'),
+      firstCodePoint:text.codePointAt(0),
+      containsConfiguredGroupCode:scene==='group'&&!!this.#options.config.groupPairingCode&&text.includes(this.#options.config.groupPairingCode),
+      whitespaceAfterCommand:text.includes('/绑定群')?text.codePointAt(text.indexOf('/绑定群')+4):undefined});
     const petId=this.#options.config.petId||'main';
-    const paired=await this.#options.canonical.pair(petId,input,this.#options.ingressAuthority);
-    if(/^\/绑定(?:群)?\s/u.test(text))this.#diagnostic('pairing',{scene,paired:paired.paired});
+    // Group mention IDs can differ from READY.user.id and AppID. A pairing
+    // command is authorized by its one-time code, not by the mentioned ID.
+    // Keep the original text for ordinary conversation and normalize pairing only.
+    const withoutMentions=scene==='group'?text.replace(/^(?:<@!?[^>\s]+>\s*)+/u,''):text;
+    const pairingText=scene==='group'&&withoutMentions.startsWith('/绑定群 ')?withoutMentions:text;
+    const paired=await this.#options.canonical.pair(petId,{...input,text:pairingText},this.#options.ingressAuthority);
+    if(/^\/绑定(?:群)?\s/u.test(pairingText))this.#diagnostic('pairing',{scene,paired:paired.paired});
     if(paired.paired && paired.eventId) { await this.respond(scene,[{text:'',isOwner:true,eventId:paired.eventId,messageId:message.id,receivedAt:Date.now()}],scene==='group'?'群绑定好啦。':'绑定好啦。'); return; }
     const result=await this.#options.canonical.receive(petId,input,this.#options.ingressAuthority);
     if(!result.accepted||!result.eventId||this.#closed) return;

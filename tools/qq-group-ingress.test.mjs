@@ -15,7 +15,7 @@ async function fixture(t) {
   await canonical.configurePairing('main',{group:{code:'private-code',expiresAt:Date.now()+60000}});
   // Keep real canonical pairing/receive; isolate the independent outbox validation.
   canonical.enqueue=async(...args)=>{sent.push(args);return 'reply-action';};
-  const gateway=new CanonicalQQGateway({config:{enabled:true,appId:'222',appSecret:'private-secret',groupEnabled:true,groupMode:'all'},
+  const gateway=new CanonicalQQGateway({config:{enabled:true,appId:'222',appSecret:'private-secret',groupEnabled:true,groupMode:'all',groupPairingCode:'private-code'},
     canonical,ingressAuthority:ingress,signal:controller.signal,diagnosticPath,onTurn:async()=>{throw Error('pairing must bypass model');},dispatch:async()=>{}});
   gateway.botId='bot-id';
   t.after(async()=>{controller.abort();gateway.stop();await rm(folder,{recursive:true,force:true});});
@@ -23,7 +23,7 @@ async function fixture(t) {
   return {gateway,state,sent,diagnosticPath,message};
 }
 
-for(const prefix of ['', '<@!bot-id> ', '<@bot-id>\n', '<@!222> ']) {
+for(const prefix of ['', '<@!bot-id> ', '<@bot-id>\n', '<@!222> ', '<@!opaque-group-mention> ', '<@!opaque-group-mention><@another-id> ']) {
   test(`group binding survives packet routing and bot mention ${JSON.stringify(prefix)}`,async t=>{
     const f=await fixture(t);
     const socket={};f.gateway.socket=socket;
@@ -38,15 +38,21 @@ for(const prefix of ['', '<@!bot-id> ', '<@bot-id>\n', '<@!222> ']) {
     const raw=await readFile(f.diagnosticPath,'utf8'),status=JSON.parse(raw);
     assert.equal(status.connection.lastGroupEventType,'GROUP_AT_MESSAGE_CREATE');
     assert.equal(status.pairing.paired,true);
+    assert.ok(status.recentInbound.some(item=>item.containsConfiguredGroupCode===true&&item.commandOffset>=0));
     assert.doesNotMatch(raw,/private-|bot-id|222|绑定群/);
   });
 }
 
-test('another member mention cannot be converted into a binding command',async t=>{
+test('mention normalization cannot bypass the one-time pairing code',async t=>{
   const f=await fixture(t);
-  await f.gateway.receive(f.message('<@!someone-else> /绑定群 private-code'),'group','GROUP_AT_MESSAGE_CREATE');
+  await f.gateway.receive(f.message('<@!someone-else> /绑定群 wrong-code'),'group','GROUP_MESSAGE_CREATE');
   assert.equal(f.state.legacy.qq.identity.groupOpenid,undefined);
   assert.equal(f.sent.length,0);
+  const status=JSON.parse(await readFile(f.diagnosticPath,'utf8'));
+  assert.equal(status.inbound.startsWithStructuredMention,true);
+  assert.equal(status.inbound.containsConfiguredGroupCode,false);
+  assert.equal(status.pairing.paired,false);
+  assert.ok(status.inbound.commandOffset>0);
 });
 
 test('rejected timestamps and gateway failures remain diagnosable without content',async t=>{
