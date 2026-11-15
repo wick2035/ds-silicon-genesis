@@ -1,16 +1,16 @@
 'use strict';
 (() => {
   const $=id=>document.getElementById(id),worker=$('worker'),art=$('work-art'),idle=$('idle'),scene=$('scene');
-  let latest=null,position=.5,running=null,drag=null,polling=false,stopped=false;
+  let latest=null,position=.5,running=null,drag=null,polling=false,stopped=false,forcing=false;
   const clamp=n=>Math.max(.08,Math.min(.92,n));
   function place(){worker.style.left=(position*100)+'%';}
   function bricks(id,n){const root=$(id);root.replaceChildren();for(let i=0;i<Math.min(12,Math.max(0,n));i++){const b=document.createElement('i');b.className='brick';root.append(b);}}
   function render(s){
     const wasInside=latest?.location?.inside===true;latest=s;const c=s.labor?.current,inside=s.location?.inside===true;
     if(inside&&!wasInside)$('feedback').textContent='';
-    const speech=s.location?.speech,showSpeech=inside&&speech?.action==='enter-forced'&&Date.now()-speech.at<12000;$('speech').hidden=!showSpeech;if(showSpeech)$('speech').textContent=speech.text;
+    const speech=s.location?.speech,showSpeech=inside&&['enter-forced','force-work','touch','drag'].includes(speech?.action)&&Date.now()-speech.at<12000;$('speech').hidden=!showSpeech;if(showSpeech)$('speech').textContent=speech.text;
     worker.hidden=!inside;$('release').hidden=!inside;
-    const forceable=inside&&(c?.status==='working'||c?.status==='paused')&&Number.isFinite(c.done)&&c.done<c.trips;$('force-work').hidden=!forceable;$('force-work').textContent=c?.forced?'继续强行开干':'强行开干';
+    const forceable=inside&&(c?.status==='working'||c?.status==='paused')&&Number.isFinite(c.done)&&c.done<c.trips;$('force-work').disabled=!forceable||forcing;$('force-work').textContent=forcing?'正在开工…':c?.forced?'强制继续':'强制开工';$('force-work-hint').textContent=!inside?'先把她带进工地':!c?'先在饭钱页新增工作约定':c.status==='offered'?'先确认工作约定':c.status==='unpaid'||c.done>=c.trips?'这份工作已完成':'按当前约定继续搬运';
     $('state').textContent=inside?(s.location.forced?'爸爸把她放进来了，等爸爸接她出去':'她自己走进了工地'):'工地空着，等她来';
     $('headline').textContent=!inside?'工地已经打开':c?.status==='working'?'她正在安排自己的工作':c?.status==='paused'?'她在工地歇一会儿':c?.status==='unpaid'?'砖都搬好了':'她在工地里';
     $('detail').textContent=!inside?'可以从桌面把她拖到这个窗口；她也会自己决定来工作。':s.location.forced?'你可以拖动她，或者点“接她出去”。':c?.status==='unpaid'?'等爸爸手动结算工钱。':'拖动她会打断当前动作，她会记得你的操作。';
@@ -47,6 +47,6 @@
   worker.addEventListener('pointerup',()=>{if(!drag)return;const moved=drag.moved;drag=null;worker.classList.remove('dragging');if(!moved)void window.worksite.action('touch').then(render).catch(e=>{$('feedback').textContent=e.message;});});
   worker.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();void window.worksite.action('touch').then(render).catch(e=>{$('feedback').textContent=e.message;});}});
   $('release').addEventListener('click',async()=>{const button=$('release');button.disabled=true;stop();try{render(await window.worksite.action('release'));$('feedback').textContent='她已经回到桌面。';}catch(e){$('feedback').textContent=e.message;}finally{button.disabled=false;}});
-  $('force-work').addEventListener('click',async()=>{const button=$('force-work');button.disabled=true;stop();try{render(await window.worksite.action('force-work'));$('feedback').textContent='已经强行让她继续搬砖。';}catch(e){$('feedback').textContent=e.message;}finally{button.disabled=false;}});
+  $('force-work').addEventListener('click',async()=>{if(forcing||$('force-work').disabled)return;forcing=true;const button=$('force-work');button.disabled=true;stop();try{render(await window.worksite.action('force-work'));$('feedback').textContent='已经强行让她继续搬砖。';}catch(e){$('feedback').textContent=e.message;}finally{forcing=false;if(latest)render(latest);}});
   window.worksite.notice(text=>{$('feedback').textContent=text;});document.addEventListener('visibilitychange',()=>{if(document.hidden)stop();});window.addEventListener('pagehide',()=>{stopped=true;stop();});void poll();
 })();

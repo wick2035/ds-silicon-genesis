@@ -1,4 +1,5 @@
 import type {LifeState} from '../kernel/types.js';
+import {laborHistory} from './labor-management.js';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 
 /** Only committed, bounded facts; an intent or dispatch is never a receipt. */
@@ -19,6 +20,7 @@ export function conversationContext(state:LifeState, envelope:CanonicalEnvelope)
     food:{balance:wallet.balance??null,frozen:wallet.frozen===true,price:config.costs?.feed??null,
       inventory:inventory.filter((i:any)=>i.status!=='eaten').slice(0,12).map((i:any)=>({name:i.name,status:i.status})),eating:pet.services?.eating??null,recentChanges:recentMoney},
     worksite:worksiteFacts({...envelope,life:envelope.life??state}),
+    laborHistory:laborHistory(pet),
     phone:{open:config.networkLearning===true,search:abilities.search?.status==='granted',fetch:abilities.fetch?.status==='granted',
       dailyLimit:config.exploration?.dailyRuns??null,used:pet.usage?.[day]?.exploreRuns??0},actions
   };

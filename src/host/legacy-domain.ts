@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import {manageLabor} from './labor-management.js';
 import {invalidateDependents} from '../kernel/index.js';
 import type {LifeState} from '../kernel/types.js';
 import { rebuildRelationships } from '../kernel/index.js';
@@ -225,11 +226,16 @@ export class LegacyDomain {
   /** Domain-only offer, negotiation, confirmation, interruption and simulated
    * settlement. Execution and decisions are separate approved workflows. */
   laborAction(petId: string, requestId: string, input: Record<string, unknown>, authority?: object): Promise<unknown> {
-    if (!input || !['offer','confirm','decline','pause','resume','counter','nudge','disturb','pay'].includes(String(input.action))) throw new Error('不支持的工作操作');
+    if (!input || !['offer','confirm','decline','pause','resume','counter','nudge','disturb','pay','adjust','cancel','settle-cancelled'].includes(String(input.action))) throw new Error('不支持的工作操作');
     if (input.action === 'disturb' && authority !== this.#observerAuthority) throw new Error('搬砖打扰缺少可信观察');
     return this.mutate(petId,requestId,'labor-action',input,(store,draft) => {
       const runtime = new LaborDraftRuntime(store);
-      const result = runtime.laborAction(petId,input);
+      const result = ['adjust','cancel','settle-cancelled'].includes(String(input.action))?manageLabor(store,petId,input):runtime.laborAction(petId,input);
+      if(['adjust','cancel','settle-cancelled'].includes(String(input.action))){
+        const event=store.read(petId).events.at(-1),eventId='labor-change:'+requestId,at=new Date(store.clock()).toISOString();
+        draft.life.events.push({eventId,petId,type:'labor.changed',source:'user',actorId:'dad',occurredAt:at,receivedAt:at,evidenceLevel:'observed',payload:{contractId:input.id,action:input.action,description:event.text}});
+        draft.life.memories.push({id:'labor-memory:'+requestId,kind:'autobiographical',content:event.text,sourceIds:[eventId],evidenceLevel:'observed',valid:true,createdAt:at});
+      }
       if (input.action === 'confirm' || input.action === 'pay') {
         const contract = store.read(petId).labor?.contracts?.find((c: Obj) => c.id===input.id);
         if (!contract) throw new Error('工作约定不存在');

@@ -18,7 +18,7 @@ export function projectLegacySnapshot(envelope:CanonicalEnvelope, providers:Reco
   // they were generated. They cannot describe the current body reliably and
   // must not be replayed as a fresh desktop bubble after recovery or restart.
   const current=active?{...active,thought:''}:null;
-  const labor={current,draft:l.draft||null,execution:l.execution||null,error:l.error||null,message:l.lastSpeech?.contractId===current?.id?l.lastSpeech:null,awaitingReply:l.awaitingReply===true,history:contracts.filter((c:Obj)=>['paid','declined'].includes(c.status)).slice(-12).reverse(),balance:wallet.balance};
+  const labor={current,draft:l.draft||null,execution:l.execution||null,error:l.error||null,message:l.lastSpeech?.contractId===current?.id?l.lastSpeech:null,awaitingReply:l.awaitingReply===true,history:contracts.filter((c:Obj)=>['paid','declined','cancelled'].includes(c.status)).slice(-12).reverse(),balance:wallet.balance};
   const soft={scenes:Object.entries(SOFT_SCENES).map(([id,s])=>({id,label:s.label,pose:s.pose})),current:p.world?.soft?.current?.expires>now?p.world.soft.current:null};
   const world={...(p.world||{}),command:null,soft,activity:null,body:h.body||null,sleeping:!!(h.sleeping||h.resting),confirmedSleep:envelope.humanity.sleeping===true,space:p.space||null,paused:envelope.life.constraints.paused,actions:{...BODY_ACTIONS,drink:['喝水','喝水'],pet:['点击回应-挠痒咯咯笑','被摸摸'],soothe:['点击回应-害羞惊讶','被安慰'],accompany:['待机呼吸休闲','安静陪伴']},affect:deriveAffect(h),services:service,labor};
   const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now));
