@@ -42,8 +42,8 @@ function register({ipcMain,petWindows,hostRequest,BrowserWindow,screen,app}) {
   });
   ipcMain.handle('worksite:snapshot',async event=>{const id=siteFor(event.sender);if(!id)throw Error('工地窗口不可用');return call(id,'snapshot');});
   ipcMain.handle('worksite:action',async(event,action)=>{
-    const id=siteFor(event.sender);if(!id||!['release','touch','drag'].includes(action))throw Error('工地操作无效');
-    const state=await call(id,action);if(action==='release')showBody(id,false);return state;
+    const id=siteFor(event.sender);if(!id||!['release','touch','drag','force-work'].includes(action))throw Error('工地操作无效');
+    const state=await call(id,action);if(action==='release'||action==='force-work')showBody(id,state.location?.inside===true);return state;
   });
   ipcMain.handle('worksite:receipt',async(event,receipt)=>{
     const id=siteFor(event.sender),state=id&&last.get(id);
