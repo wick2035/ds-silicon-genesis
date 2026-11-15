@@ -63,7 +63,9 @@
     }catch(e){if(!this.ac.signal.aborted)console.warn('[大肥鱼身体]',e.message);}finally{this.bodyPolling=false;}
   };
   proto.executeBody=async function(c,actions){
-    const step=c.steps[c.index],asset=actions[step.action]?.[0];if(!asset){if(c.source==='silicon-walk')await window.petBridge.reportActionReceipt({id:c.id,actionId:c.actionId,motion:'walk',activity:step.action,index:c.index,surface:'desktop',status:'interrupted'}).catch(()=>{});if(c.source==='silicon-eat')await window.petBridge.reportActionReceipt({id:c.id,actionId:c.actionId,itemId:c.itemId,index:c.index,surface:'desktop',status:'interrupted',reason:'照料动画素材不可用'}).catch(()=>{});return;}
+    const step=c.steps[c.index];
+    // Parent feeding uses the white-rice pose; inventory meals keep their own animation.
+    const asset=c.source==='silicon-eat'&&c.itemId==='parent'&&step.action==='eat'?'吃白饭':actions[step.action]?.[0];if(!asset){if(c.source==='silicon-walk')await window.petBridge.reportActionReceipt({id:c.id,actionId:c.actionId,motion:'walk',activity:step.action,index:c.index,surface:'desktop',status:'interrupted'}).catch(()=>{});if(c.source==='silicon-eat')await window.petBridge.reportActionReceipt({id:c.id,actionId:c.actionId,itemId:c.itemId,index:c.index,surface:'desktop',status:'interrupted',reason:'照料动画素材不可用'}).catch(()=>{});return;}
     const post=(status,extra={})=>c.source==='silicon-walk'
       ? window.petBridge.reportActionReceipt({id:c.id,actionId:c.actionId,motion:'walk',activity:step.action,index:c.index,surface:'desktop',status:status==='failed'?'interrupted':status,...extra}).catch(()=>{})
       : c.source==='silicon-eat'

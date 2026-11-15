@@ -43,11 +43,11 @@
     try{
       await new Promise((resolve,reject)=>{
         this.cancelBody=()=>reject(Error('喂饭动作被打断'));timer=setTimeout(()=>reject(Error('喂饭动画未完成')),22000);
-        this.switchTo('吃饭·碗饭',true);
+        this.switchTo('吃白饭',true);
         const watch=()=>{if(this.ac.signal.aborted||this.sleeping||this.frozen||this.bodyProtected||this.dragState.active){this.cancelBody();return;}
           const front=this.front===0?this.videoA:this.videoB;
-          if(this.anim==='吃饭·碗饭'&&!this.pending&&front.readyState>=2&&!front.paused&&!played){played=true;video=front;ended=()=>resolve();front.addEventListener('ended',ended,{once:true});}
-          if(played&&(front!==video||this.anim!=='吃饭·碗饭')){reject(Error('喂饭动作被打断'));return;}frame=requestAnimationFrame(watch);
+          if(this.anim==='吃白饭'&&!this.pending&&front.readyState>=2&&!front.paused&&!played){played=true;video=front;ended=()=>resolve();front.addEventListener('ended',ended,{once:true});}
+          if(played&&(front!==video||this.anim!=='吃白饭')){reject(Error('喂饭动作被打断'));return;}frame=requestAnimationFrame(watch);
         };frame=requestAnimationFrame(watch);
       });
       const r=await this.postRiceEvent({action:'feed',played:true});if(!r.ok)throw Error(r.message||'喂饭状态未保存');this.hideRiceProp();return true;
