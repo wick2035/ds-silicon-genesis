@@ -49,7 +49,7 @@ export class UnitOfWork {
 
 /** The host must use the same per-pet gate for every mutation and hold an
  * exclusive process/database ownership lease before starting any dispatcher. */
-export interface PetGate { readonly signal: AbortSignal; run<T>(petId: string, operation: () => Promise<T>): Promise<T> }
+export interface PetGate { readonly signal: AbortSignal; run<T>(petId: string, operation: () => Promise<T>): Promise<T>; waitOutside?<T>(operation:()=>Promise<T>):Promise<T> }
 export interface ActionLifecycle {
   /** Pure validation against the latest canonical state; may mark dispatched. */
   prepare(draft: CanonicalEnvelope, intent: OutboxIntent): {allowed: boolean; reason?: string};
@@ -167,6 +167,7 @@ export class OutboxDispatcher {
   }
 
   private async dispatchOwned(petId: string, actionId: string): Promise<ExecutionReceipt> {
+    if(this.active.has(petId))throw new Error('已有行动正在执行，请等待真实结果');
     const client = await this.pool.connect();
     let intent: OutboxIntent, policy='noninterruptible';
     try {
@@ -203,7 +204,10 @@ export class OutboxDispatcher {
     this.active.set(petId,{controller,policy});
     try {
       if (this.gate.signal.aborted) throw new Error('写入租约不可用');
-      receipt = await this.executors.get(intent.type)!(petId, intent, controller.signal);
+      const execute=()=>this.executors.get(intent.type)!(petId, intent, controller.signal);
+      // Let touch, care, chat and helper observations commit while the body is
+      // moving. Reacquire the gate before projecting into the latest envelope.
+      receipt = await (this.gate.waitOutside ? this.gate.waitOutside(execute) : execute());
       if (this.gate.signal.aborted) throw new Error('写入租约已失去');
       if (!receipt || !['completed','failed','cancelled','unknown'].includes(receipt.status) || !receipt.evidence || typeof receipt.evidence !== 'object') throw new Error('执行回执无效');
     } catch {

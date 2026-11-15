@@ -17,13 +17,13 @@ test('失败的日记可手动重试，成功后只结算一次',async()=>{
   assert.equal(await dev.task('main','diary',gate.signal,true,date),false);assert.equal(attempts,2);
 });
 
-test('百炼 DeepSeek 日记使用较低推理强度，同时保留思考模式',async()=>{
+test('百炼 DeepSeek 低延迟模式同时关闭隐式思考',async()=>{
   const original=globalThis.fetch;let body;
   try{
     globalThis.fetch=async(_url,init)=>{body=JSON.parse(init.body);return new Response('data: '+JSON.stringify({choices:[{index:0,delta:{content:'完成'},finish_reason:'stop'}]})+'\n\ndata: [DONE]\n\n',{status:200,headers:{'content-type':'text/event-stream'}})};
     const model=createModelFacade({version:1,defaultSelection:{provider:'p',model:'deepseek-v4.1-flash-1017'},providers:{p:{api:'openai-completions',baseURL:'https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',apiKey:'test-key',models:['deepseek-v4.1-flash-1017']}}},{leaseSignal:new AbortController().signal,budget:{reserve:async()=>()=>{}}});
     for await(const _part of model.llm.stream({provider:'p',model:'deepseek-v4.1-flash-1017',messages:[{role:'user',content:'test'}],reasoningEffort:'low'})){}
-    assert.equal(body.reasoning_effort,'low');assert.equal(body.enable_thinking,undefined);model.dispose();
+    assert.equal(body.reasoning_effort,'low');assert.equal(body.enable_thinking,false);model.dispose();
   }finally{globalThis.fetch=original;}
 });
 

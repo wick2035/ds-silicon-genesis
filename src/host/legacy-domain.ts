@@ -85,12 +85,15 @@ export class LegacyDomain {
         const pet = store.data.pets[petId] as Obj;
         pet.canonicalOperations = {...pet.canonicalOperations,[operationId]:{kind,inputHash:fingerprint(input),output:structuredClone(output)}};
         draft.legacy = pet;
+        const descriptions:Record<string,string>={wallet:'爸爸调整了你的饭钱',configure:'爸爸调整了你的生活设置',grant:'爸爸调整了你的能力授权',configureNetwork:'爸爸调整了联网学习开关',memory:'爸爸修改了记忆，请尊重修改，不复述删除内容',growthControl:'爸爸调整了成长设置',diary:'爸爸整理了日记',wish:'爸爸处理了你的念想','world-stop':'爸爸停止了当前活动',soft:'爸爸与你进行了情绪互动','labor-action':'爸爸调整了工作约定或进度','token-drop':'爸爸放下了饭钱','token-collect':'爸爸收回了地上的饭钱'};
+        if(descriptions[kind]){const stamp=new Date(now).toISOString();draft.life.events.push({eventId:'operation:'+operationId,petId,type:'interaction.operation',source:'user',actorId:'dad',occurredAt:stamp,receivedAt:stamp,evidenceLevel:'observed',payload:{operation:kind,description:descriptions[kind]}});draft.life.memories.push({id:'operation-memory:'+operationId,kind:'autobiographical',content:descriptions[kind],sourceIds:['operation:'+operationId],evidenceLevel:'observed',valid:true,createdAt:stamp});}
+
         for (const event of Array.isArray(pet.events) ? pet.events : []) {
           if (typeof event.id !== 'string' || !event.id || !Number.isFinite(event.ts)) continue;
           const id = namespaced('event',event.id);
           if (draft.life.events.some(e => e.eventId === id) || Object.hasOwn(draft.life.invalidSources,id)) continue;
           const stamp = new Date(event.ts).toISOString();
-          draft.life.events.push({eventId:id,petId,type:typeof event.kind === 'string' && event.kind ? event.kind : 'legacy.event',source:'canonical-legacy',occurredAt:stamp,receivedAt:stamp,evidenceLevel:event.kind === 'explicit' ? 'reported' : 'observed',payload:structuredClone(event)});
+          draft.life.events.push({eventId:id,petId,type:typeof event.kind === 'string' && event.kind ? event.kind : 'legacy.event',source:'canonical-legacy',...(event.kind==='wallet'?{actorId:'dad'}:{}),occurredAt:stamp,receivedAt:stamp,evidenceLevel:event.kind === 'explicit' ? 'reported' : 'observed',payload:structuredClone(event)});
           // A manual wallet adjustment (add/subtract/set/freeze) is a deliberate
           // action by dad that she should remember as an event, not just a number
           // change. Mirror it into long-term memory with the same source binding.

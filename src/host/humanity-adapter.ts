@@ -75,7 +75,7 @@ export class CanonicalHumanityAdapter {
       const prior = human.canonicalActions?.[requestId];
       if (prior) { if (prior.kind !== 'react' || prior.event !== event || !equal(prior.detail, detail)) throw new Error('观察标识冲突'); return {state:human,result:human}; }
       const state = reactHumanity(human, event, now, detail);
-      const stamp=new Date(now).toISOString(), actor=event==='collision' && (detail as any)?.origin==='user-throw'?'dad':undefined;
+      const stamp=new Date(now).toISOString(), actor=['knock','impact'].includes(event) || ['user-throw','user-drag'].includes((detail as any)?.origin)?'dad':undefined;
       draft.life.events.push({eventId:'body-observation:'+requestId,petId,type:'body.observed',source:'helper',...(actor?{actorId:actor}:{}),occurredAt:stamp,receivedAt:stamp,evidenceLevel:'observed',payload:{event,detail}});
       state.canonicalActions = {...human.canonicalActions, [requestId]:{kind:'react',event,detail}};
       return {state,result:state};

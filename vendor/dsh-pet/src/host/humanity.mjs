@@ -173,12 +173,18 @@ export function advanceHumanity(input, now = Date.now()) {
   let t = Math.max(s.updatedAt, now - 8 * 3600000);
   if (t > s.updatedAt) { settleResponses(s, t); s.updatedAt = t; }
   while (t < now) {
-    const end = Math.min(t + 15 * 60000, now), h = (end - t) / 3600000;
+    const restEnd = s.restingUntil > t ? s.restingUntil : Infinity;
+    const end = Math.min(t + 60000, restEnd, now), h = (end - t) / 3600000;
     const rest = s.sleeping || t < s.restingUntil;
     const b = s.stats;
     b.satiety -= h * (rest ? 2.5 : 4); b.hydration -= h * (rest ? 2 : 3.2);
-    b.stamina += h * (rest ? 13 : -3); b.energy += h * (rest ? 17 : -4.5);
-    b.pain -= h * (rest ? 5 : 2); b.stress -= h * (rest ? 7 : 2);
+    // New-version kinetics: quiet time repairs physical fatigue; action receipts
+    // account for exertion separately. Spirit remains the sleep-debt system.
+    const nourished = b.satiety >= 25 && b.hydration >= 25;
+    b.stamina += h * (rest ? 120 : nourished ? 24 : -6);
+    b.energy += h * (rest ? 90 : nourished ? 12 : -6);
+    b.pain *= Math.exp(-h / (rest ? 1/6 : 1/2));
+    b.stress *= Math.exp(-h / (rest ? 1/4 : 2/3));
     b.comfort += h * ((b.satiety < 25 || b.hydration < 25) ? -2 : 1.5);
     b.security += h * (rest ? .3 : -.2);
     settleResponses(s, end);

@@ -18,9 +18,10 @@ export function conversationContext(state:LifeState, envelope:CanonicalEnvelope)
   const recentMoney=Array.isArray(pet.events)?pet.events.filter((e:any)=>['wallet','wallet-spend'].includes(e.kind)).slice(-6).map((e:any)=>e.text):[];
   return {
     food:{balance:wallet.balance??null,frozen:wallet.frozen===true,price:config.costs?.feed??null,
-      inventory:inventory.filter((i:any)=>i.status!=='eaten').slice(0,12).map((i:any)=>({name:i.name,status:i.status})),eating:pet.services?.eating??null,recentChanges:recentMoney},
+      inventory:inventory.filter((i:any)=>i.status!=='eaten').slice(0,12).map((i:any)=>({id:i.id,name:i.name,status:i.status})),eating:pet.services?.eating??null,recentChanges:recentMoney},
     worksite:worksiteFacts({...envelope,life:envelope.life??state}),
     laborHistory:laborHistory(pet),
+    resources:{coins:(pet.tokens?.coins??[]).filter((c:any)=>c.status==='floor').slice(0,12).map((c:any)=>({id:c.id,surface:c.surface})),attachments:state.events.filter(e=>e.type==='attachment.shared'&&!Object.hasOwn(state.invalidSources,e.eventId)).slice(-3).map(e=>({sourceId:e.eventId,attachmentId:(e.payload as any)?.attachmentId}))},
     phone:{open:config.networkLearning===true,search:abilities.search?.status==='granted',fetch:abilities.fetch?.status==='granted',
       dailyLimit:config.exploration?.dailyRuns??null,used:pet.usage?.[day]?.exploreRuns??0},actions
   };

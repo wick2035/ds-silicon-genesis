@@ -42,14 +42,17 @@ test('受伤保护姿态中喝水仍播放对应动作，完成后恢复原保�
   assert.equal(receipts[1].played,true);assert.equal(sprite.bodyProtected,true);assert.ok(classes.has('is-crying'));
 });
 
-test('时段会影响困意，但不自动休息或按睡眠恢复体力',()=>{
+test('时段会影响困意但不强制入睡，清醒修复慢于主动休息',()=>{
   const now=Date.parse('2026-11-14T05:00:00Z'),state=createHumanity(now);
   state.stats.energy=60;state.stats.stamina=60;
   assert.equal(describeHumanity(state,now).resting,false);
   assert.ok(describeHumanity(state,now).desires.rest>40);
   const later=advanceHumanity(state,now+3600000);
-  assert.ok(later.stats.energy<60);
-  assert.ok(later.stats.stamina<60);
+  const resting=structuredClone(state);resting.restingUntil=now+3600000;
+  const recovered=advanceHumanity(resting,now+3600000);
+  assert.equal(describeHumanity(later,now+3600000).resting,false);
+  assert.ok(later.stats.energy>60 && later.stats.energy<recovered.stats.energy);
+  assert.ok(later.stats.stamina>60 && later.stats.stamina<recovered.stats.stamina);
 });
 
 test('体力很低不会自动入睡，真正睡着也不会自动唤醒',async()=>{
@@ -76,7 +79,7 @@ test('只有真实提交的吃喝触发回应，模型失败不会编造回应',
   assert.deepEqual(calls.map(x=>x.eventId),['water','feed']);
   assert.match(calls[0].description,/喝了水/);
   assert.match(calls[1].description,/喂了你一口饭/);
-  assert.deepEqual(shown,['好香呀，爸爸']);
+  assert.equal(shown.length,2);assert.match(shown[0],/^【系统反馈】.*照料已完成/);assert.equal(shown[1],'好香呀，爸爸');
 });
 
 test('喝水必须播放对应动作，完成回执后才增加水分',async()=>{
@@ -151,7 +154,7 @@ test('模型返回空内容时不会发布虚构的照料回应',async()=>{
   const base={petId:'main',humanity:{lastThought:'喝到啦'},life:{events:[],invalidSources:{}}},shown=[];
   const observe=createCareReactions(base,async()=>'',text=>shown.push(text));
   observe({...base,life:{...base.life,events:[{eventId:'care-water:test',type:'social.care',payload:{action:'water'}}]}});
-  assert.equal(await observe.wait('care-water:test'),'');assert.deepEqual(shown,[]);
+  assert.match(await observe.wait('care-water:test'),/^【系统反馈】/);assert.equal(shown.length,1);assert.match(shown[0],/暂时未能生成回应/);
 });
 
 test('照料回应显示期间不会被普通心情气泡盖掉',async()=>{

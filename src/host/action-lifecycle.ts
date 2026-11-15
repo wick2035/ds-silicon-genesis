@@ -1,4 +1,5 @@
 import {sweetPrice} from './spirit-activity.js';
+import {selfActionState} from './self-action-state.js';
 import {checkSpirit,spendSpirit} from '../kernel/spirit.js';
 import {completeReceiptGoals} from '../kernel/goal-lifecycle.js';
 import {rebuildOutcomeDevelopment} from '../kernel/outcome-development.js';
@@ -96,11 +97,11 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
       if((draft.legacy as Record<string,any>).worksite?.inside && (action.actionType.startsWith('care.') || ['service.eat-rice','body.sleep','body.wake','token.pickup','body.activity'].includes(action.actionType)))throw Error('她在网页工地里，请先接她回桌面');
       if(action.actionType==='body.activity' && ((draft.legacy as Record<string,any>).space?.mode!=='outside' || (draft.legacy as Record<string,any>).labor?.contracts?.some((c:any)=>c.status==='working')))throw Error('当前桌面空间或工作状态不允许走动');
       if(action.actionType==='labor.step' && (!(draft.legacy as Record<string,any>).worksite?.inside || (draft.legacy as Record<string,any>).world?.command?.surface!=='web'))throw Error('她不在网页工地里');
-      if(action.actionType.startsWith('care.') && !(draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])throw Error('照料须由用户手动发起');
+      if(action.actionType.startsWith('care.') && action.actionType!=='care.water' && !(draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])throw Error('照料须由用户手动发起');
 
       if(action.actionType==='qq.send')validateQQReply(draft,state,proposal);
       else if((draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])validateManualService(draft,state,proposal);
-      else validateProposal(state,proposal);
+      else validateProposal(selfActionState(state,proposal),proposal);
     } catch (error) {
       return {allowed:false, reason:error instanceof Error ? error.message : '当前状态不允许执行'};
     }

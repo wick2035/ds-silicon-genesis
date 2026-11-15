@@ -1,4 +1,5 @@
 import {sweetPrice} from './spirit-activity.js';
+import {selfActionState} from './self-action-state.js';
 import {checkSpirit} from '../kernel/spirit.js';
 import {validateManualService} from './manual-service-validation.js';
 import { validateProposal } from '../kernel/index.js';
@@ -25,9 +26,9 @@ export class ActionCoordinator {
       validateActionParameters(action.actionType,action.parameters);
       const state: LifeState = {...structuredClone(draft.life), petId, version:draft.version, ...projectActionBody(draft,this.body(draft),action.actionType)};
       const proposal={...action, expectedStateVersion:draft.version};
-      if(action.actionType.startsWith('care.') && !(draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])throw Error('照料须由用户手动发起');
+      if(action.actionType.startsWith('care.') && action.actionType!=='care.water' && !(draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])throw Error('照料须由用户手动发起');
 
-      if((draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])validateManualService(draft,state,proposal);else validateProposal(state,proposal);
+      if((draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])validateManualService(draft,state,proposal);else validateProposal(selfActionState(state,proposal),proposal);
       if(action.actionType==='learning.observe'||action.actionType==='image.observe') {
         const pet=draft.legacy as Record<string,any>;
         const kind=action.parameters.kind;

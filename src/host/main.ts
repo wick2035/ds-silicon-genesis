@@ -1,3 +1,5 @@
+import {createInteractionReactions} from './interaction-reactions.js';
+import {createEmbodiedSpeech} from './embodied-speech.js';
 import {initializeSpirit} from './spirit-initialization.js';
 import {createCanonicalTodos,createTodoRoute} from './canonical-todos.js';
 import {createLegacyResponses} from './legacy-responses.js';
@@ -70,7 +72,7 @@ export async function main():Promise<void> {
   const parser=await import(pathToFileURL(join(root,'vendor','dsh-pet','src','host','config','jsonc.ts')).href);
   const config=parser.readJsonc(join(root,'data','dsh','dsh-pet','main-config.jsonc'));
   const configuredPet=Array.isArray(config?.pets)?config.pets.find((entry:any)=>entry?.id==='main'):config?.pets?.main;
-  const persona=configuredPet?.whisperPrompt;
+  const persona=configuredPet?.whisperPrompt || (await readFile(join(root,'persona.md'),'utf8'));
   if(typeof persona!=='string'||!persona.trim())throw Error('当前角色描述不可用');
   const modelConfig=await readJson(join(root,'data','model-config.json'));
   const pool=new Pool({...dbConfig.connection,application_name:'silicon-genesis'});
@@ -127,7 +129,35 @@ export async function main():Promise<void> {
     const attachments=createAttachmentStore(store,lease,unitOfWork);
     model=createModelFacade(modelConfig,{leaseSignal:lease.signal,budget,resolveImage:attachments.resolve,persist:async value=>{const file=join(root,'data','model-config.json'),temporary=file+'.tmp';await writeFile(temporary,JSON.stringify(value,null,2),{mode:0o600});await rename(temporary,file);}});
     executors.set('image.observe',createImageObserver(store,budget,model));
+    const actions=new ActionCoordinator(unitOfWork,projectBody);
+    const service=createLegacyServiceActions(store,lease,unitOfWork,actions,dispatcher);
+    const speech=createEmbodiedSpeech(store,lease,unitOfWork,actions,dispatcher,async(id,sources,key)=>{
+      await lease.run(id,async()=>{const current=await store.loadEnvelope(id);if(!current)throw Error('生命状态不可用');
+        await unitOfWork.apply(id,current.version,draft=>{
+          const p=draft.legacy as any,body=projectBody(draft).body,cap=draft.life.constraints.capabilities.find(c=>c.name==='labor.step'&&c.enabled);
+          if(draft.life.constraints.paused||!cap||cap.requiresPermission&&!draft.life.constraints.permissions.includes(cap.requiresPermission)||body.sleeping||body.restrained||body.injured||body.energy<30||body.stamina<35||body.pain>=50)throw Error('现在身体或权限不允许搬砖');
+          if(sources.some(source=>Object.hasOwn(draft.life.invalidSources,source)||!draft.life.events.some(e=>e.eventId===source)))throw Error('决定来源不可用');
+          const contract=p.labor?.contracts?.find((c:any)=>['working','paused'].includes(c.status)&&c.done<c.trips);if(!contract)throw Error('还没有确认的工作约定，先和爸爸商量');
+          if(draft.life.actions.some(a=>a.actionType==='labor.step'&&['PENDING','DISPATCHED','UNKNOWN'].includes(a.status)))throw Error('已有工作正在等待实际结果');
+          const eventId='speech-work:'+createHash('sha256').update(key).digest('hex');
+          if(draft.life.events.some(e=>e.eventId===eventId))return {};
+          contract.status='working';contract.forced=false;contract.workPermit=true;contract.batchRemaining=1;contract.workDecisionEvent=eventId;contract.nextDecision=Date.now()+60000;
+          const site=p.worksite||={inside:false,forced:false};site.suppressUntilDecision=false;if(!site.inside)site.requested=true;
+          const at=new Date().toISOString();draft.life.events.push({eventId,petId:id,type:'labor.decision',source:'model',occurredAt:at,receivedAt:at,evidenceLevel:'inferred',payload:{contractId:contract.id,choice:'work',sourceIds:sources}});return {};
+        });});worksiteWake(id);return {status:'PENDING',message:'已提出去搬一趟；进入和完成仍等待身体确认'};
+    },id=>worksite.act(id,'leave-voluntary'));
+    model.llm=Object.assign({...model.llm,stream:speech.wrap(model.llm).stream},{embodiedTools:true});
     const grounding=createSemanticGrounding(store,budget,model,id=>commandChannel.observation(id));
+    // Autonomous expression has already chosen speech instead of another
+    // action in Cognition; give it the same truth check before publication.
+    executors.set('self.express',async(id,intent,signal)=>{
+      const text=(intent.payload.parameters as any)?.text;
+      if(typeof text!=='string')return {status:'failed',evidence:{reason:'表达内容无效'}};
+      const review=await budget.runAs(id,'autonomous',()=>grounding.review(id,text,'自主表达',signal,'autonomous'));
+      const fresh=await store.loadEnvelope(id);
+      if(!review||!fresh||!grounding.valid(fresh,review)||review.segments.some(s=>!s.supported))return {status:'failed',evidence:{reason:'表达与当前事实不符'}};
+      return {status:'completed',evidence:{actionId:intent.id,kind:'self.express',confirmed:true}};
+    });
     const retrieval=new CanonicalMemoryRetrieval(lease,desktopIdle), chat=new CanonicalChat(store,lease,unitOfWork,budget,model,(id,q)=>retrieval.search(id,q),(id,key,input)=>domain.laborAction(id,key,input),(id,input)=>service(id,input),id=>worksiteWake(id),grounding);
     let requestShutdown=()=>{};
     const decideLaborOffer=async(id:string,requestId:string,contractId:string)=>{
@@ -157,11 +187,10 @@ export async function main():Promise<void> {
     const chatApi=createChatHttp(chat,()=>true,()=>petId);
     const meteredBalance=()=>budget.runAs(petId,'interactive',async()=>{const release=await budget.reserve('balance','balance',lease.signal);try{return await model!.queryBalance();}finally{await release();}});
     const api=async(request:Request)=>{const url=new URL(request.url);if(url.pathname==='/dsh-pet-7340/attachment'){const raw=url.searchParams.get('id')||'',id=raw.startsWith('sha256:')?'image:'+raw.slice(7):raw;try{const image=await attachments.resolve({petId,id},request.signal);return new Response(image.data as BodyInit,{headers:{'content-type':image.mediaType,'cache-control':'no-store','x-content-type-options':'nosniff'}});}catch{return new Response('附件不存在',{status:404});}}return await chatApi(request) ?? await lifeApi(request);};
-    const actions=new ActionCoordinator(unitOfWork,projectBody), coordinator=new CognitiveResultCoordinator(store,unitOfWork,lease,projectBody,actions,dispatcher);
-    const service=createLegacyServiceActions(store,lease,unitOfWork,actions,dispatcher);
+    const coordinator=new CognitiveResultCoordinator(store,unitOfWork,lease,projectBody,actions,dispatcher);
     const development=createDevelopment(store,lease,unitOfWork,budget,model);
     const responses=createLegacyResponses(store,lease,unitOfWork,budget,model,persona,grounding);
-    semanticResponse=async(id,requestId,detail)=>{const d=detail as any;const descriptions:Record<string,string>={'drag-start':'爸爸开始拖动我','drag-end':'爸爸松开了我','flight-start':'我开始飞行，尚不知道是否发生碰撞','flight-end':'飞行结束','prop-take':'爸爸拿起我的饭碗','prop-release':'爸爸放下我的饭碗','menu-anim':'爸爸选择了一个动画','go-home':'爸爸选择回家','open-chat':'爸爸打开聊天','open-care':'爸爸打开照料面板','open-todo':'爸爸打开待办','show-balance':'爸爸查看余额'};const description=descriptions[d?.action];if(!description)throw Error('互动类型无效');const event:any=await domain.record(id,requestId,'interaction',description,requestId,{},observerAuthority);if(!event?.id)throw Error('互动来源未保存');const text=await responses(id,'physical',lease.signal,{eventId:`legacy:event:${encodeURIComponent(event.id)}`,description});return {ok:true,reaction:{text}};};
+    semanticResponse=async(id,requestId,detail)=>{const d=detail as any;const descriptions:Record<string,string>={'drag-start':'爸爸开始拖动我','drag-end':'爸爸松开了我','flight-start':'我开始飞行，尚不知道是否发生碰撞','flight-end':'飞行结束','prop-take':'爸爸拿起我的饭碗','prop-release':'爸爸放下我的饭碗','menu-anim':'爸爸选择了一个动画','go-home':'爸爸选择回家','open-chat':'爸爸打开聊天','open-care':'爸爸打开照料面板','open-todo':'爸爸打开待办','show-balance':'爸爸查看余额'};const description=descriptions[d?.action];if(!description)throw Error('互动类型无效');const event:any=await domain.record(id,requestId,'interaction',description,requestId,{},observerAuthority);if(!event?.id)throw Error('互动来源未保存');const text=await responses(id,'physical',AbortSignal.any([lease.signal,AbortSignal.timeout(30000)]),{eventId:`legacy:event:${encodeURIComponent(event.id)}`,description}).catch(()=> '【系统反馈】这次互动已记录，她暂时未能生成回应。请检查模型连接。');return {ok:true,reaction:{text}};};
     let waitCareResponse:((eventId:string)=>Promise<string|undefined>)|undefined;
     const adapter=createLegacyRequestAdapter({store,gate:lease,domain,humanity,service,development,responses,waitCareResponse:eventId=>waitCareResponse?.(eventId)??Promise.resolve(undefined),interrupt:id=>dispatcher.interrupt(id),tokenSnapshot:id=>tokens.snapshot(id),providers:{search:true,fetch:true,bili:true,image:true,model:true},view:id=>commandChannel.view(id),resolvePet:url=>{
       const selected=url.searchParams.get('pet')||petId;if(selected!==petId)throw Error('宠物不存在');return {petId,name:'大肥鱼'};}});
@@ -197,15 +226,17 @@ export async function main():Promise<void> {
       hostReady:(deps,helpers)=>{
         configuredPetIds=()=>{const cfg=helpers.readAllConfig(deps.configPaths),ids=new Set<string>([petId]);if(!cfg||typeof cfg!=='object'||!Object.keys(cfg).length)throw Error('宠物配置不可用');for(const conf of Object.values(cfg) as any[]){if(!Array.isArray(conf?.pets))throw Error('宠物配置结构无效');for(const pet of conf.pets){if(typeof pet?.id!=='string'||!pet.id)throw Error('宠物配置标识无效');ids.add(pet.id);}}return ids;};
         publishWhisper=(text:string,image?:string,surface?:string)=>{const cfg=helpers.readAllConfig(deps.configPaths);const voiceTo=cfg.main?.voiceEnabled===true&&(surface==='web'||surface==='desktop')?surface:undefined;deps.state.writePet(petId,'say',{text,companionWhisper:true,...(image?{image}:{}),...(voiceTo?{voiceTo}:{})});};
+        const reactToInteraction=createInteractionReactions(reactionBaseline,(id,event,signal)=>responses(id,'interaction',signal,event),text=>deps.state.writePet(petId,'say',careReactionLeaf(text,helpers.readAllConfig(deps.configPaths).main?.voiceEnabled===true)),lease.signal);
+        unitOfWork.onCommit(reactToInteraction);dispatcher.onCommit(reactToInteraction);
         const reactToCare=createCareReactions(reactionBaseline,(id,event,signal)=>responses(id,'care',AbortSignal.any([lease.signal,signal]),event),text=>deps.state.writePet(petId,'say',careReactionLeaf(text,helpers.readAllConfig(deps.configPaths).main?.voiceEnabled===true)));
         waitCareResponse=eventId=>reactToCare.wait(eventId);
         unitOfWork.onCommit(reactToCare);dispatcher.onCommit(reactToCare);
         const reactToWorksite=createWorksiteReactions(reactionBaseline,(id,event,signal)=>responses(id,'worksite',AbortSignal.any([lease.signal,signal]),event),async(id,event,text,fallback)=>{
           const published=await lease.run(id,async()=>{const current=await store.loadEnvelope(id);if(!current)return false;let valid=false;
-            await unitOfWork.apply(id,current.version,draft=>{const transitions=draft.life.events.filter(e=>e.type==='interaction.worksite'&&['enter-forced','enter-voluntary','release','leave-voluntary','force-work'].includes((e.payload as any)?.action));
-              const site=(draft.legacy as any).worksite;if(transitions.at(-1)?.eventId!==event.eventId||!site||(event.action==='enter-forced'?!site.inside:site.inside))return {};
+            await unitOfWork.apply(id,current.version,draft=>{const transitions=draft.life.events.filter(e=>e.type==='interaction.worksite'&&['enter-forced','enter-voluntary','release','leave-voluntary','force-work','touch','drag'].includes((e.payload as any)?.action));
+              const site=(draft.legacy as any).worksite;if(transitions.at(-1)?.eventId!==event.eventId||!site||(event.action==='release'?site.inside:!site.inside))return {};
               site.speech={eventId:event.eventId,action:event.action,text,at:Date.now()};valid=true;
-              if(fallback){const at=new Date().toISOString();draft.life.events.push({eventId:'worksite-reply:'+event.eventId,petId:id,type:'conversation.assistant',source:'desktop',occurredAt:at,receivedAt:at,evidenceLevel:'inferred',causationId:event.eventId,payload:{text,sourceIds:[event.eventId],fallback:true}});}return {};
+              if(fallback){const at=new Date().toISOString();draft.life.events.push({eventId:'worksite-reply:'+event.eventId,petId:id,type:'interaction.feedback',source:'host',occurredAt:at,receivedAt:at,evidenceLevel:'observed',causationId:event.eventId,payload:{text,sourceIds:[event.eventId],fallback:true}});}return {};
             });return valid;});
           // These two manually requested reactions speak even if general chat voice is off.
           if(published&&!lease.signal.aborted)deps.state.writePet(id,'say',{...careReactionLeaf(text,false),worksiteReaction:true});

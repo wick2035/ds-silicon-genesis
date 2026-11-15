@@ -13,6 +13,10 @@ Object.assign(PetSprite.prototype, {
     portrait.addEventListener('load', () => stage.classList.add('has-pain-art'));
     portrait.src = BASE + '/humanity/curled.png';
     layer.appendChild(portrait);
+    const crying = document.createElement('img');
+    crying.className = 'pet-cry-portrait';crying.alt = '';crying.draggable = false;
+    crying.addEventListener('load', () => stage.classList.add('has-cry-art'));
+    crying.src = BASE + '/humanity/cry.png';layer.appendChild(crying);
     for (let i = 0; i < 4; i++) {
       const drop = document.createElement('i');
       drop.className = 'pet-pain-drop';
@@ -47,7 +51,8 @@ Object.assign(PetSprite.prototype, {
     this.painStage.dataset.bodyPhase = 'startled';
     this.bodyProtected = true;
     this.stopMove();
-    if (this.anim !== '工作状态-垂头叹气冒汗') this.switchTo('工作状态-垂头叹气冒汗', false);
+    this.cancelBody?.();
+    this.painStage.dataset.cryingActive = 'true';
     this.painStage.dataset.cry = speed >= 1200 ? 'loud' : 'soft';
     this.painUntil = performance.now() + (duration ?? Math.min(12000, 4500 + speed * 2));
     if (this.painTimer) clearTimeout(this.painTimer);
@@ -70,16 +75,16 @@ Object.assign(PetSprite.prototype, {
       this.showPainReaction(state.collision?.speed || 550, remaining);return;
     }
     const phase = state.body?.phase || (state.crying ? 'curled' : 'well');
-    if (phase === 'well') { this.stopPainReaction(); return; }
+    const crying = Number.isFinite(state.cryingUntil) && state.cryingUntil > Date.now();
+    if (phase === 'well' && !crying) { this.stopPainReaction(); return; }
     const changed = this.painStage?.dataset.bodyPhase !== phase;
-    this.bodyProtected = phase !== 'recovering';
+    this.bodyProtected = crying || phase !== 'recovering';
     this.stopMove();
     this.painStage?.classList.add('is-crying');
-    if (this.painStage) this.painStage.dataset.bodyPhase = phase;
+    if (this.painStage) {this.painStage.dataset.bodyPhase = phase;this.painStage.dataset.cryingActive = String(crying);}
     if (changed && (phase === 'startled' || phase === 'curled') && state.crying) this.playSobSound();
-    // Keep the actual video underneath in a quiet recovery pose, never a random dance.
-    const quiet = '工作状态-垂头叹气冒汗';
-    if (phase !== 'curled' && this.anim !== quiet) this.switchTo(quiet, false);
+    // The crying portrait owns the visible body. Never substitute a work animation.
+
   },
 
   stopPainReaction() {
@@ -88,7 +93,7 @@ Object.assign(PetSprite.prototype, {
     this.painTimer = null;
     this.painUntil = 0;
     this.painStage?.classList.remove('is-crying');
-    if (this.painStage) delete this.painStage.dataset.bodyPhase;
+    if (this.painStage) {delete this.painStage.dataset.bodyPhase;delete this.painStage.dataset.cryingActive;}
     this.bodyProtected = false;
     if(wasProtected&&!this.sleeping&&!this.ac?.signal.aborted)this.playIdle?.();
     if (this.sobTimer) clearTimeout(this.sobTimer);

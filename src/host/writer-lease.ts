@@ -12,7 +12,7 @@ export class WriterLease implements PetGate, Pool, Queryable {
   private client: LeaseClient | null = null;
   private alive = false;
   private controller = new AbortController();
-  private readonly context = new AsyncLocalStorage<{petId:string;active:boolean}>();
+  private readonly context = new AsyncLocalStorage<{petId:string;active:boolean;release:()=>void}>();
   private readonly tails = new Map<string, Promise<void>>();
   private connectionTail: Promise<void> = Promise.resolve();
   private readonly lost = () => { this.alive = false; this.controller.abort(new Error('写入租约已失去')); };
@@ -41,6 +41,24 @@ export class WriterLease implements PetGate, Pool, Queryable {
 
   /** Background work triggered by a commit must acquire its own gate turn. */
   detach<T>(operation:()=>T):T { return this.context.exit(operation); }
+
+  /** Suspend a gate turn for an external animation/network receipt. Only the
+   * wait runs unlocked; its continuation owns a new slot, even on rejection. */
+  async waitOutside<T>(operation:()=>Promise<T>):Promise<T> {
+    const owner=this.context.getStore();
+    if(!owner?.active)return this.context.exit(operation);
+    owner.active=false;owner.release();
+    try{return await this.context.exit(operation);}
+    finally {owner.release=await this.enter(owner.petId);owner.active=true;}
+  }
+
+  private async enter(petId:string):Promise<()=>void> {
+    const previous=this.tails.get(petId)||Promise.resolve();
+    let unlock!:()=>void;const current=new Promise<void>(resolve=>{unlock=resolve;});
+    const tail=previous.then(()=>current,()=>current);this.tails.set(petId,tail);
+    await previous.catch(()=>{});
+    return ()=>{unlock();if(this.tails.get(petId)===tail)this.tails.delete(petId);};
+  }
 
   /** Every write transaction must use this checkout, not the underlying pool.
    * Transactions and the advisory lock therefore share the same PG session. */
@@ -76,15 +94,10 @@ export class WriterLease implements PetGate, Pool, Queryable {
     const owned = this.context.getStore();
     if (owned?.active && owned.petId === petId) return operation();
     if (owned?.active) throw new Error('不能在一个宠物的事务内锁定另一只宠物');
-    const previous = this.tails.get(petId) || Promise.resolve();
-    let release!: () => void;
-    const current = new Promise<void>(resolve => { release = resolve; });
-    const tail = previous.then(() => current, () => current);
-    this.tails.set(petId, tail);
-    await previous.catch(() => {});
-    const owner = {petId,active:true};
+    const release=await this.enter(petId);
+    const owner = {petId,active:true,release};
     try { this.assertHeld(); return await this.context.run(owner, operation); }
-    finally { owner.active=false; release(); if (this.tails.get(petId) === tail) this.tails.delete(petId); }
+    finally { owner.active=false; owner.release(); }
   }
 
   async close(timeoutMs = 15000): Promise<void> {

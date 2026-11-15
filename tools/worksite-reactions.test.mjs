@@ -11,12 +11,12 @@ test('reacts once to each new manual transfer and ignores old or automatic event
   const observe=createWorksiteReactions(state([old]),async(_id,e)=>{calls.push(e);return '接到啦。';},async(...args)=>published.push(args));
   const current=state([old,event('auto','enter-voluntary'),event('touch','touch'),event('in','enter-forced'),event('out','release')]);
   observe(current);observe(current);await flush();await flush();
-  assert.deepEqual(calls.map(x=>x.eventId),['in','out']);
-  assert.deepEqual(published.map(x=>[x[1].action,x[2],x[3]]),[['enter-forced','接到啦。',false],['release','接到啦。',false]]);
+  assert.deepEqual(calls.map(x=>x.eventId),['touch','in','out']);
+  assert.deepEqual(published.map(x=>[x[1].action,x[2],x[3]]),[['touch','接到啦。',false],['enter-forced','接到啦。',false],['release','接到啦。',false]]);
 });
 
 test('does not invent speech when the model cannot respond',async()=>{
   const published=[];const observe=createWorksiteReactions(state([]),async()=>{throw Error('model unavailable');},async(...args)=>published.push(args));
   observe(state([event('out','release')]));await flush();await flush();
-  assert.deepEqual(published,[]);
+  assert.equal(published.length,1);assert.match(published[0][2],/^【系统反馈】/);assert.equal(published[0][3],true);
 });

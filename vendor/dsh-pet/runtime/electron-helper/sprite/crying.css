@@ -6,7 +6,7 @@
   opacity: 0;
   transition: opacity 180ms ease-out;
 }
-.pet-pain-portrait {
+.pet-pain-portrait, .pet-cry-portrait {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -75,4 +75,18 @@
   .pet-stage.is-crying.has-pain-art .pet-pain-drop,
   .pet-stage.is-using-phone .pet-phone-art { animation: none; }
   .pet-pain { transition-duration: 80ms; }
+}
+
+/* A real hit has one clear response: flinch, sob, then settle into protection. */
+.pet-cry-portrait { display: none; }
+.pet-stage.is-crying.has-pain-art[data-body-phase="guarded"] .pet-pain,
+.pet-stage.is-crying.has-pain-art[data-body-phase="startled"] .pet-pain,
+.pet-stage.is-crying.has-cry-art[data-crying-active="true"] .pet-pain { opacity: 1; }
+.pet-stage.is-crying.has-pain-art:not([data-body-phase="recovering"]) .pet-video,
+.pet-stage.is-crying.has-cry-art[data-crying-active="true"] .pet-video { opacity: 0; }
+.pet-stage.is-crying.has-cry-art[data-crying-active="true"] .pet-pain-portrait { display: none; }
+.pet-stage.is-crying.has-cry-art[data-crying-active="true"] .pet-cry-portrait { display: block; animation: pet-sob 1100ms ease-in-out infinite; }
+.pet-stage.is-crying.has-cry-art[data-crying-active="true"] .pet-pain-drop { display: block; }
+@media (prefers-reduced-motion: reduce) {
+  .pet-stage.is-crying.has-cry-art .pet-cry-portrait { animation: none; }
 }
