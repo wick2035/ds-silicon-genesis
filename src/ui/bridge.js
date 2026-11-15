@@ -49,7 +49,7 @@ window.lifeApi = Object.freeze({
   getGoals: () => request('goals'),
   getTimeline: () => request('timeline'),
   getRelationships: () => request('relationships'),
-  getGrowth: () => request('growth'),
+  getGrowth: async () => {const [growth,companion]=await Promise.all([request('growth'),request('companion').catch(()=>null)]);return {...growth,diaries:companion?.diaries};},
   searchMemories: query => request('memory-search?q='+encodeURIComponent(query)),
   getSettings: () => request('settings'),
   getFinance: () => request('finance'),
