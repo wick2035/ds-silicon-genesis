@@ -4,6 +4,9 @@ type Event = CanonicalEnvelope['life']['events'][number];
 /** A bounded account of committed human input; never expose configuration secrets. */
 export function interactionDescription(event:Event,state?:CanonicalEnvelope):string|undefined {
   const p=event.payload as Record<string,any>;
+  if(event.type==='management.group-chat'&&event.source==='user'&&event.actorId==='dad'&&typeof p.blocked==='boolean')return p.blocked?
+    '爸爸刚刚禁止你看群消息和参与群聊，这是爸爸对你的限制。现在已生效，私聊仍然可以。根据自己真实的性格和当下感受回应，可以表达不满、商量或接受；不能自行恢复权限，不知道群里现在说了什么。':
+    '爸爸刚刚恢复了你看群消息和参与群聊的权限。根据自己的感受自然回应；禁止期间没有看过群消息，不编造群里发生的事。';
   if(['action.receipt','action.reconciled','action.cancelled'].includes(event.type)&&state){
     const action=state.life.actions.find(a=>a.id===p.actionId);
     if(!action||!action.sourceIds.some(id=>state.life.events.some(e=>e.eventId===id&&e.type==='service.requested'&&e.source==='user')))return undefined;

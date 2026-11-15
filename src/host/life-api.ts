@@ -8,6 +8,7 @@ export interface LifeApiHost {
   authorize(request: Request): Promise<boolean> | boolean;
   petId(): Promise<string> | string;
   getState(petId: string): Promise<LifeState>;
+  groupChatBlocked?(petId:string):Promise<boolean>;
   /** Uses the same per-pet gate and UOW as the dispatcher. */
   manage?(petId: string, command: ManagementCommand): Promise<void>;
   searchMemories?(petId:string, query:string): Promise<unknown[]>;
@@ -21,6 +22,7 @@ export interface LifeApiHost {
 }
 export type ManagementCommand =
   | {kind:'pause'; paused:boolean; reason:string; version:number}
+  | {kind:'group-chat'; blocked:boolean; reason:string; version:number}
   | {kind:'goal'; id:string; status:'active'|'paused'|'abandoned'; expectedStatus:string; reason:string; version:number}
   | {kind:'revoke'; permission:string; reason:string; version:number}
   | {kind:'memory'; id:string; action:'delete'|'correct'; expectedContent:string; content?:string; reason:string; version:number};
@@ -28,7 +30,7 @@ interface Reader {loadEnvelope(petId:string):Promise<CanonicalEnvelope|null>}
 const validText=(v:unknown,max=500):v is string=>typeof v==='string' && v.trim().length>0 && v.length<=max;
 /** Management edits are committed in the shared canonical envelope. No action
  * is dispatched here; the executor revalidates the latest state under the gate. */
-export function createLifeManagement(reader: Reader, gate: PetGate, uow: UnitOfWork, projectBody: BodyProjection, interrupt?:(petId:string)=>void) {
+export function createLifeManagement(reader: Reader, gate: PetGate, uow: UnitOfWork, projectBody: BodyProjection, interrupt?:(petId:string)=>void, groupChanged?:(blocked:boolean)=>void) {
   return async (petId:string, command:ManagementCommand) => {
     if((command.kind==='pause' && command.paused) || command.kind==='revoke') {
       const current=await reader.loadEnvelope(petId);
@@ -41,6 +43,13 @@ export function createLifeManagement(reader: Reader, gate: PetGate, uow: UnitOfW
     await uow.apply(petId,current.version,draft=>{
       const life=draft.life, now=new Date().toISOString(), eventId=`management:${randomUUID()}`;
       if(command.kind==='pause') life.constraints.paused=command.paused;
+      else if(command.kind==='group-chat'){
+        const legacy=draft.legacy as Record<string,any>;legacy.config??={};
+        if((legacy.config.qqGroupBlocked===true)===command.blocked)return {};
+        legacy.config.qqGroupBlocked=command.blocked;
+        life.events.push({eventId,petId,type:'management.group-chat',source:'user',actorId:'dad',occurredAt:now,receivedAt:now,evidenceLevel:'observed',payload:{blocked:command.blocked,reason:command.reason,text:command.blocked?'爸爸禁止我看群消息和参与群聊了；私聊仍然可以。':'爸爸恢复了我看群消息和参与群聊的权限。禁止期间的群消息没有看过。'}});
+        return {};
+      }
       else if(command.kind==='goal') {
         const goal=life.goals.find(g=>g.id===command.id);
         if(!goal || goal.status!==command.expectedStatus || !({active:['paused','abandoned'],paused:['active','abandoned'],deferred:['active','paused','abandoned']} as Record<string,string[]>)[goal.status]?.includes(command.status)) throw new Error('目标状态已变化');
@@ -87,6 +96,7 @@ export function createLifeManagement(reader: Reader, gate: PetGate, uow: UnitOfW
       life.events.push({eventId,petId,type:'management.'+command.kind,source:'user',occurredAt:now,receivedAt:now,evidenceLevel:'reported',payload:{reason:command.reason,...(command.kind==='goal'?{goalId:command.id,status:command.status}:command.kind==='memory'?{memoryId:command.id,action:command.action}:command.kind==='revoke'?{permission:command.permission}:{paused:command.paused})}});
       return {};
     });
+    if(command.kind==='group-chat')groupChanged?.(command.blocked);
     });
   };
 }
@@ -128,7 +138,7 @@ export function createLifeApi(host:LifeApiHost) {
         const raw=await request.text();if(raw.length>8192)return response(413,{ok:false,error:'请求过大'});
         let c:any;try{c=JSON.parse(raw);}catch{return response(400,{ok:false,error:'请求格式无效'});}
         if(!c || typeof c!=='object' || Array.isArray(c) || !Number.isSafeInteger(c.version) || c.version<0 || !validText(c.reason) ||
-          !(c.kind==='pause' && typeof c.paused==='boolean' || c.kind==='goal' && validText(c.id,512) && validText(c.expectedStatus,30) && ['active','paused','abandoned'].includes(c.status) ||
+          !(c.kind==='pause' && typeof c.paused==='boolean' || c.kind==='group-chat' && typeof c.blocked==='boolean' || c.kind==='goal' && validText(c.id,512) && validText(c.expectedStatus,30) && ['active','paused','abandoned'].includes(c.status) ||
             c.kind==='revoke' && validText(c.permission,200) || c.kind==='memory' && validText(c.id,512) && typeof c.expectedContent==='string' && c.expectedContent.length<=5000 && ['delete','correct'].includes(c.action) && (c.action!=='correct'||validText(c.content,5000))))return response(400,{ok:false,error:'操作内容或原因无效'});
         await host.manage(id,c as ManagementCommand);
       }
@@ -137,7 +147,7 @@ export function createLifeApi(host:LifeApiHost) {
         snapshot:{version:state.version,sources,identity:state.identity,spirit:state.spirit,body:state.body,emotions:state.emotions,activeGoals:state.goals.filter(g=>g.status==='active'),actions:state.actions.filter(a=>!['COMPLETED','FAILED','CANCELLED'].includes(a.status)),runtime:{paused:state.constraints.paused,remainingBudget:state.constraints.remainingBudget,budgetDay:state.constraints.budgetDay,interactiveRemaining:state.constraints.interactiveRemaining,permissions:state.constraints.permissions},links:host.links},
         goals:{version:state.version,items:state.goals,sources},timeline:state.events,relationships:state.relationships,
         growth:{version:state.version,sources,memories:state.memories,beliefs:state.beliefs,observations:state.observations,selfModel:state.selfModel,worldModel:state.worldModel,plans:(state.cognitivePlans||[]).map(plan=>({...plan,reason:plan.steps.map(step=>state.receipts.find(r=>r.actionId===step.actionId && ['FAILED','CANCELLED'].includes(r.status))?.details?.reason || (state.events.find(e=>e.type==='action.cancelled'&&(e.payload as any)?.actionId===step.actionId)?.payload as any)?.reason).find(reason=>typeof reason==='string') || (state.events.find(e=>e.type==='plan.failed'&&(e.payload as any)?.planId===plan.id)?.payload as any)?.reason || (plan.status==='paused'?'计划已暂停':plan.status==='failed'?'行动未完成，请重新规划':undefined)}))},
-        settings:{version:state.version,paused:state.constraints.paused,permissions:state.constraints.permissions}
+        settings:{version:state.version,paused:state.constraints.paused,permissions:state.constraints.permissions,groupChatBlocked:endpoint==='settings'&&host.groupChatBlocked?await host.groupChatBlocked(id):false}
       };
       return response(200,{ok:true,value:endpoint==='manage'?{version:state.version}:views[endpoint]});
     }catch(error){return response(409,{ok:false,error:['finance','companion','model'].includes(endpoint) && error instanceof Error ? error.message : '操作未完成或状态已变化，请刷新后重试'});}

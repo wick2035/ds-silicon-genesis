@@ -168,6 +168,7 @@ export class CanonicalChat {
       const turnAbort=new AbortController(),combined=AbortSignal.any([signal,this.gate.signal,turnAbort.signal,reservationAbort.signal]);let output='',meme:string|undefined;
       if(process.env.SILICON_CHAT_TIMING==='1')console.info('[chat-prompt]',state.legacyContext.personaDescription.length,COMPANION_PERSONALITY.length,system.length);timing('generate');let firstText=true;const tokenUsage={inputTokens:0,outputTokens:0,cachedTokens:0};
       system+='\n'+SPEAKER_MEMORY_RULE;
+      if(!group)system+='\n当前群聊权限与爸爸最近的操作：'+JSON.stringify((state.legacyContext.companion as any)?.groupChat??null)+'。只把实际操作当已发生，可自然表达自己的感受，不假装知道禁止期间的群消息。';
       if(group)system+='\n群聊正文必须从生成时就写成一句完整、自然的话，最多15个字素，标点和表情也计数。先选最想表达的一点再说，不写需要截断的长句；不合适接话时输出 <qq-silent/>。';
       const generate=async()=>{
         for await(const part of this.model.llm.stream({...selection,system,streamText:!group,embodiedSnapshot:envelope,beforeActions:initialCommit,embodied:{petId:input.petId,requestId:'chat:'+id,sourceIds:['chat-user:'+id],allowActions:true},messages:[...history,{role:'user',content:input.attachments?.length?[{type:'text',text},...input.attachments.map(a=>({type:'image',attachment:{petId:a.petId,id:a.id}}))]:text}],signal:combined,maxTokens:group?120:500,reasoningEffort:'low'})) {

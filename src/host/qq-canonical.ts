@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import {groupChatBlocked,groupMessageAllowed,assertGroupReplyAllowed} from './qq-group-access.js';
 import { redactDadNames } from '../../vendor/pet-plugins/behavior/memory-privacy.mjs';
 import { rebuildRelationships, validateProposal } from '../kernel/index.js';
 import type { ActionProposal, LifeState } from '../kernel/types.js';
@@ -47,6 +48,10 @@ export class CanonicalQQ {
       return value;
     });
   }
+  async groupBlocked(petId:string):Promise<boolean> {
+    const state=await this.reader.loadEnvelope(petId);
+    return !state || groupChatBlocked(state);
+  }
   /** Host imports already-read, validated old receipt arrays after proving the
    * old bridge stopped. Ambiguous historical outbound states remain UNKNOWN. */
   async importState(petId:string, identity:QQIdentity, receipts:Array<[string,number]>, outbound:Array<[string,{at:number;state:string}]>):Promise<void> {
@@ -92,6 +97,7 @@ export class CanonicalQQ {
     if(!message.text.startsWith(prefix)) return {paired:false};
     return this.change<{paired:boolean;eventId?:string}>(petId,draft=>{
       const qq=(draft.legacy as Obj).qq; if(!qq?.identity || !qq.seen) throw new Error('QQ 尚未导入配置');
+      if(message.scene==='group'&&groupChatBlocked(draft))return {value:{paired:false}};
       const pairing=qq.pairing?.[kind]; const code=message.text.slice(prefix.length).trim();
       if(!pairing || pairing.expiresAt<Date.now() || pairing.digest!==hash(code)) return {value:{paired:false}};
       if(kind==='owner') { if(qq.identity.ownerOpenid) return {value:{paired:false}}; qq.identity.ownerOpenid=message.actorOpenid; }
@@ -109,6 +115,7 @@ export class CanonicalQQ {
     return this.change<{accepted:boolean;isOwner:boolean;eventId?:string}>(petId,draft=>{
       const qq=(draft.legacy as Obj).qq; if(!qq?.identity || !qq.seen || !qq.outbound) throw new Error('QQ 尚未接管');
       const identity=qq.identity as QQIdentity;
+      if(message.scene==='group'&&!groupMessageAllowed(draft,message.occurredAt))return {value:{accepted:false,isOwner:false}};
       const isOwner=message.scene==='c2c' ? message.actorOpenid===identity.ownerOpenid : message.actorOpenid===identity.groupOwnerOpenid;
       if(message.scene==='c2c' && !isOwner) return {value:{accepted:false,isOwner:false}};
       if(message.scene==='group' && (!identity.groupEnabled || !identity.groupOpenid || message.groupOpenid!==identity.groupOpenid || (identity.groupMode==='owner'&&!isOwner) || (identity.groupMode==='mentions' && !message.mentioned))) return {value:{accepted:false,isOwner}};
@@ -216,6 +223,7 @@ export function createQQExecutor(transport:QQTransport) {
  * continue while autonomous behavior is paused. All other validation remains. */
 export function validateQQReply(draft:CanonicalEnvelope,state:LifeState,proposal:ActionProposal):void {
   const p=proposal.parameters as Obj, qq=(draft.legacy as Obj).qq;
+  if(p.scene==='group')assertGroupReplyAllowed(draft,proposal.sourceIds[0]);
   const source=draft.life.events.find(e=>e.eventId===proposal.sourceIds[0]);
   const entry=Object.values(qq?.outbound||{}).find((x:any)=>x.actionId===proposal.id) as Obj|undefined;
   const fingerprint=hash(JSON.stringify({scene:p.scene,text:p.content,sourceEventId:proposal.sourceIds[0],replyTo:p.replyTo}));

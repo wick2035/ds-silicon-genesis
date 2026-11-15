@@ -3,6 +3,7 @@ import {blocksNewLabor} from './labor-pending.js';
 import {createLaborCompletionNotices} from './labor-completion-notices.js';
 import {companionContext,COMPANION_PERSONALITY} from './companion-personality.js';
 import {createInteractionReactions} from './interaction-reactions.js';
+import {groupChatBlocked} from './qq-group-access.js';
 import {readMemeChoices,withMemeSpeech,type MemeSource} from './meme-speech.js';
 import {createEmbodiedSpeech} from './embodied-speech.js';
 import {initializeSpirit} from './spirit-initialization.js';
@@ -193,7 +194,8 @@ export async function main():Promise<void> {
         if(input.operation==='models')return model!.discoverModels();
         throw Error('模型操作无效');
       }},
-      manage:createLifeManagement(store,lease,unitOfWork,projectBody,id=>dispatcher.interrupt(id)),
+      groupChatBlocked:async id=>{const state=await store.loadEnvelope(id);return !state||groupChatBlocked(state);},
+      manage:createLifeManagement(store,lease,unitOfWork,projectBody,id=>dispatcher.interrupt(id),blocked=>qq?.setGroupBlocked(blocked)),
       searchMemories:(id,q)=>retrieval.search(id,q),links:{play:`/dsh-pet-7340/humanity?pet=${encodeURIComponent(petId)}`}});
     const chatApi=createChatHttp(chat,()=>true,()=>petId);
     const meteredBalance=()=>budget.runAs(petId,'interactive',async()=>{const release=await budget.reserve('balance','balance',lease.signal);try{return await model!.queryBalance();}finally{await release();}});
@@ -308,7 +310,7 @@ export async function main():Promise<void> {
       const takeover=freshQQ ? await prepareFreshQQ({...shared,home:targetHome,petId}) :
         await prepareQQTakeover({...shared,legacyHome:targetHome,stopHook:{stopAndVerify:async()=>await verifyOldQQAbsent(root)?'absent':'unknown'}});
       if(takeover.status==='ready') {
-        qq=takeover.gateway;executors.set('qq.send',takeover.executor);await qq.start();
+        qq=takeover.gateway;qq.setGroupBlocked(await canonical.groupBlocked(petId));executors.set('qq.send',takeover.executor);await qq.start();
         await canonical.enableRelay(petId);
         let signature='',running=false,dirty=false,timer:ReturnType<typeof setTimeout>|undefined;
         const run=async()=>{timer=undefined;if(running){dirty=true;return;}running=true;

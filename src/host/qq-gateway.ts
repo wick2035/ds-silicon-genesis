@@ -41,6 +41,9 @@ export class CanonicalQQGateway extends QQPetBridge {
   #batchStarted=0;
   #lastGroupReply=0;
   #groupPending=false;
+  #groupBlocked=false;
+  #groupEpoch=0;
+  #groupAbort=new AbortController();
   #queuedTurns=0;
   #serial:Promise<void>=Promise.resolve();
   #closed=false;
@@ -58,6 +61,12 @@ export class CanonicalQQGateway extends QQPetBridge {
     if(options.signal.aborted) this.#closed=true; else options.signal.addEventListener('abort',this.#abort,{once:true});
   }
   async start():Promise<void> { if(this.#closed || this.#options.signal.aborted) throw new Error('QQ 通道不可用'); await super.start(); }
+  setGroupBlocked(blocked:boolean):void {
+    if(this.#groupBlocked===blocked)return;
+    this.#groupBlocked=blocked;this.#groupEpoch++;
+    this.#groupAbort.abort();this.#groupAbort=new AbortController();
+    if(blocked){if(this.#timer)clearTimeout(this.#timer);this.#timer=undefined;this.#items=[];this.#batchStarted=0;}
+  }
   /** No legacy api() send is allowed; gateway uses only GET /gateway. */
   async api(route:string, body?:unknown):Promise<any> {
     if(route!=='/gateway' || body!==undefined) throw new Error('QQ 直接发送被禁用');
@@ -71,6 +80,11 @@ export class CanonicalQQGateway extends QQPetBridge {
     return response.json();
   }
   private async sendMessage(input:{scene:'c2c'|'group';destination:string;content:string;replyTo?:string;replySeq?:number},signal:AbortSignal):Promise<{messageId:string}> {
+    if(input.scene==='group'){
+      const epoch=this.#groupEpoch;
+      if(this.#groupBlocked || await this.#options.canonical.groupBlocked?.(this.#options.config.petId||'main') || epoch!==this.#groupEpoch)throw Error('爸爸已禁止群聊');
+      signal=AbortSignal.any([signal,this.#groupAbort.signal]);
+    }
     if(input.scene==='group' && [...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(input.content)].length>15) throw new Error('群回复超过 15 字');
     const route=(input.scene==='group'?'/v2/groups/':'/v2/users/')+encodeURIComponent(input.destination)+'/messages';
     const result=await this.request(route,{content:input.content,msg_type:0,...(input.replyTo?{msg_id:input.replyTo,msg_seq:input.replySeq??1}:{})},signal);
@@ -79,6 +93,8 @@ export class CanonicalQQGateway extends QQPetBridge {
   }
   async receive(message:any,scene:'c2c'|'group'='c2c',eventType=''):Promise<void> {
     if(this.#closed || this.#options.signal.aborted) return;
+    const epoch=this.#groupEpoch;
+    if(scene==='group'&&(this.#groupBlocked || await this.#options.canonical.groupBlocked?.(this.#options.config.petId||'main') || epoch!==this.#groupEpoch))return;
     this.#diagnostic('inbound',{scene,eventType});
     const actor=scene==='group'?message?.author?.member_openid:message?.author?.user_openid;
     if(typeof actor!=='string'||typeof message?.id!=='string'||typeof message?.content!=='string'||message.author?.bot===true || (scene==='group'&&this.botId===actor)) {this.#diagnostic('inbound',{scene,eventType,result:'invalid-or-self-message'});return;}
@@ -111,6 +127,7 @@ export class CanonicalQQGateway extends QQPetBridge {
     if(!result.accepted||!result.eventId||this.#closed) return;
     const item={text:input.text,isOwner:result.isOwner,eventId:result.eventId,messageId:input.messageId,receivedAt:Date.now()};
     if(scene==='c2c') { this.enqueueTurn(scene,[item]); return; }
+    if(this.#groupBlocked||epoch!==this.#groupEpoch)return;
     if (!this.#items.length) this.#batchStarted=Date.now();
     this.#items.push(item);
     while(this.#items.length>24 || (this.#items.length>1 && this.#items.reduce((n,x)=>n+x.text.length,0)>6000)) this.#items.shift();
@@ -118,7 +135,7 @@ export class CanonicalQQGateway extends QQPetBridge {
   }
   private scheduleGroup():void {
     if(this.#timer)clearTimeout(this.#timer);
-    if(this.#closed || this.#groupPending || !this.#items.length)return;
+    if(this.#closed || this.#groupBlocked || this.#groupPending || !this.#items.length)return;
     // Busy groups get one turn per four messages. Quiet groups still get a
     // chance to chat after a short pause, without waiting for more speakers.
     const now=Date.now(), readyAt=this.#items.length>=4?now:Math.min(now+4000,this.#batchStarted+12000);
@@ -141,37 +158,41 @@ export class CanonicalQQGateway extends QQPetBridge {
       return;
     }
     this.#queuedTurns++;
-    this.#serial=this.#serial.then(()=>this.runTurn(scene,items)).catch(()=>this.statusSafe('message-failed')).finally(()=>{
+    const epoch=this.#groupEpoch;
+    this.#serial=this.#serial.then(()=>this.runTurn(scene,items,epoch)).catch(()=>this.statusSafe('message-failed')).finally(()=>{
       this.#queuedTurns--;
       if(scene==='group'){this.#groupPending=false;this.scheduleGroup();}
     });
   }
   private statusSafe(state:string):void { try{this.#options.onStatus?.(state);}catch{} }
-  private async runTurn(scene:'c2c'|'group',items:Item[]):Promise<void> {
+  private async runTurn(scene:'c2c'|'group',items:Item[],epoch=this.#groupEpoch):Promise<void> {
+    if(scene==='group'&&(this.#groupBlocked||epoch!==this.#groupEpoch))return;
     items=items.filter(item=>Date.now()-item.receivedAt<=240000);
     if(!items.length||this.#closed||this.#options.signal.aborted)return;
     let text:string|null;
     // Bound a single turn so a stalled model/gateway can never wedge the whole
     // serial queue; the next owner message is then free to proceed.
     const turnAbort=new AbortController();
-    const turnSignal=AbortSignal.any([this.#options.signal,turnAbort.signal,AbortSignal.timeout(90000)]);
+    const turnSignal=AbortSignal.any([this.#options.signal,turnAbort.signal,AbortSignal.timeout(90000),...(scene==='group'?[this.#groupAbort.signal]:[])]);
     try {
       text=await this.#options.onTurn({petId:this.#options.config.petId||'main',scene,messages:items.map(({text,isOwner,eventId})=>({text,isOwner,eventId}))},turnSignal);
     } catch(error) {
       this.statusSafe('message-failed');
-      if(this.#closed||this.#options.signal.aborted)return;
+      if(this.#closed||this.#options.signal.aborted || scene==='group'&&(this.#groupBlocked||epoch!==this.#groupEpoch))return;
       const walletEmpty=error instanceof Error && error.message==='模拟饭钱已用完，请先添加饭钱';
       text=scene==='c2c'&&walletEmpty?'我的饭钱用完啦，请先加一点。':'我暂时没接上，请稍后再试。';
     }
-    if(text?.trim()&&!this.#closed&&!this.#options.signal.aborted) await this.respond(scene,items,text);
+    if(text?.trim()&&!this.#closed&&!this.#options.signal.aborted && (scene!=='group'||!this.#groupBlocked&&epoch===this.#groupEpoch)) await this.respond(scene,items,text);
   }
   private async respond(scene:'c2c'|'group',items:Item[],text:string):Promise<void> {
+    const epoch=this.#groupEpoch;if(scene==='group'&&this.#groupBlocked)return;
     const last=items.at(-1); if(!last||this.#closed||this.#options.signal.aborted)return;
     const action=await this.#options.canonical.enqueue(this.#options.config.petId||'main','reply:'+last.messageId,scene,text,last.eventId,last.messageId,this.#options.ingressAuthority);
-    if(!this.#closed&&!this.#options.signal.aborted) { await this.#options.dispatch(action); if(scene==='group')this.#lastGroupReply=Date.now(); }
+    if(!this.#closed&&!this.#options.signal.aborted && (scene!=='group'||!this.#groupBlocked&&epoch===this.#groupEpoch)) { await this.#options.dispatch(action); if(scene==='group')this.#lastGroupReply=Date.now(); }
   }
   stop():void {
     if(this.#closed)return; this.#closed=true;
+    this.#groupAbort.abort();
     if(this.#timer)clearTimeout(this.#timer); this.#items=[];
     this.#options.signal.removeEventListener('abort',this.#abort);
     super.stop();
