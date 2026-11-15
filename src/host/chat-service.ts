@@ -168,6 +168,7 @@ export class CanonicalChat {
       const turnAbort=new AbortController(),combined=AbortSignal.any([signal,this.gate.signal,turnAbort.signal,reservationAbort.signal]);let output='',meme:string|undefined;
       if(process.env.SILICON_CHAT_TIMING==='1')console.info('[chat-prompt]',state.legacyContext.personaDescription.length,COMPANION_PERSONALITY.length,system.length);timing('generate');let firstText=true;const tokenUsage={inputTokens:0,outputTokens:0,cachedTokens:0};
       system+='\n'+SPEAKER_MEMORY_RULE;
+      if(group)system+='\n群聊正文必须从生成时就写成一句完整、自然的话，最多15个字素，标点和表情也计数。先选最想表达的一点再说，不写需要截断的长句；不合适接话时输出 <qq-silent/>。';
       const generate=async()=>{
         for await(const part of this.model.llm.stream({...selection,system,streamText:!group,embodiedSnapshot:envelope,beforeActions:initialCommit,embodied:{petId:input.petId,requestId:'chat:'+id,sourceIds:['chat-user:'+id],allowActions:true},messages:[...history,{role:'user',content:input.attachments?.length?[{type:'text',text},...input.attachments.map(a=>({type:'image',attachment:{petId:a.petId,id:a.id}}))]:text}],signal:combined,maxTokens:group?120:500,reasoningEffort:'low'})) {
           if(part?.type==='usage'){tokenUsage.inputTokens+=part.inputTokens??0;tokenUsage.outputTokens+=part.outputTokens??0;tokenUsage.cachedTokens+=part.cachedTokens??0;}
@@ -175,6 +176,19 @@ export class CanonicalChat {
           if(part?.type==='text-reset'){meme=undefined;output='';input.onPartial?.('');}
           if(part?.type==='text' && typeof part.text==='string'){await initialCommit;if(firstText){timing('first-text');firstText=false;}output+=part.text;if(!group)input.onPartial?.(redactDadNames(output.replace(/<念头>[\s\S]*?(?:<\/念头>|$)/gu,'').replace(/<(?:body|service)>[\s\S]*$/gi,'').replace(/\[[^\]]*$/u,'').replace(/\[愿意去工地\]/gu,'').trim()));}
         }
+        // Ask for a complete shorter sentence, never slice an utterance. These
+        // text-only retries cannot repeat tools or actions from the first pass.
+        const groupText=()=>redactDadNames(extractThought(output).reply.replace(/\[愿意去工地\]/gu,'').replace(/<(?:body|service)>[\s\S]*?<\/(?:body|service)>/gi,'').trim());
+        const tooLong=()=>[...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(groupText())].length>15;
+        for(let attempt=0;group&&tooLong()&&attempt<2;attempt++){
+          const draft=groupText();output='';meme=undefined;
+          for await(const part of this.model.llm.stream({...selection,system:system+'\n上一稿超过15字。请重新组织成15字以内的一句完整话，保留核心意思，不截取原句、不加解释、不执行操作；也可以输出 <qq-silent/>。',messages:[{role:'user',content:JSON.stringify({message:text,draft})}],signal:combined,maxTokens:120,reasoningEffort:'low'})){
+            if(part?.type==='usage'){tokenUsage.inputTokens+=part.inputTokens??0;tokenUsage.outputTokens+=part.outputTokens??0;tokenUsage.cachedTokens+=part.cachedTokens??0;}
+            if(part?.type==='text-reset')output='';
+            if(part?.type==='text'&&typeof part.text==='string')output+=part.text;
+          }
+        }
+        if(group&&tooLong()){output='<qq-silent/>';meme=undefined;}
       };
       const generateReply=modelTicket?this.budget.runInteractiveReserved(input.petId,modelTicket,generate):this.budget.runAs(input.petId,'interactive',generate);
       let laborProposal:Record<string,unknown>|undefined;
@@ -214,7 +228,7 @@ export class CanonicalChat {
       if(!this.grounding && worksiteIntent && !(state.legacyContext.worksite as any)?.inside && /我进去了|我进去啦/u.test(output))throw Error('动作状态尚未核实');
       let decidedToWork=false;
         if(worksiteIntent && laborProposal && ['resume','nudge'].includes(String(laborProposal.action)))laborProposal=undefined;
-        if(group)output=[...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(output)].slice(0,15).map(part=>part.segment).join('').trim();
+        if(group&&[...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(output)].length>15)throw Error('群聊回复超出长度限制');
         await this.edit(input.petId,draft=>{
         const legacy=draft.legacy as Record<string,any>, turn=legacy.chatTurns?.[id];
         if(!turn||turn.status!=='running'||turn.fingerprint!==fingerprint)throw new Error('对话状态已变化');

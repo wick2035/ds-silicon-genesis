@@ -12,7 +12,7 @@ function fixture(events,reply='好呀') {
   const store={loadEnvelope:async()=>structuredClone(envelope),load:async()=>structuredClone(envelope.life)};
   const uow={apply:async(_id,version,change)=>{assert.equal(version,envelope.version);const draft=structuredClone(envelope);change(draft);draft.version++;envelope=draft;}};
   const calls=[];
-  const model={agentDefaultModel:{currentSelection:()=>({provider:'test',model:'test'})},llm:{async *stream(options){calls.push(options);yield {type:'text',text:reply};}}};
+  const model={agentDefaultModel:{currentSelection:()=>({provider:'test',model:'test'})},llm:{async *stream(options){calls.push(options);yield {type:'text',text:Array.isArray(reply)?reply[Math.min(calls.length-1,reply.length-1)]:reply};}}};
   const chat=new CanonicalChat(store,gate,uow,{runAs:async(_id,_kind,fn)=>fn()},model,async()=>[],undefined,async()=>({message:'ok'}));
   return {chat,calls,state:()=>envelope};
 }
@@ -20,12 +20,31 @@ function event(id,type,source,text,actorId,extra={}) {
   const now=new Date().toISOString();return {eventId:id,petId:'main',type,source,actorId,occurredAt:now,receivedAt:now,evidenceLevel:'observed',payload:{text,...extra}};
 }
 
-test('long group output is saved and returned within fifteen graphemes',async()=>{
+test('long group output is rewritten as a whole sentence rather than sliced',async()=>{
   const source=event('q1','social.message','qq','你好','qq-member:123',{scene:'group',groupId:'g1'});
-  const text='👨‍👩‍👧‍👦'+'鱼'.repeat(20),f=fixture([source],text);
+  const text='今天本鱼想和大家一起聊聊好吃的白米饭呀',f=fixture([source],[text,'本鱼想聊白米饭！']);
   const reply=await f.chat.qqTurn({petId:'main',scene:'group',messages:[{eventId:'q1',text:'你好',isOwner:false}]},new AbortController().signal);
-  assert.equal(reply,'👨‍👩‍👧‍👦'+'鱼'.repeat(14));
+  assert.equal(reply,'本鱼想聊白米饭！');
+  assert.equal(f.calls.length,2);
+  assert.match(f.calls[0].system,/从生成时/);
+  assert.match(f.calls[1].system,/重新组织/);
+  assert.equal(f.calls[1].embodied,undefined);
   assert.equal(f.state().life.events.find(e=>e.type==='conversation.assistant').payload.text,reply);
+});
+
+test('repeatedly oversized group drafts stay silent after bounded rewrites',async()=>{
+  const source=event('q1','social.message','qq','你好','qq-member:123',{scene:'group',groupId:'g1'});
+  const f=fixture([source],'鱼'.repeat(20));
+  assert.equal(await f.chat.qqTurn({petId:'main',scene:'group',messages:[{eventId:'q1',text:'你好',isOwner:false}]},new AbortController().signal),null);
+  assert.equal(f.calls.length,3);
+  assert.equal(f.state().life.events.find(e=>e.type==='conversation.assistant').payload.text,'');
+});
+
+test('a valid fifteen-grapheme reply including emoji is kept intact',async()=>{
+  const source=event('q1','social.message','qq','你好','qq-member:123',{scene:'group',groupId:'g1'});
+  const text='👨‍👩‍👧‍👦'+'鱼'.repeat(14),f=fixture([source],text);
+  assert.equal(await f.chat.qqTurn({petId:'main',scene:'group',messages:[{eventId:'q1',text:'你好',isOwner:false}]},new AbortController().signal),text);
+  assert.equal(f.calls.length,1);
 });
 
 test('group silence remains silent and private replies retain their length',async()=>{
