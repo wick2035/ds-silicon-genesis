@@ -92,3 +92,13 @@ test('精神耗尽时的睡眠、打盹、叫醒与甜食命令绕过模型预�
  for(const text of ['/休息','/打盹','/醒来','/甜食'])assert.equal(await chat.turn({requestId:'recovery-'+calls,petId:'main',channel:'desktop',actorId:'dad',text},f.gate.signal),text+'已处理');
  assert.equal(calls,4);assert.equal(f.d.legacy.wallet.balance,0);
 });
+
+
+test('chat reservation charges its first model call in the same transaction and credits it once',async()=>{
+ const f=fixture(),budget=new DurableCognitiveBudget(f.store,f.uow,f.gate);f.d.legacy.config.modelBudget={interactiveDailyCalls:1};
+ let ticket;await f.uow.apply('main',f.d.version,draft=>{ticket=budget.reserveInteractive(draft);});
+ const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+ const spirit=f.d.life.spirit.value;assert.equal(f.d.legacy.usage[day].interactiveCalls,1);
+ await budget.runInteractiveReserved('main',ticket,async()=>{await budget.reserve('provider','model',f.gate.signal);assert.equal(f.d.life.spirit.value,spirit);await assert.rejects(budget.reserve('provider','model',f.gate.signal),/额度不足/);});
+ assert.equal(f.d.legacy.usage[day].interactiveCalls,1);assert.throws(()=>budget.runInteractiveReserved('main',ticket,async()=>{}),/票据无效/);
+});

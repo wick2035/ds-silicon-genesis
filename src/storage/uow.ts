@@ -18,13 +18,19 @@ export class UnitOfWork {
     return this.gate.run(petId, () => this.applyOwned(petId, expectedVersion, change));
   }
 
-  private async applyOwned(petId: string, expectedVersion: number,
+  /** Mutate the latest locked state when no caller supplied a snapshot. */
+  async applyCurrent(petId:string,change:(draft:CanonicalEnvelope)=>{intents?:OutboxIntent[]}):Promise<CanonicalEnvelope>{
+    return this.gate.run(petId,()=>this.applyOwned(petId,undefined,change));
+  }
+
+  private async applyOwned(petId: string, expectedVersion: number|undefined,
     change: (draft: CanonicalEnvelope) => { intents?: OutboxIntent[] }): Promise<CanonicalEnvelope> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
       const result = await client.query('SELECT version::text,payload FROM silicon_genesis.life_state WHERE pet_id=$1 FOR UPDATE', [petId]);
-      if (result.rows.length !== 1 || Number(result.rows[0].version) !== expectedVersion) throw new Error('生命状态已变化');
+      if (result.rows.length !== 1 || expectedVersion!==undefined && Number(result.rows[0].version) !== expectedVersion) throw new Error('生命状态已变化');
+      expectedVersion=Number(result.rows[0].version);
       const draft = structuredClone(result.rows[0].payload) as CanonicalEnvelope;
       if (draft.petId !== petId || draft.version !== expectedVersion) throw new Error('生命状态信封不一致');
       advanceSpirit(draft.life);

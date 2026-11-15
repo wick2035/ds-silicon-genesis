@@ -25,7 +25,23 @@ async function request(route, options = {}) {
   return (await fetchResult(`/api/life/${route}`,{...options,headers})).value;
 }
 window.lifeApi = Object.freeze({
-  chat: async (text, requestId, attachments = []) => { const token=sessionStorage.getItem('life-token'); const headers={'content-type':'application/json'}; if(token) headers['x-dsh-pet-token']=token; const data=await fetchResult('/api/life/chat',{method:'POST',headers,body:JSON.stringify({text,requestId,attachments})}); return data.reply; },
+  chat: async (text, requestId, attachments = [], onPartial, onUsage) => {
+    const token=sessionStorage.getItem('life-token'),headers={'content-type':'application/json','accept':'text/event-stream'};if(token)headers['x-dsh-pet-token']=token;
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),120000);
+    try{
+      const response=await fetch('/api/life/chat',{method:'POST',credentials:'same-origin',headers,signal:controller.signal,body:JSON.stringify({text,requestId,attachments})});
+      if(!response.ok){const data=await response.json();throw Error(data.error||'对话未完成');}
+      const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';
+      while(true){const {done,value}=await reader.read();buffer+=decoder.decode(value,{stream:!done});let end;
+        while((end=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,end);buffer=buffer.slice(end+2);const event=/^event: (.+)$/m.exec(frame)?.[1],data=JSON.parse(/^data: (.+)$/m.exec(frame)?.[1]||'{}');
+          if(event==='partial')onPartial?.(data.text);
+          if(event==='error')throw Error(data.error||'对话未完成');
+          if(event==='done'){if(data.usage)onUsage?.(data.usage);return data.reply;}
+        }
+        if(done)throw Error('连接中断，回复尚未完成');
+      }
+    }finally{clearTimeout(timer);}
+  },
   uploadImage: file => request('attachment', {method:'POST',headers:{'content-type':file.type,'x-request-id':crypto.randomUUID()},body:file}),
   shutdown: () => request('shutdown', {method:'POST'}),
   openWorksite: () => request('worksite', {method:'POST'}),

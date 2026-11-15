@@ -20,29 +20,41 @@ export class DurableCognitiveBudget implements CognitiveBudget, ModelBudget {
     return this.gate.run(petId,async()=>{
       const state=await this.store.load(petId);if(!state)throw new Error('生命状态不存在');
       try {await this.unitOfWork.apply(petId,state.version,draft=>{
-        try{spendSpirit(draft.life,'thought');}catch{throw exhausted;}
-        const pet=draft.legacy as Record<string,any>, constraints=draft.life.constraints;
-        const limit=pet.config?.learning?.dailyModelCalls;
-        if(category!=='interactive' && (constraints.paused || !Number.isSafeInteger(limit) || limit<0))throw exhausted;
-        if(!pet.usage || typeof pet.usage!=='object')throw new Error('模型预算记录不可用');
-        const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
-        const usage=pet.usage[day] ||= {exploreRuns:0,modelCalls:0,diaryAttempts:0,diarySuccess:0,totalCalls:0,newStrategies:0,reflectionAttempts:0};
-        usage.totalCalls??=0;usage.modelCalls??=0;usage.interactiveCalls??=0;
-        if(![usage.totalCalls,usage.modelCalls,usage.interactiveCalls].every((v:unknown)=>Number.isSafeInteger(v)&&Number(v)>=0))throw new Error('模型预算记录损坏');
-        if(category==='interactive'){
-          const cap=pet.config?.modelBudget?.interactiveDailyCalls;
-          if(cap!==undefined && (!Number.isSafeInteger(cap)||cap<0||usage.interactiveCalls>=cap))throw exhausted;
-          usage.interactiveCalls++;
-        } else {
-          const cap=category==='autonomous'?Math.max(0,limit-2):limit;
-          if(usage.totalCalls>=cap)throw exhausted;
-          usage.totalCalls++;usage.modelCalls++;
-          constraints.remainingBudget=Math.max(0,Math.max(0,limit-2)-usage.totalCalls);
-        }
-        Object.assign(constraints,budgetView(pet,new Date()));
+        this.chargeDraft(draft,category);
         return {};
       });return true;}catch(error){if(error===exhausted)return false;throw error;}
     });
+  }
+  private chargeDraft(draft:CanonicalEnvelope,category:Category):void {
+    try{spendSpirit(draft.life,'thought');}catch{throw exhausted;}
+    const pet=draft.legacy as Record<string,any>, constraints=draft.life.constraints;
+    const limit=pet.config?.learning?.dailyModelCalls;
+    if(category!=='interactive' && (constraints.paused || !Number.isSafeInteger(limit) || limit<0))throw exhausted;
+    if(!pet.usage || typeof pet.usage!=='object')throw new Error('模型预算记录不可用');
+    const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+    const usage=pet.usage[day] ||= {exploreRuns:0,modelCalls:0,diaryAttempts:0,diarySuccess:0,totalCalls:0,newStrategies:0,reflectionAttempts:0};
+    usage.totalCalls??=0;usage.modelCalls??=0;usage.interactiveCalls??=0;
+    if(![usage.totalCalls,usage.modelCalls,usage.interactiveCalls].every((v:unknown)=>Number.isSafeInteger(v)&&Number(v)>=0))throw new Error('模型预算记录损坏');
+    if(category==='interactive'){
+      const cap=pet.config?.modelBudget?.interactiveDailyCalls;
+      if(cap!==undefined && (!Number.isSafeInteger(cap)||cap<0||usage.interactiveCalls>=cap))throw exhausted;
+      usage.interactiveCalls++;
+    } else {
+      const cap=category==='autonomous'?Math.max(0,limit-2):limit;
+      if(usage.totalCalls>=cap)throw exhausted;
+      usage.totalCalls++;usage.modelCalls++;
+      constraints.remainingBudget=Math.max(0,Math.max(0,limit-2)-usage.totalCalls);
+    }
+    Object.assign(constraints,budgetView(pet,new Date()));
+  }
+  /** Charge the first chat generation atomically with its durable user turn. */
+  reserveInteractive(draft:CanonicalEnvelope):object {
+    try{this.chargeDraft(draft,'interactive');}catch(error){if(error===exhausted)throw Error('模型调用额度不足');throw error;}
+    const ticket={};this.tickets.set(ticket,draft.petId);return ticket;
+  }
+  runInteractiveReserved<T>(petId:string,ticket:object,fn:()=>Promise<T>):Promise<T>{
+    if(this.tickets.get(ticket)!==petId)throw Error('模型预算票据无效');
+    return this.context.run({petId,category:'interactive',ticket,consumed:false},async()=>{try{return await fn();}finally{this.tickets.delete(ticket);}});
   }
   /** Refresh the read-only daily projection only when day or configured usage changes. */
   async refresh(petId:string):Promise<void> {

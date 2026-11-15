@@ -41,7 +41,11 @@ export function createLifeRoutes(root: string, api: Handler): Route[] {
     const reply=await api(request);
     if(!reply){res.writeHead(404);res.end();return;}
     const responseHeaders:Record<string,string>={};reply.headers.forEach((value,name)=>{responseHeaders[name]=value;});
-    res.writeHead(reply.status,responseHeaders);res.end(Buffer.from(await reply.arrayBuffer()));
+    res.writeHead(reply.status,responseHeaders);
+    if(reply.headers.get('content-type')?.includes('text/event-stream') && reply.body){
+      res.flushHeaders();const reader=reply.body.getReader();
+      try{while(!cancel.signal.aborted){const {done,value}=await reader.read();if(done)break;if(!res.write(Buffer.from(value)))await new Promise<void>(resolve=>{res.once('drain',resolve);res.once('close',resolve);});}}finally{await reader.cancel().catch(()=>{});res.end();}
+    }else res.end(Buffer.from(await reply.arrayBuffer()));
   };
   return [{kind:'prefix',path:'/life',handler:asset},{kind:'exact',path:'/assets/main-character.png',handler:asset},{kind:'prefix',path:'/api/life',handler:apiRoute},{kind:'exact',path:'/dsh-pet-7340/attachment',handler:apiRoute}];
 }

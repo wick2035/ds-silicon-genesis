@@ -150,17 +150,14 @@ export async function main():Promise<void> {
     },id=>worksite.act(id,'leave-voluntary'));
     model.llm=Object.assign({...model.llm,stream:speech.wrap(model.llm).stream},{embodiedTools:true});
     const grounding=createSemanticGrounding(store,budget,model,id=>commandChannel.observation(id));
-    // Autonomous expression has already chosen speech instead of another
-    // action in Cognition; give it the same truth check before publication.
+    // Cognition generates expression with current facts; tool execution keeps
+    // its own state and permission checks, without a second model reviewing speech.
     executors.set('self.express',async(id,intent,signal)=>{
       const text=(intent.payload.parameters as any)?.text;
-      if(typeof text!=='string')return {status:'failed',evidence:{reason:'表达内容无效'}};
-      const review=await budget.runAs(id,'autonomous',()=>grounding.review(id,text,'自主表达',signal,'autonomous'));
-      const fresh=await store.loadEnvelope(id);
-      if(!review||!fresh||!grounding.valid(fresh,review)||review.segments.some(s=>!s.supported))return {status:'failed',evidence:{reason:'表达与当前事实不符'}};
+      if(signal.aborted||typeof text!=='string'||!text.trim()||text.length>4000)return {status:'failed',evidence:{reason:'表达内容无效'}};
       return {status:'completed',evidence:{actionId:intent.id,kind:'self.express',confirmed:true}};
     });
-    const retrieval=new CanonicalMemoryRetrieval(lease,desktopIdle), chat=new CanonicalChat(store,lease,unitOfWork,budget,model,(id,q)=>retrieval.search(id,q),(id,key,input)=>domain.laborAction(id,key,input),(id,input)=>service(id,input),id=>worksiteWake(id),grounding);
+    const retrieval=new CanonicalMemoryRetrieval(lease,desktopIdle), chat=new CanonicalChat(store,lease,unitOfWork,budget,model,(id,q,snapshot)=>retrieval.search(id,q,12,snapshot),(id,key,input)=>domain.laborAction(id,key,input),(id,input)=>service(id,input),id=>worksiteWake(id),grounding);
     let requestShutdown=()=>{};
     const decideLaborOffer=async(id:string,requestId:string,contractId:string)=>{
       const state=await lease.run(id,()=>store.loadEnvelope(id));

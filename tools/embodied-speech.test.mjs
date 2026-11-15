@@ -15,7 +15,7 @@ function fixture(resultStatus='COMPLETED'){
   const dispatcher={dispatch:async id=>{dispatches++;const a=state.life.actions.find(a=>a.id===id);a.status=resultStatus;state.life.receipts.push({actionId:id,status:resultStatus});}};
   const speech=createEmbodiedSpeech(reader,gate,uow,actions,dispatcher,async()=>({status:'PENDING'}),async()=>({status:'done'}));
   const options={embodied:{petId:'main',requestId:'speech-test',sourceIds:['user-1'],allowActions:true},system:'角色',messages:[{role:'user',content:'先吃饭'}],signal:gate.signal};
-  return {speech,options,get:()=>state,dispatches:()=>dispatches};
+  return {speech,options,dispatcher,get:()=>state,dispatches:()=>dispatches};
 }
 const call=(id,name,input)=>({type:'tool-call-delta',index:1,id,name,argumentsDelta:JSON.stringify(input)});
 async function collect(stream){let text='';for await(const p of stream)if(p.type==='text')text+=p.text;return text;}
@@ -75,4 +75,37 @@ test('等待动作回执期间触碰可取得状态锁，失败后续写仍串�
     await lease.run('main',async()=>{sequence.push('touch');unblock();});await animation;
     assert.deepEqual(sequence,['start','touch','resume']);
   }finally{await lease.close();}
+});
+
+
+test('streaming speech delivers first words before model completion and returns tool results in the same turn',async()=>{
+  const f=fixture();let finish;const barrier=new Promise(resolve=>{finish=resolve});let rounds=0;
+  const model={async *stream(o){rounds++;if(rounds===1){yield call('c1','act',{actionType:'service.eat-rice',parameters:{itemId:'rice-1'}});}else{assert.equal(JSON.parse(o.messages.at(-1).content).result.status,'COMPLETED');yield {type:'text',text:'饭吃到了'};await barrier;yield {type:'text',text:'，热乎乎的。'};}}};
+  const stream=f.speech.wrap(model).stream({...f.options,streamText:true})[Symbol.asyncIterator]();
+  assert.deepEqual((await stream.next()).value,{type:'text',text:'饭吃到了'});assert.equal(f.dispatches(),1);
+  finish();assert.equal((await stream.next()).value.text,'，热乎乎的。');assert.equal((await stream.next()).done,true);assert.equal(rounds,2);
+});
+
+
+test('historical unknown actions do not block buying new rice, and the model can eat its new inventory in the same turn',async()=>{
+  const f=fixture(),s=f.get();s.legacy.services.inventory=[];
+  s.life.constraints.capabilities.push({name:'service.buy-rice',enabled:true},{name:'care.water',physical:true,enabled:true});
+  s.life.constraints.capabilities.find(c=>c.name==='service.eat-rice').physical=true;
+  s.life.actions.push({id:'old-eat',actionType:'service.eat-rice',status:'UNKNOWN',sourceIds:[],parameters:{itemId:'old-rice'}},{id:'old-feed',actionType:'care.feed',status:'UNKNOWN',sourceIds:[],parameters:{}},{id:'old-labor',actionType:'labor.step',status:'UNKNOWN',sourceIds:[],parameters:{commandId:'old-command'}});
+  let rounds=0;const dispatched=[];
+  f.dispatcher.dispatch=async id=>{const action=s.life.actions.find(a=>a.id===id);dispatched.push(action.actionType);action.status='COMPLETED';if(action.actionType==='service.buy-rice'){s.legacy.wallet.balance-=20;s.legacy.services.inventory.push({id:'rice:new-purchase',name:'大白饭',status:'available'});}else{assert.equal(action.parameters.itemId,'rice:new-purchase');s.legacy.services.inventory[0].status='eaten';}s.life.receipts.push({actionId:id,status:'COMPLETED'});};
+  const model={async *stream(o){rounds++;if(rounds===1)yield call('buy','act',{actionType:'service.buy-rice',parameters:{}});else if(rounds===2){const data=JSON.parse(o.messages.at(-1).content);assert.equal(data.result.status,'COMPLETED');assert.equal(data.饭钱,80);assert.equal(data.库存[0].id,'rice:new-purchase');yield call('eat','act',{actionType:'service.eat-rice',parameters:{itemId:data.库存[0].id}});}else{assert.equal(JSON.parse(o.messages.at(-1).content).result.status,'COMPLETED');yield {type:'text',text:'饭买来吃到了。'};}}};
+  assert.equal(await collect(f.speech.wrap(model).stream(f.options)),'饭买来吃到了。');
+  assert.deepEqual(dispatched,['service.buy-rice','service.eat-rice']);assert.equal(rounds,3);assert.equal(s.legacy.wallet.balance,80);assert.equal(s.legacy.services.inventory[0].status,'eaten');assert.equal(s.life.actions.find(a=>a.id==='old-eat').status,'UNKNOWN');
+});
+
+test('an uncertain meal still blocks consuming that same bowl, without blocking unrelated later resources',async()=>{
+  const f=fixture(),s=f.get();s.life.actions.push({id:'uncertain-eat',actionType:'service.eat-rice',status:'UNKNOWN',sourceIds:[],parameters:{itemId:'rice-1'}});let rounds=0;
+  const model={async *stream(o){if(++rounds===1)yield call('eat','act',{actionType:'service.eat-rice',parameters:{itemId:'rice-1'}});else{assert.match(JSON.parse(o.messages.at(-1).content).result.reason,/未确认/);yield {type:'text',text:'这碗还没确认，先不重复吃。'};}}};
+  await collect(f.speech.wrap(model).stream(f.options));assert.equal(f.dispatches(),0);
+});
+
+test('malformed tool arguments return an error to the same model instead of ending its turn',async()=>{
+  const f=fixture();let rounds=0;const model={async *stream(o){if(++rounds===1)yield {type:'tool-call-delta',index:1,id:'bad',name:'act',argumentsDelta:'{'};else{assert.equal(o.messages.at(-1).isError,true);yield {type:'text',text:'我再想想。'};}}};
+  assert.equal(await collect(f.speech.wrap(model).stream(f.options)),'我再想想。');assert.equal(f.dispatches(),0);
 });

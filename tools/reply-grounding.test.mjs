@@ -36,13 +36,13 @@ test('意愿与执行分开，正在执行不能由旧完成回执证明',()=>{
   assert.match(groundActionReply('我没吃饭，但我刚喝了水。',state(),now),/没有确认/);
 });
 
-test('互动回应提交和对外返回同一条经核对的文本',async()=>{
+test('互动回应依据生成上下文直接回答，存档与返回文本一致',async()=>{
   const base=state();base.petId='main';base.version=0;base.humanity={stats:{},emotions:{},desires:{}};base.life.memories=[];base.life.constraints={paused:false};
   base.life.events.push({eventId:'pet',type:'social.care',source:'executor',payload:{action:'pet'}});
   let current=base;const store={loadEnvelope:async()=>structuredClone(current)},gate={signal:new AbortController().signal,run:async(_id,fn)=>fn()};
   const uow={apply:async(_id,version,fn)=>{assert.equal(current.version,version);const draft=structuredClone(current);fn(draft);draft.version++;current=draft;}};
-  const model={agentDefaultModel:{currentSelection:()=>({provider:'test',model:'test'})},llm:{async *stream(){yield {type:'text',text:'我刚喝到了水。'};}}};
+  const model={agentDefaultModel:{currentSelection:()=>({provider:'test',model:'test'})},llm:{async *stream(options){const input=JSON.parse(options.messages[0].content);assert.equal(input.task,'摸摸');assert.equal(input.recentPhysical.at(-1).payload.action,'pet');assert.match(options.system,/不声称执行了未完成的行动/);yield {type:'text',text:'摸得我有点痒。'};}}};
   const respond=createLegacyResponses(store,gate,uow,{runAs:async(_id,_kind,fn)=>fn()},model,'test');
   const reply=await respond('main','care',gate.signal,{eventId:'pet',description:'摸摸'});
-  assert.match(reply,/没有确认/);assert.equal(current.life.events.at(-1).payload.text,reply);
+  assert.equal(reply,'摸得我有点痒。');assert.equal(current.life.events.at(-1).payload.text,reply);
 });

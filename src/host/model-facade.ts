@@ -83,11 +83,13 @@ export function createModelFacade(config: ImportedModelConfig, options: ModelFac
           // the lowest effort and the disable flag so chat replies are fast.
           const isBailianDS41=/(?:^|\.)aliyuncs\.com$/i.test(new URL(base).hostname) && /^deepseek-v4\.1-flash(?:-\d+)?$/i.test(o.model);
           const lowEffort=o.reasoningEffort==='low' && isBailianDS41;
-          const stream=await client.chat.completions.create({model:o.model,messages:[...(system?[{role:'system' as const,content:system}]:[]),...messages] as any,stream:true,n:1,...(tools?.length?{tools:tools as any}:{}),max_tokens:maxTokens,...(o.temperature!==undefined?{temperature:o.temperature}:{}),...(lowEffort?{reasoning_effort:'low' as const,enable_thinking:false}:{})},{signal:controller.signal});
+          if(process.env.SILICON_CHAT_TIMING==='1')console.info('[model-start]',Date.now(),system.length,messages.length,Boolean(tools?.length));
+          const stream=await client.chat.completions.create({model:o.model,messages:[...(system?[{role:'system' as const,content:system}]:[]),...messages] as any,stream:true,stream_options:{include_usage:true},n:1,...(tools?.length?{tools:tools as any}:{}),max_tokens:maxTokens,...(o.temperature!==undefined?{temperature:o.temperature}:{}),...(lowEffort?{reasoning_effort:'low' as const,enable_thinking:false}:{})},{signal:controller.signal});
           for await(const chunk of stream) {
             onActivity();
             if(controller.signal.aborted) throw new Error('cancelled');
             if(++events>4096) throw new Error('limit');
+            if(chunk.usage)yield {type:'usage',inputTokens:chunk.usage.prompt_tokens,outputTokens:chunk.usage.completion_tokens,cachedTokens:chunk.usage.prompt_tokens_details?.cached_tokens??0};
             const choice=chunk.choices.find(c=>c.index===0);
             if(choice?.finish_reason==='length') throw new ModelResultError('模型输出被截断，请提高输出 token 上限后重试');
             if(choice?.delta?.refusal || choice?.finish_reason==='content_filter') throw new ModelResultError('模型拒绝了本次请求');
@@ -104,6 +106,8 @@ export function createModelFacade(config: ImportedModelConfig, options: ModelFac
             if(++events>4096) throw new Error('limit');
             if(chunk.type==='message_delta' && chunk.delta.stop_reason==='max_tokens') throw new ModelResultError('模型输出被截断，请提高输出 token 上限后重试');
             if(chunk.type==='message_delta' && chunk.delta.stop_reason==='refusal') throw new ModelResultError('模型拒绝了本次请求');
+            if(chunk.type==='message_start')yield {type:'usage',inputTokens:chunk.message.usage.input_tokens,outputTokens:0,cachedTokens:chunk.message.usage.cache_read_input_tokens??0};
+            if(chunk.type==='message_delta')yield {type:'usage',inputTokens:0,outputTokens:chunk.usage.output_tokens,cachedTokens:0};
             if(chunk.type==='content_block_delta' && chunk.delta.type==='text_delta'){const text=chunk.delta.text;chars+=text.length;if(chars>16384) throw new Error('limit');yield {type:'text-delta',index:chunk.index,text}; yield {type:'text',text};}
             if(chunk.type==='content_block_start' && chunk.content_block.type==='tool_use') {toolIds.set(chunk.index,chunk.content_block.id); toolEvents++; yield {type:'tool-call-delta',index:chunk.index,id:chunk.content_block.id,name:chunk.content_block.name,argumentsDelta:''};}
             if(chunk.type==='content_block_delta' && chunk.delta.type==='input_json_delta') yield {type:'tool-call-delta',index:chunk.index,id:toolIds.get(chunk.index) || '',argumentsDelta:chunk.delta.partial_json};

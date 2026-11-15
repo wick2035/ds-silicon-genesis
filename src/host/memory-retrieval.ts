@@ -6,9 +6,13 @@ import type { Queryable } from '../storage/postgres.js';
  * Chinese text which PostgreSQL may treat as a single token. */
 export class CanonicalMemoryRetrieval {
   constructor(private readonly db:Queryable,private readonly idle?:{snapshot():{seconds:number}|undefined}) {}
-  async search(petId:string, query:string, limit=12):Promise<Memory[]> {
+  async search(petId:string, query:string, limit=12, snapshot?:LifeState):Promise<Memory[]> {
     if(!petId||typeof query!=='string'||query.length>500||!Number.isInteger(limit)||limit<1||limit>30)throw new Error('记忆查询无效');
     const terms=[...new Set((query.toLowerCase().match(/[a-z0-9_]{2,}|[\p{Script=Han}]{2,}/gu)||[]).flatMap(t=>/[\p{Script=Han}]/u.test(t)&&t.length>2?Array.from({length:t.length-1},(_,i)=>t.slice(i,i+2)):[t]))].slice(0,12);
+    if(snapshot){
+      const live=snapshot.memories.filter(m=>m.valid&&m.sourceIds.every(id=>!Object.hasOwn(snapshot.invalidSources,id)));
+      return live.map(m=>({m,score:terms.filter(t=>m.content.toLowerCase().includes(t)).length})).filter(x=>!terms.length||x.score>0).sort((a,b)=>b.score-a.score||b.m.createdAt.localeCompare(a.m.createdAt)).slice(0,limit).map(x=>x.m);
+    }
     const result=await this.db.query(`WITH state AS MATERIALIZED (SELECT payload->'life'->'memories' AS memories, payload->'life'->'invalidSources' AS invalid FROM silicon_genesis.life_state WHERE pet_id=$1),
       terms AS MATERIALIZED (SELECT t, plainto_tsquery('simple',t) AS q FROM unnest($2::text[]) t),
       docs AS MATERIALIZED (SELECT m, m->>'content' AS content FROM state, jsonb_array_elements(COALESCE(memories,'[]'::jsonb)) m

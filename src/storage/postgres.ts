@@ -40,6 +40,11 @@ export class PostgresKernelStore implements KernelStore {
   async load(petId: string): Promise<LifeState | null> {
     const envelope = await this.loadEnvelope(petId);
     if (!envelope) return null;
+    return this.projectEnvelope(envelope);
+  }
+
+  projectEnvelope(envelope:CanonicalEnvelope):LifeState {
+    const petId=envelope.petId;
     const projection = this.projectBody(envelope);
     const life=structuredClone(envelope.life), legacy=envelope.legacy as Record<string,any>;
     const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
