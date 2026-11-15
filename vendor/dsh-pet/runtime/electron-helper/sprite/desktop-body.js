@@ -47,7 +47,16 @@
       if(data.world?.confirmedSleep===true&&!this.sleeping&&!this.bodyExecuting&&!this.sleepReportPending){const set=(this.animations.sleep||[]).find(s=>s?.start?.length&&s?.loop?.length&&s?.end?.length);if(set){this.sleeping=true;this.sleepSet={start:set.start[0],loop:set.loop[0],end:set.end[0]};this.sleepPhase='loop';this.stopMove();this.switchTo(this.sleepSet.loop,false);}}
       const thought=data.world?.body?.phase!=='well'?data.world?.body?.label:c?.source==='curiosity'?data.world.questions.at(-1)?.text:'';
       if(thought && thought!==this.lastInnerThought){this.lastInnerThought=thought;this.showInnerThought(thought);}
-      if(c?.source==='silicon-rest' && this.bodySeen!==c.id+':0'){this.bodySeen=c.id+':0';if(!this.bodyExecuting&&!this.dragState.active&&!this.frozen){this.restAction={id:c.id,kind:c.restKind};this.postSleepAction(c.restKind);}return;}
+      if(c?.source==='silicon-rest'){
+        if(this.bodySeen===c.id+':0')return;
+        this.bodySeen=c.id+':0';
+        const hasSleepSet=(this.animations.sleep||[]).some(s=>s?.start?.length&&s?.loop?.length&&s?.end?.length);
+        if(this.bodyExecuting||this.dragState.active||this.frozen||!hasSleepSet||this.sleeping===(c.restKind==='sleep')){
+          await window.petBridge.reportActionReceipt({id:c.id,actionId:c.id,restKind:c.restKind,index:0,surface:'desktop',status:'interrupted',played:false});
+          return;
+        }
+        this.restAction={id:c.id,kind:c.restKind};this.postSleepAction(c.restKind);return;
+      }
       if(this.bodyExecuting && (!c||c.id!==this.bodyCommandId||!['queued','running'].includes(c.status)))this.cancelBody?.();
       if(!data.ok||!c||c.surface!=='desktop'||!['queued','running'].includes(c.status)||Date.now()>c.expires||this.bodyExecuting||this.bodySeen===c.id+':'+c.index)return;
       this.bodySeen=c.id+':'+c.index;void this.executeBody(c,data.world.actions);
