@@ -1,8 +1,8 @@
-export const actionCatalog = {'self.express':'{text:string}','service.sweet':'{}','care.water':'{}','service.buy-rice':'{}','service.eat-rice':'{itemId:string}','labor.step':'{contractId:string,commandId:string}','token.pickup':'{coinId:string}','body.activity':'{activity:"walk"|"run"|"play"|"cube"|"juggle"|"dance"|"hum"|"stretch"|"bubble"|"look",target?:"left"|"right"|"center"}','body.sleep':'{mode?:"nap"}','body.wake':'{}','image.observe':'{query:string,attachmentId:string,attachmentSourceId:string}','learning.observe':'{kind:"search"|"fetch"|"bili",query:string,url?:string,followUpQuestion?:string}'} as const;
+export const actionCatalog = {'self.express':'{text:string,meme?:string}','service.sweet':'{}','care.water':'{}','service.buy-rice':'{}','service.eat-rice':'{itemId:string}','labor.step':'{contractId:string,commandId:string}','token.pickup':'{coinId:string}','body.activity':'{activity:"walk"|"run"|"play"|"cube"|"juggle"|"dance"|"hum"|"stretch"|"bubble"|"look",target?:"left"|"right"|"center"}','body.sleep':'{mode?:"nap"}','body.wake':'{}','image.observe':'{query:string,attachmentId:string,attachmentSourceId:string}','learning.observe':'{kind:"search"|"fetch"|"bili",query:string,url?:string,followUpQuestion?:string}'} as const;
 export function validateActionParameters(type:string,p:Record<string,unknown>):void {
   const str=(v:unknown,max:number)=>typeof v==='string'&&v.trim().length>0&&v.length<=max;
   if(!p||typeof p!=='object'||Array.isArray(p))throw Error('行动参数无效');
-  const fields:Record<string,string[]>={'self.express':['text'],'service.sweet':['legacyCommand'],
+  const fields:Record<string,string[]>={'self.express':['text','meme'],'service.sweet':['legacyCommand'],
     'service.buy-rice':['legacyCommand'],'care.feed':['legacyCommand'],'care.water':['legacyCommand'],'care.pet':['legacyCommand'],'care.play':['legacyCommand'],'care.soothe':['legacyCommand'],'care.accompany':['legacyCommand'],'body.sleep':['legacyCommand','mode'],'body.wake':['legacyCommand'],
     'body.activity':['activity','target'],
     'service.eat-rice':['itemId','legacyCommand'],'token.pickup':['coinId'],'labor.step':['contractId','commandId'],
@@ -10,7 +10,7 @@ export function validateActionParameters(type:string,p:Record<string,unknown>):v
     'learning.observe':['kind','query','url','followUpQuestion','legacyCommand','wishId','careAction']};
   if(!fields[type] || Object.keys(p).some(key=>!fields[type].includes(key)))throw Error('行动包含未知参数');
   for(const key of ['legacyCommand','wishId','careAction'])if(p[key]!==undefined&&!str(p[key],300))throw Error('行动参数无效');
-  if(type==='self.express' && str(p.text,200))return;
+  if(type==='self.express' && str(p.text,200) && (p.meme===undefined||str(p.meme,120)&&!/[\/\\:\x00-\x1f]/u.test(p.meme as string)))return;
   if(type==='service.sweet')return;
   if(type==='body.sleep' && p.mode!==undefined && p.mode!=='nap')throw Error('睡眠模式无效');
   if(['service.buy-rice','care.feed','care.water','care.pet','care.play','care.soothe','care.accompany','body.sleep','body.wake'].includes(type))return;

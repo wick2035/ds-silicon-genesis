@@ -48,7 +48,7 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
   assert(e && e.actionId === intent.id && e.kind === intent.type && e.confirmed === true, '缺少与行动绑定的可信执行结果');
   if(intent.type==='self.express') {
     assert(typeof params.text==='string' && params.text.length<=200,'表达内容无效');
-    draft.life.events.push({eventId:'self-expression:'+intent.id,petId:draft.petId,type:'conversation.assistant',source:'desktop',occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'inferred',payload:{text:params.text,sourceIds:[sourceEventId]}});return;
+    draft.life.events.push({eventId:'self-expression:'+intent.id,petId:draft.petId,type:'conversation.assistant',source:'desktop',occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'inferred',payload:{text:params.text,...(typeof e.meme==='string'?{meme:e.meme}:{}),sourceIds:[sourceEventId]}});return;
   }
   if(intent.type==='service.sweet') {
     const charge=sweetPrice(draft,at),s=advanceSpirit(draft.life,at);

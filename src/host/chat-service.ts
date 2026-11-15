@@ -19,7 +19,7 @@ import type { DurableCognitiveBudget } from './cognitive-budget.js';
 
 interface Reader { loadEnvelope(petId:string):Promise<CanonicalEnvelope|null>; load(petId:string):Promise<LifeState|null>; projectEnvelope?(envelope:CanonicalEnvelope):LifeState }
 interface Model { agentDefaultModel:{currentSelection():{provider:string;model:string}}; llm:{embodiedTools?:boolean;stream(options:unknown):AsyncIterable<any>} }
-interface Turn { requestId:string; petId:string; channel:'desktop'|'qq-c2c'|'qq-group'; text:string; actorId:string; sourceEventIds?:string[]; onPartial?:(text:string)=>void; onUsage?:(usage:{inputTokens:number;outputTokens:number;cachedTokens:number})=>void; attachments?:Array<{petId:string;id:string;sourceEventId:string}> }
+interface Turn { requestId:string; petId:string; channel:'desktop'|'qq-c2c'|'qq-group'; text:string; actorId:string; sourceEventIds?:string[]; onPartial?:(text:string)=>void; onMeme?:(name:string)=>void; onUsage?:(usage:{inputTokens:number;outputTokens:number;cachedTokens:number})=>void; attachments?:Array<{petId:string;id:string;sourceEventId:string}> }
 const digest=(value:string)=>createHash('sha256').update(value).digest('hex');
 const safeId=(s:unknown):s is string=>typeof s==='string' && s.length>0 && s.length<=200 && !/[\x00-\x1f]/.test(s);
 const live=(state:LifeState,id:string)=>!Object.hasOwn(state.invalidSources,id);
@@ -62,7 +62,7 @@ export class CanonicalChat {
     const initialCommit=this.edit<{reply:string|null}>(input.petId,draft=>{
       const legacy=draft.legacy as Record<string,any>; legacy.chatTurns ||= {};
       const prior=legacy.chatTurns[id];
-      if(prior){if(prior.fingerprint!==fingerprint)throw new Error('对话标识冲突'); if(prior.status==='completed'){if(Array.isArray(prior.sources) && prior.sources.some((source:string)=>Object.hasOwn(draft.life.invalidSources,source)))throw new Error('对话来源已失效');return {reply:String(prior.reply)};} throw new Error(prior.status==='running'?'对话正在处理':'对话未完成，请使用新请求标识');}
+      if(prior){if(prior.fingerprint!==fingerprint)throw new Error('对话标识冲突'); if(prior.status==='completed'){if(Array.isArray(prior.sources) && prior.sources.some((source:string)=>Object.hasOwn(draft.life.invalidSources,source)))throw new Error('对话来源已失效');if(typeof prior.meme==='string')input.onMeme?.(prior.meme);return {reply:String(prior.reply)};} throw new Error(prior.status==='running'?'对话正在处理':'对话未完成，请使用新请求标识');}
       if(!/^\/(?:休息|打盹|醒来|甜食)$/u.test(text))checkSimulatedSpending(draft,'chat');
       for(const attachment of input.attachments??[]) {const event=draft.life.events.find(e=>e.eventId===attachment.sourceEventId);if(!event||event.type!=='attachment.shared'||(event.payload as any)?.attachmentId!==attachment.id||Object.hasOwn(draft.life.invalidSources,attachment.sourceEventId))throw Error('图片附件来源无效');}
       for(const source of input.sourceEventIds??[]) if(!draft.life.events.some(e=>e.eventId===source)||Object.hasOwn(draft.life.invalidSources,source))throw new Error('对话来源不可用');
@@ -159,12 +159,13 @@ export class CanonicalChat {
         '相关记忆：'+promptData(memories.map(m=>({content:m.content,evidence:m.evidenceLevel})),1000),
       ].join('\n');
       const selection=this.model.agentDefaultModel.currentSelection();if(!selection.provider||!selection.model)throw new Error('模型不可用');
-      const turnAbort=new AbortController(),combined=AbortSignal.any([signal,this.gate.signal,turnAbort.signal,reservationAbort.signal]);let output='';
+      const turnAbort=new AbortController(),combined=AbortSignal.any([signal,this.gate.signal,turnAbort.signal,reservationAbort.signal]);let output='',meme:string|undefined;
       if(process.env.SILICON_CHAT_TIMING==='1')console.info('[chat-prompt]',state.legacyContext.personaDescription.length,COMPANION_PERSONALITY.length,system.length);timing('generate');let firstText=true;const tokenUsage={inputTokens:0,outputTokens:0,cachedTokens:0};
       const generate=async()=>{
         for await(const part of this.model.llm.stream({...selection,system,streamText:!group,embodiedSnapshot:envelope,beforeActions:initialCommit,embodied:{petId:input.petId,requestId:'chat:'+id,sourceIds:['chat-user:'+id],allowActions:true},messages:[...history,{role:'user',content:input.attachments?.length?[{type:'text',text},...input.attachments.map(a=>({type:'image',attachment:{petId:a.petId,id:a.id}}))]:text}],signal:combined,maxTokens:group?120:500,reasoningEffort:'low'})) {
           if(part?.type==='usage'){tokenUsage.inputTokens+=part.inputTokens??0;tokenUsage.outputTokens+=part.outputTokens??0;tokenUsage.cachedTokens+=part.cachedTokens??0;}
-          if(part?.type==='text-reset'){output='';input.onPartial?.('');}
+          if(part?.type==='meme')meme=part.name;
+          if(part?.type==='text-reset'){meme=undefined;output='';input.onPartial?.('');}
           if(part?.type==='text' && typeof part.text==='string'){await initialCommit;if(firstText){timing('first-text');firstText=false;}output+=part.text;if(!group)input.onPartial?.(redactDadNames(output.replace(/<念头>[\s\S]*?(?:<\/念头>|$)/gu,'').replace(/<(?:body|service)>[\s\S]*$/gi,'').replace(/\[[^\]]*$/u,'').replace(/\[愿意去工地\]/gu,'').trim()));}
         }
       };
@@ -181,8 +182,8 @@ export class CanonicalChat {
       try {await Promise.all([generateReply,extractLabor()]);} catch(error) {turnAbort.abort();throw error;}
       if(laborProposal){
         system+='\n爸爸的话可能涉及一项尚未执行的工作条件或操作，提取结果仅供核对：'+JSON.stringify(laborProposal)+'。请结合他的话，用自己的口吻说明理解并请他确认；不要说该操作已执行，不要输出任何系统标记或固定编号。';
-        output='';
-        await this.budget.runAs(input.petId,'interactive',async()=>{for await(const part of this.model.llm.stream({...selection,system,embodied:{petId:input.petId,requestId:'chat:'+id,sourceIds:['chat-user:'+id],allowActions:true},messages:[...history,{role:'user',content:text}],signal:combined,maxTokens:600,reasoningEffort:'low'}))if(part?.type==='text'&&typeof part.text==='string')output+=part.text;});
+        output='';meme=undefined;
+        await this.budget.runAs(input.petId,'interactive',async()=>{for await(const part of this.model.llm.stream({...selection,system,embodied:{petId:input.petId,requestId:'chat:'+id,sourceIds:['chat-user:'+id],allowActions:true},messages:[...history,{role:'user',content:text}],signal:combined,maxTokens:600,reasoningEffort:'low'})){if(part?.type==='text'&&typeof part.text==='string')output+=part.text;if(part?.type==='meme')meme=part.name;}});
       }
       const thought=extractThought(output);output=thought.reply;
       if(group&&output==='<qq-silent/>'){
@@ -234,14 +235,14 @@ export class CanonicalChat {
         }
         if(!workBlocked && !this.grounding)output=groundActionReply(groundWorksiteReply(output,draft),draft);
         if(group && [...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(output)].length>15)throw Error('群聊回复超出长度限制');
-        draft.life.events.push({eventId:assistantId,petId:input.petId,type:'conversation.assistant',source:input.channel,occurredAt:now,receivedAt:now,evidenceLevel:'inferred',causationId:userId,payload:{text:output,tokenUsage,channel:input.channel,...(typeof groupId==='string'?{groupId}:{}),sourceIds:sources}});
+        draft.life.events.push({eventId:assistantId,petId:input.petId,type:'conversation.assistant',source:input.channel,occurredAt:now,receivedAt:now,evidenceLevel:'inferred',causationId:userId,payload:{text:output,...(meme?{meme}:{}),tokenUsage,channel:input.channel,...(typeof groupId==='string'?{groupId}:{}),sourceIds:sources}});
         if(workDecision)draft.life.events.push({eventId:String(workDecision.eventId),petId:input.petId,type:'labor.decision',source:'model',occurredAt:now,receivedAt:now,evidenceLevel:'inferred',causationId:assistantId,payload:{contractId:workDecision.contractId,choice:'work',reason:'conversation',sourceIds:[userId,assistantId]}});
         if(laborProposal){const proposals=legacy.chatLaborProposals ||= {};const code=id.slice(0,12);if(proposals[code])throw Error('工作提案编号冲突');proposals[code]={input:laborProposal,sourceId:userId,status:'pending',expiresAt:Date.now()+600000};}
-        turn.status='completed';turn.reply=output;turn.sources=sources;turn.completedAt=Date.now();turn.tokenUsage=tokenUsage;return undefined;
+        turn.status='completed';turn.reply=output;turn.meme=meme;turn.sources=sources;turn.completedAt=Date.now();turn.tokenUsage=tokenUsage;return undefined;
         });
       if(tokenUsage.inputTokens||tokenUsage.outputTokens)input.onUsage?.(tokenUsage);
       if(decidedToWork)try{this.wakeWorksite?.(input.petId);}catch{/* The regular scheduler can retry. */}
-      return output;
+      if(meme)input.onMeme?.(meme);return output;
     } catch(error) {
       await initialCommit.catch(()=>{});
       try {await this.edit(input.petId,draft=>{const turn=(draft.legacy as Record<string,any>).chatTurns?.[id];if(turn?.status==='running'&&turn.fingerprint===fingerprint){turn.status='failed';turn.finishedAt=Date.now();}return undefined;});}catch{/* a lease loss or uncertain commit must not be retried blindly */}
@@ -276,14 +277,14 @@ export function createChatHttp(chat:CanonicalChat,authorize:(request:Request)=>P
     try {const raw=await request.text();if(raw.length>10000)return response(413,{ok:false,error:'请求过大'});const body=JSON.parse(raw);
       const turn={requestId:body.requestId,petId:await petId(),channel:'desktop' as const,actorId:'dad',text:body.text,attachments:body.attachments};
       if(request.headers.get('accept')?.includes('text/event-stream')){
-        const encoder=new TextEncoder(),cancel=new AbortController();let usage:unknown,closed=false;
+        const encoder=new TextEncoder(),cancel=new AbortController();let usage:unknown,meme:string|undefined,closed=false;
         const stream=new ReadableStream<Uint8Array>({start(controller){
           const send=(event:string,data:unknown)=>{if(!closed)controller.enqueue(encoder.encode('event: '+event+'\ndata: '+JSON.stringify(data)+'\n\n'));};
-          void chat.turn({...turn,onPartial:text=>send('partial',{text}),onUsage:value=>{usage=value;}},AbortSignal.any([request.signal,cancel.signal])).then(reply=>send('done',{ok:true,reply,usage}),error=>send('error',{error:error instanceof Error?error.message:'对话未完成'})).finally(()=>{if(!closed){closed=true;controller.close();}});
+          void chat.turn({...turn,onPartial:text=>send('partial',{text}),onUsage:value=>{usage=value;},onMeme:value=>{meme=value;}},AbortSignal.any([request.signal,cancel.signal])).then(reply=>send('done',{ok:true,reply,usage,...(meme?{meme}:{})}),error=>send('error',{error:error instanceof Error?error.message:'对话未完成'})).finally(()=>{if(!closed){closed=true;controller.close();}});
         },cancel(){closed=true;cancel.abort();}});
         return new Response(stream,{headers:{'content-type':'text/event-stream; charset=utf-8','cache-control':'no-store','x-accel-buffering':'no'}});
       }
-      const reply=await chat.turn(turn,request.signal);return response(200,{ok:true,reply});}
+      let meme:string|undefined;const reply=await chat.turn({...turn,onMeme:value=>{meme=value;}},request.signal);return response(200,{ok:true,reply,...(meme?{meme}:{})});}
     catch(error){const message=error instanceof Error&&error.message?error.message:'对话未完成，请检查状态后重试';return response(409,{ok:false,error:message});}
   };
 }

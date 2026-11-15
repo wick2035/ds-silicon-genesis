@@ -25,7 +25,7 @@ async function request(route, options = {}) {
   return (await fetchResult(`/api/life/${route}`,{...options,headers})).value;
 }
 window.lifeApi = Object.freeze({
-  chat: async (text, requestId, attachments = [], onPartial, onUsage) => {
+  chat: async (text, requestId, attachments = [], onPartial, onUsage, onMeme) => {
     const token=sessionStorage.getItem('life-token'),headers={'content-type':'application/json','accept':'text/event-stream'};if(token)headers['x-dsh-pet-token']=token;
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),120000);
     try{
@@ -36,7 +36,7 @@ window.lifeApi = Object.freeze({
         while((end=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,end);buffer=buffer.slice(end+2);const event=/^event: (.+)$/m.exec(frame)?.[1],data=JSON.parse(/^data: (.+)$/m.exec(frame)?.[1]||'{}');
           if(event==='partial')onPartial?.(data.text);
           if(event==='error')throw Error(data.error||'对话未完成');
-          if(event==='done'){if(data.usage)onUsage?.(data.usage);return data.reply;}
+          if(event==='done'){if(data.usage)onUsage?.(data.usage);if(data.meme)onMeme?.(data.meme);return data.reply;}
         }
         if(done)throw Error('连接中断，回复尚未完成');
       }

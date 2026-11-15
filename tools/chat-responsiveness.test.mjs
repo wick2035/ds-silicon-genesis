@@ -5,7 +5,7 @@ import {CanonicalChat} from '../dist/host/chat-service.js';
 
 test('工作意图提取与回复生成并行，回复和确认提案一起提交',async()=>{
   const old=Object.create(CompanionStore.prototype);old.data={version:2,pets:{}};old.loaded=true;old.clock=Date.now;old.save=()=>{};old.load=()=>{};
-  let envelope={petId:'main',version:0,legacy:old.read('main'),humanity:{},life:{events:[],invalidSources:{},relationships:[],constraints:{permissions:[]},memories:[],commitments:[],legacyContext:{personaDescription:'test'},body:{},emotions:{}}};
+  let envelope={petId:'main',version:0,legacy:old.read('main'),humanity:{},life:{actions:[],events:[],invalidSources:{},relationships:[],constraints:{permissions:[]},memories:[],commitments:[],legacyContext:{personaDescription:'test'},body:{},emotions:{}}};
   const gate={signal:new AbortController().signal,run:async(_id,fn)=>fn()};
   const store={loadEnvelope:async()=>structuredClone(envelope),load:async()=>structuredClone(envelope.life)};
   const uow={apply:async(_id,version,change)=>{assert.equal(version,envelope.version);const draft=structuredClone(envelope);change(draft);draft.version++;envelope=draft;}};
