@@ -22,6 +22,7 @@ export interface SchedulerOptions {
   wakeCoordinator: WakeCoordinator;
   deterministic: DeterministicActivity;
   needs?: {run(petId:string,signal:AbortSignal):Promise<boolean>};
+  groupConversation?: {run(petId:string,signal:AbortSignal):Promise<void>};
   resultCoordinator: CognitiveResultCoordinator;
   development?: {run(petId:string,signal:AbortSignal):Promise<void>};
   reminders?: {run(petId:string,signal:AbortSignal):Promise<void>};
@@ -89,6 +90,7 @@ export class LifeScheduler {
             let needsHandled=false;
             if(!before.constraints.paused&&this.options.needs){try{needsHandled=await this.options.needs.run(this.options.petId,this.controller.signal);}catch{this.report({status:'degraded',reason:'needs_unavailable'});}}
             await this.options.deterministic.run(this.options.petId, this.controller.signal, { allowAutonomous: !before.constraints.paused,needsManaged:needsHandled });
+            if(!before.constraints.paused&&this.options.groupConversation){try{await this.options.groupConversation.run(this.options.petId,this.controller.signal);}catch{this.report({status:'degraded',reason:'group_conversation_unavailable'});}}
             if (this.controller.signal.aborted) throw new Error('Scheduler stopped');
             const resumed=needsHandled?false:await this.options.resultCoordinator.resume(this.options.petId,this.controller.signal);
             const state = await this.kernel.getState(this.options.petId);

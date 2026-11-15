@@ -39,6 +39,7 @@ import {ActionCoordinator} from './action-coordinator.js';
 import {CognitiveResultCoordinator} from './cognitive-result.js';
 import {DurableCognitiveBudget} from './cognitive-budget.js';
 import {createModelFacade} from './model-facade.js';
+import {createGroupProactive,generateGroupOpener} from './qq-group-proactive.js';
 import {createCognitiveModel} from './cognitive-model.js';
 import {CanonicalMemoryRetrieval} from './memory-retrieval.js';
 import {createPublicWeb,createBiliReader,createExplorationExecutor} from './network-services.js';
@@ -87,6 +88,7 @@ export async function main():Promise<void> {
   let stores:Awaited<ReturnType<typeof openLifeStores>>|undefined,app:Awaited<ReturnType<typeof startStandalone>>|undefined,scheduler:LifeScheduler|undefined;
   let model:ReturnType<typeof createModelFacade>|undefined,bili:ReturnType<typeof createBiliReader>|undefined;
   let qq:CanonicalQQGateway|undefined;
+  let groupConversation:ReturnType<typeof createGroupProactive>|undefined;
   try {
     stores=await openLifeStores(pool,projectBody,legacyContext(persona));
     const {lease,store,unitOfWork,wakes}=stores;
@@ -232,6 +234,7 @@ export async function main():Promise<void> {
       }catch(error){console.error('[tokens] pickup:',error);}finally{pickupRuns.delete(id);}})();
     };
     scheduler=new LifeScheduler(kernel,cognition,{connectionString:connectionUri(dbConfig.connection),petId,intervalSeconds:60,cognitiveIntervalSeconds:300,idle:desktopIdle,signal:lease.signal,development,
+      groupConversation:{run:async(id,signal)=>{await groupConversation?.run(id,signal);}},
       reminders:{run:(id,signal)=>todos.remind(id,signal,t=>{if(!publishWhisper)throw Error('桌宠显示尚未就绪');publishWhisper('提醒：'+t.text);})},
       whisper:{settings:()=>model!.getSettings(),run:async(id,signal)=>{if(!publishWhisper)throw Error('桌宠显示尚未就绪');const text=await responses(id,'whisper',signal,undefined,{autonomous:true});if(!signal.aborted)publishWhisper(text);}},
       wakeCoordinator:wakes,deterministic,resultCoordinator:coordinator,
@@ -311,6 +314,7 @@ export async function main():Promise<void> {
         await prepareQQTakeover({...shared,legacyHome:targetHome,stopHook:{stopAndVerify:async()=>await verifyOldQQAbsent(root)?'absent':'unknown'}});
       if(takeover.status==='ready') {
         qq=takeover.gateway;qq.setGroupBlocked(await canonical.groupBlocked(petId));executors.set('qq.send',takeover.executor);await qq.start();
+        groupConversation=createGroupProactive({canonical,authority:ingressAuthority,dispatch:id=>dispatcher.dispatch(id),generate:(snapshot,signal)=>budget.runAs(petId,'autonomous',()=>generateGroupOpener(snapshot,model!.llm,model!.agentDefaultModel.currentSelection(),signal,persona))});
         await canonical.enableRelay(petId);
         let signature='',running=false,dirty=false,timer:ReturnType<typeof setTimeout>|undefined;
         const run=async()=>{timer=undefined;if(running){dirty=true;return;}running=true;

@@ -1,4 +1,5 @@
 import {hasActiveConversation} from './active-conversation.js';
+import {settleGroupOpener} from './qq-group-proactive-policy.js';
 import {validateRicePurchase} from './rice-purchase.js';
 import {validateRiceMeal} from './rice-inventory.js';
 import {forcedLaborState} from './forced-labor.js';
@@ -31,6 +32,7 @@ function updateQQ(draft: CanonicalEnvelope, intent: OutboxIntent, status: Action
   if (status === 'COMPLETED') assert(evidence.actionId === intent.id && evidence.kind === 'qq.send' && typeof evidence.messageId === 'string' && !!evidence.messageId, 'QQ 缺少发送回执');
   match[0].state = status === 'COMPLETED' ? 'sent' : status === 'UNKNOWN' ? 'unknown' : status.toLowerCase();
   if (status === 'COMPLETED') match[0].messageId = evidence.messageId;
+  settleGroupOpener(draft,match[0],status,new Date().toISOString());
 }
 function settleExploration(draft: CanonicalEnvelope, intent: OutboxIntent, status: ActionReceipt['status']): void {
   if (!['learning.observe','image.observe'].includes(intent.type) || status === 'UNKNOWN') return;

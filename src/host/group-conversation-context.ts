@@ -17,8 +17,9 @@ export function recentGroupActivity(state:Pick<LifeState,'events'|'actions'|'rec
         Array.isArray(p.sourceIds)?p.sourceIds:request.causationId?[request.causationId]:[];
       if(ids.some((id:string)=>!events.has(id)||!live(id)))return [];
       const incoming=ids.map((id:string)=>events.get(id)).filter((m:typeof e|undefined):m is typeof e=>!!m&&live(m.eventId)&&m.type==='social.message'&&m.source==='qq'&&(m.payload as any)?.scene==='group'&&(m.payload as any)?.groupId===p.groupId);
-      if(!incoming.length)return [];
-      const action=(state.actions??[]).find(a=>a.actionType==='qq.send'&&a.parameters.scene==='group'&&a.parameters.content===p.text&&a.sourceIds.some(id=>incoming.some((m:typeof e)=>m.eventId===id)));
+      const proactive=request.type==='social.group-opportunity'&&request.evidenceLevel==='observed';
+      if(!incoming.length&&!proactive)return [];
+      const action=(state.actions??[]).find(a=>a.actionType==='qq.send'&&a.parameters.scene==='group'&&a.parameters.content===p.text&&a.sourceIds.some(id=>proactive?id===request.eventId:incoming.some((m:typeof e)=>m.eventId===id)));
       const receipt=(state.receipts??[]).find(r=>r.actionId===action?.id&&r.receiptId===action?.receiptId&&live(r.receiptId));
       const receiptEvent=receipt?state.events.find(event=>event.type==='action.receipt'&&event.causationId===receipt.receiptId&&(event.payload as any)?.actionId===action?.id&&live(event.eventId)):undefined;
       const sent=action?.status==='COMPLETED'&&receipt?.status==='COMPLETED'&&receiptEvent&&receipt.details?.kind==='qq.send'&&typeof receipt.details.messageId==='string';

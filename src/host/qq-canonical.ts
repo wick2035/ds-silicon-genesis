@@ -1,5 +1,6 @@
-import { createHash } from 'node:crypto';
+import { createHash,randomUUID } from 'node:crypto';
 import {groupChatBlocked,groupMessageAllowed,assertGroupReplyAllowed} from './qq-group-access.js';
+import {boundGroupId,groupProactiveState,assertGroupOpportunity,GROUP_OPENER_PRICE} from './qq-group-proactive-policy.js';
 import { redactDadNames } from '../../vendor/pet-plugins/behavior/memory-privacy.mjs';
 import { rebuildRelationships, validateProposal } from '../kernel/index.js';
 import type { ActionProposal, LifeState } from '../kernel/types.js';
@@ -154,6 +155,50 @@ export class CanonicalQQ {
       return {value:actionId,intents:[{id:actionId,type:'qq.send',payload:{actionId,petId,actionType:'qq.send',parameters:proposal.parameters}}]};
     });
   }
+  async claimGroupOpportunity(petId:string,authority:object):Promise<CanonicalEnvelope|null> {
+    if(authority!==this.#ingress)throw Error('QQ 通道凭据无效');
+    const current=await this.reader.loadEnvelope(petId);if(!current)return null;
+    const groupId=boundGroupId(current);if(!groupId)return null;
+    const saved=(current.legacy as Obj).qq?.groupProactive;
+    if(saved?.groupId===groupId&&(!groupProactiveState(current).ready||!Number.isFinite((current.legacy as Obj).wallet?.balance)||(current.legacy as Obj).wallet.balance<GROUP_OPENER_PRICE))return null;
+    return this.change(petId,draft=>{
+      const qq=(draft.legacy as Obj).qq,now=Date.now(),groupId=boundGroupId(draft);
+      if(!groupId)return {value:null};
+      if(qq.groupProactive?.groupId!==groupId){qq.groupProactive={groupId,enabledAt:now};return {value:null};}
+      if(!groupProactiveState(draft,now).ready||!Number.isFinite((draft.legacy as Obj).wallet?.balance)||(draft.legacy as Obj).wallet.balance<GROUP_OPENER_PRICE)return {value:null};
+      const id='group-opportunity:'+randomUUID(),at=new Date(now).toISOString();
+      qq.groupProactive.lastAttemptAt=now;qq.groupProactive.lastAttemptId=id;
+      const contextSourceIds=draft.life.events.filter(e=>!Object.hasOwn(draft.life.invalidSources,e.eventId)&&(e.payload as Obj)?.groupId===groupId&&(e.type==='social.message'&&e.source==='qq'||e.type==='conversation.assistant'&&e.source==='qq-group')).slice(-8).map(e=>e.eventId);
+      draft.life.events.push({eventId:id,petId,type:'social.group-opportunity',source:'qq-group',occurredAt:at,receivedAt:at,evidenceLevel:'observed',payload:{groupId,price:GROUP_OPENER_PRICE,contextSourceIds}});
+      return {value:structuredClone(draft)};
+    });
+  }
+  async enqueueGroupOpener(petId:string,sourceId:string,text:string,authority:object):Promise<string|null> {
+    if(authority!==this.#ingress)throw Error('QQ 通道凭据无效');
+    const content=redactDadNames(text.trim());
+    if(!content||content==='<qq-silent/>')return null;
+    if([...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(content)].length>15||/[<>]/u.test(content))throw Error('群聊主动表达必须是15字内的完整正文');
+    return this.change(petId,draft=>{
+      const legacy=draft.legacy as Obj,qq=legacy.qq,id=hash('group-proactive:'+sourceId),old=qq?.outbound?.[id];
+      if(old){if(draft.life.actions.find(a=>a.id===old.actionId)?.parameters.content!==content)throw Error('群聊主动表达内容冲突');return {value:old.actionId as string};}
+      assertGroupOpportunity(draft,sourceId);
+      if(!Number.isFinite(legacy.wallet?.balance)||legacy.wallet.balance<GROUP_OPENER_PRICE)return {value:null};
+      const actionId='qq-send:'+id,answerId='group-opener:'+sourceId,at=new Date().toISOString(),scene='group';
+      const fingerprint=hash(JSON.stringify({scene,text:content,sourceEventId:sourceId}));
+      qq.outbound[id]={at:Date.now(),state:'pending',actionId,fingerprint,groupProactive:true,amount:GROUP_OPENER_PRICE,chargeState:'reserved'};
+      const contextSourceIds=(draft.life.events.find(e=>e.eventId===sourceId)?.payload as Obj).contextSourceIds??[];
+      draft.life.events.push({eventId:answerId,petId,type:'conversation.assistant',source:'qq-group',occurredAt:at,receivedAt:at,causationId:sourceId,evidenceLevel:'inferred',payload:{groupId:boundGroupId(draft),text:content,sourceIds:[sourceId,...contextSourceIds],proactive:true}});
+      const proposal:ActionProposal={id:actionId,petId,actionType:'qq.send',parameters:{scene,destination:qq.identity.groupOpenid,content,groupProactive:true},priority:50,interruptPolicy:'noninterruptible',requiredCapabilities:['qq.send'],expectedStateVersion:draft.version,sourceIds:[sourceId,answerId]};
+      const state:LifeState={...structuredClone(draft.life),petId,version:draft.version,...this.body(draft)};validateQQReply(draft,state,proposal);
+      legacy.wallet.balance=Math.round((legacy.wallet.balance-GROUP_OPENER_PRICE)*100)/100;
+      if(legacy.wallet.balance===0){legacy.wallet.emptySince=Date.now();delete legacy.wallet.emptyAskedAt;}
+      const financeId='finance:'+actionId;
+      (legacy.events||=[]).push({id:financeId,kind:'wallet-spend',text:'主动群聊消耗 0.4 饭钱',ts:Date.now()});
+      draft.life.events.push({eventId:financeId,petId,type:'wallet.spend',source:'canonical',occurredAt:at,receivedAt:at,evidenceLevel:'observed',payload:{kind:'group-proactive',amount:GROUP_OPENER_PRICE,balance:legacy.wallet.balance,actionId}});
+      draft.life.actions.push({...proposal,status:'PENDING',createdAt:at,updatedAt:at});
+      return {value:actionId,intents:[{id:actionId,type:'qq.send',payload:{actionId,petId,actionType:'qq.send',parameters:proposal.parameters}}]};
+    });
+  }
   /** Only expressions committed after the QQ bridge starts are eligible. */
   async enableRelay(petId:string):Promise<void> {
     if(!this.#relayStarted.has(petId))this.#relayStarted.set(petId,Date.now());
@@ -198,6 +243,7 @@ export class CanonicalQQ {
 /** Host supplies an authenticated transport using retained local credentials;
  * unknown delivery is never retried by this adapter. */
 export interface QQTransport { send(input:{scene:'c2c'|'group';destination:string;content:string;replyTo?:string;replySeq?:number},signal:AbortSignal):Promise<{messageId:string}> }
+export class QQPlatformRejection extends Error {}
 export function createQQExecutor(transport:QQTransport) {
   return async (petId:string,intent:OutboxIntent,signal:AbortSignal):Promise<ExecutionReceipt>=>{
     const p=intent.payload.parameters as Obj;
@@ -206,7 +252,7 @@ export function createQQExecutor(transport:QQTransport) {
       const result=await transport.send({scene:p.scene,destination:p.destination,content:p.content,...(typeof p.replyTo==='string'?{replyTo:p.replyTo}:{}),...(Number.isInteger(p.replySeq)?{replySeq:p.replySeq}:{})},signal);
       if(!result || !key(result.messageId)) return {status:'unknown',evidence:{reason:'QQ 未返回消息回执'}};
       return {status:'completed',evidence:{actionId:intent.id,kind:'qq.send',messageId:result.messageId}};
-    } catch { return {status:'unknown',evidence:{reason:'QQ 发送结果不明，必须先对账'}}; }
+    } catch(error) { return p.groupProactive===true&&error instanceof QQPlatformRejection?{status:'failed',evidence:{reason:'QQ 平台拒绝主动群消息'}}:{status:'unknown',evidence:{reason:'QQ 发送结果不明，必须先对账'}}; }
   };
 }
 
@@ -227,6 +273,12 @@ export function validateQQReply(draft:CanonicalEnvelope,state:LifeState,proposal
   const source=draft.life.events.find(e=>e.eventId===proposal.sourceIds[0]);
   const entry=Object.values(qq?.outbound||{}).find((x:any)=>x.actionId===proposal.id) as Obj|undefined;
   const fingerprint=hash(JSON.stringify({scene:p.scene,text:p.content,sourceEventId:proposal.sourceIds[0],replyTo:p.replyTo}));
+  if(p.groupProactive===true){
+    const answer=draft.life.events.find(e=>e.eventId===proposal.sourceIds[1]);
+    if(proposal.actionType!=='qq.send'||proposal.sourceIds.length!==2||!entry?.groupProactive||entry!==qq.outbound[hash('group-proactive:'+proposal.sourceIds[0])]||entry.fingerprint!==fingerprint||entry.amount!==GROUP_OPENER_PRICE||p.scene!=='group'||p.destination!==qq.identity.groupOpenid||p.replyTo!==undefined||p.replySeq!==undefined||answer?.type!=='conversation.assistant'||answer.source!=='qq-group'||answer.causationId!==source?.eventId||(answer.payload as Obj)?.text!==p.content)throw Error('QQ 群聊主动表达来源无效');
+    assertGroupOpportunity(draft,proposal.sourceIds[0],Date.now(),proposal.id);
+    validateProposal(state,proposal);return;
+  }
   if(p.proactive===true) {
     const at=Date.parse(source?.receivedAt||'');
     const valid=proposal.sourceIds.length===1 && entry?.proactive===true && entry===qq?.outbound?.[relayKey(proposal.sourceIds[0])] && p.scene==='c2c' && p.destination===qq?.identity?.ownerOpenid && p.replyTo===undefined && p.replySeq===undefined && relayText(draft,proposal.sourceIds[0])===p.content && Number.isFinite(at) && Date.now()>=at && Date.now()-at<=RELAY_LIFETIME;

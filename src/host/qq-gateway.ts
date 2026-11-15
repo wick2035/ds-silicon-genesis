@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { writeFileSync, renameSync } from 'node:fs';
 import { QQPetBridge } from '../../vendor/pet-plugins/behavior/qq-bridge.mjs';
-import { CanonicalQQ, createQQExecutor, type QQIncoming, type QQTransport } from './qq-canonical.js';
+import { CanonicalQQ, createQQExecutor, QQPlatformRejection, type QQIncoming, type QQTransport } from './qq-canonical.js';
 import type { OutboxIntent, ExecutionReceipt } from '../storage/uow.js';
 
 interface QQConfig { enabled:boolean; appId:string; appSecret:string; petId?:string; sandbox?:boolean; ownerOpenid?:string; groupOpenid?:string; groupOwnerOpenid?:string; groupEnabled?:boolean; groupMode?:'owner'|'mentions'|'all'; pairingCode?:string; pairingExpiresAt?:number; groupPairingCode?:string; groupPairingExpiresAt?:number }
@@ -76,7 +76,7 @@ export class CanonicalQQGateway extends QQPetBridge {
     if(this.#closed || signal.aborted) throw new Error('QQ 已停止');
     const access=await this.token();
     const response=await this.fetch(this.base+route,{method:body?'POST':'GET',headers:{Authorization:'QQBot '+access,'X-Union-Appid':this.#options.config.appId,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.any([signal,this.abort.signal,AbortSignal.timeout(15000)])});
-    if(!response.ok) { if(response.status===401)this.expiresAt=0; throw new Error('QQ 平台请求失败'); }
+    if(!response.ok) { if(response.status===401)this.expiresAt=0;if(response.status>=400&&response.status<500&&response.status!==408)throw new QQPlatformRejection('QQ 平台拒绝消息');throw new Error('QQ 平台请求失败'); }
     return response.json();
   }
   private async sendMessage(input:{scene:'c2c'|'group';destination:string;content:string;replyTo?:string;replySeq?:number},signal:AbortSignal):Promise<{messageId:string}> {
