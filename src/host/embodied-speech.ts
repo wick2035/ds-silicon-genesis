@@ -1,5 +1,5 @@
 import {riceInventory} from './rice-inventory.js';
-import {COMPANION_PERSONALITY,TIME_AWARENESS} from './companion-personality.js';
+import {COMPANION_PERSONALITY,TIME_AWARENESS,riceMotivation} from './companion-personality.js';
 import {createHash} from 'node:crypto';
 import {selfModelContext,STABLE_PERSONALITY} from './self-model-context.js';
 import {promptData} from './prompt-data.js';
@@ -83,7 +83,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
       ...(speech.allowActions?[{name:'act',description:'按自己的需要选择一次实际行动。吃饭先买后吃；口头说做了不算完成。'+JSON.stringify(actionCatalog),inputSchema:{type:'object',properties:{actionType:{type:'string',enum:allowed},parameters:{type:'object'}},required:['actionType','parameters'],additionalProperties:false}},
       {name:'begin_work',description:'自主决定履行已有工作约定，申请进入工地并搬一趟；不创建合同、不确认爸爸提案、不支付工资。',inputSchema:empty},
       {name:'leave_worksite',description:'自主离开自己进入的工地；被爸爸放进去时须等他接出。',inputSchema:empty}]:[])];
-    const personality=STABLE_PERSONALITY+'\n'+(options.embodiedSnapshot||options.system.includes('【你自己的心思和口吻】')?'':COMPANION_PERSONALITY+'\n'+TIME_AWARENESS);
+    const personality=STABLE_PERSONALITY+'\n'+(options.system.includes('【你自己的心思和口吻】')?'':COMPANION_PERSONALITY+'\n'+TIME_AWARENESS);
     const context=options.embodiedSnapshot?{
       身体:initial.envelope.humanity.stats,情绪:initial.envelope.humanity.emotions,
       精神:{value:initial.envelope.life.spirit?.value,mode:initial.envelope.life.spirit?.mode},
@@ -91,12 +91,15 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
       近期真实经历:initial.context.近期真实经历.filter(e=>e.type!=='body.observed').slice(-3),
       自我认识:initial.context.自我认识,
     }:initial.context;
+    // Live body and actionable inventory are required inputs, never optional history.
+    const liveFood={身体:initial.envelope.humanity.stats,food:riceMotivation(initial.envelope.humanity as any,(initial.envelope.legacy as any).config??{}),饭钱:(initial.envelope.legacy as any).wallet?.balance,库存:riceInventory(initial.envelope)};
     const system=options.system+'\n'+personality+'\n每次开口前，结合自己的感受、目标、刚才爸爸的操作和真实结果，判断此刻需不需要工具；可以只说话或安静，不必为了使用工具而行动。需要吃饭、喝水、睡觉、走动、学习或搬砖时调用工具，不能用台词冒充行动。失败后自己决定换办法、休息或向爸爸商量；条件未变不要重复失败的动作。感受和判断属于你，操作归因只依据真实来源，不知道是谁造成的就不要认定。通过真实结果理解自己喜欢什么、身体能做什么，不宣称凭空获得意识。每次工具返回后，由你继续决定调用下一项工具还是回答；例如买饭成功只代表饭已入库，你可以根据新库存中 status=available 的 id 再决定吃饭；unconfirmed 是旧碗结果未明，不选择它，吃饭必须等待自己的实际回执。无需让爸爸再发一条消息推动下一步，也不强制你购买后一定吃。工具后的回复针对结果自然地说，未知结果不能说完成。需要工具时先调用，工具调用之前不要输出面向对方的回答。\n此刻实况：'+promptData(context,2400);
+    const liveSystem=system+'\n当前身体与食物（优先于旧对话和历史摘要）：'+JSON.stringify(liveFood);
     const seen=new Set<string>();let uncertainBody=false;
     for(let round=0;round<5;round++){
       if(signal.aborted)throw Error('发言已取消');
       let text='';const calls=new Map<number,{id:string;name:string;arguments:string}>();
-      for await(const part of model.stream({...options,embodied:undefined,embodiedSnapshot:undefined,signal,system,messages,tools:round<4?tools:undefined})){
+      for await(const part of model.stream({...options,embodied:undefined,embodiedSnapshot:undefined,signal,system:liveSystem,messages,tools:round<4?tools:undefined})){
         if(part.type==='usage')yield part;
         if(part.type==='text'){text+=part.text??'';if(options.streamText===true&&!calls.size)yield part;}
         if(part.type==='tool-call-delta'){
@@ -129,7 +132,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
           else throw Error('工具不存在');
         }catch(error){isError=true;result={status:'failed',reason:error instanceof Error?error.message:'行动失败'};}
         const current=await reader.loadEnvelope(speech.petId);
-        messages.push({role:'tool',toolCallId:c.id,isError,content:promptData({result,身体:current?.humanity?.stats,...(c.name==='act'&&['service.buy-rice','service.eat-rice'].includes(actionType??'')?{饭钱:(current?.legacy as any)?.wallet?.balance,库存:current?riceInventory(current):[]}:{})},5000)});index++;
+        messages.push({role:'tool',toolCallId:c.id,isError,content:promptData({result,身体:current?.humanity?.stats,...(c.name==='act'&&['service.buy-rice','service.eat-rice'].includes(actionType??'')?{food:current?riceMotivation(current.humanity as any,(current.legacy as any).config??{}):null,饭钱:(current?.legacy as any)?.wallet?.balance,库存:current?riceInventory(current):[]}:{})},5000)});index++;
       }
     }
   }};}};

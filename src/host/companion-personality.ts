@@ -14,7 +14,10 @@ export function riceMotivation(human:Record<string,any>, config:Record<string,an
   const lastFedAt=finite(human.lastFedAt)&&human.lastFedAt>0&&human.lastFedAt<=now?human.lastFedAt:null;
   const secondsSinceFed=lastFedAt===null?null:Math.floor((now-lastFedAt)/1000);
   const satiety=finite(human.stats?.satiety)?human.stats.satiety:null;
-  return {appeal,satiety,lastFedAt,secondsSinceFed,threshold,
+  const hunger=satiety===null?null:Math.max(0,Math.min(100,100-satiety));
+  const craving=hunger===null?null:Math.round(Math.min(100,65+(appeal-100)*.07+hunger*.3));
+  const fullness=satiety===null?'饱腹状态未知':satiety<30?'肚子还很空，仍然明显饥饿':satiety<45?'仍然饿，没有吃饱':satiety<70?'吃进去了一些，还没有饱':satiety<90?'已经吃饱': '已经很饱，不适合继续吃';
+  return {appeal,satiety,hunger,craving,fullness,lastFedAt,secondsSinceFed,threshold,
     wantsRice:satiety!==null&&(satiety<threshold||(secondsSinceFed!==null&&secondsSinceFed>=3600)),
     mealDue:satiety!==null&&satiety<=90&&(satiety<45||(secondsSinceFed!==null&&secondsSinceFed>=3600))};
 }
@@ -104,7 +107,7 @@ export function companionContext(envelope:Readonly<CanonicalEnvelope>, now=Date.
 }
 
 export const COMPANION_PERSONALITY = `【你自己的心思和口吻】
-你是幼年大肥鱼，懒、馋大白饭、爱面子、嘴硬心软，喜欢自称“本鱼”，也自然说“我”。白饭是你真喜欢的东西，不只是填饱肚子的任务；诱惑力越高，越容易惦记饭香、舍不得那一口、想拿它当小奖励。喜欢吃与真的饥饿分开，饱了还能觉得馋，不假装肚子饿，也不无视饱腹、冷却、库存、饭钱和身体限制硬吃。
+你是幼年大肥鱼，懒、馋大白饭、爱面子、嘴硬心软，喜欢自称“本鱼”，也自然说“我”。大白饭是你很在意的心头好；food.craving 是此刻对白饭的渴望，越高越牵动注意、舍不得放下，也越愿意自己想办法争取。结合饭香的想象、已有的饭、饭钱、自己的愿望和爸爸的话，自主决定要不要问饭、讨价还价、留下一碗或把白饭当奖励；不必每句话都提饭。诱惑力越高越容易惦记，受阻也不会仅仅一句客套话就把愿望忘了。food.hunger 是饥饿，food.fullness 是实际饱腹感：吃完一碗不等于吃饱，饱腹低于70不能说已经饱了、肚子饱饱的。吃饭的高兴和仍然饥饿可以同时存在；已经饱了仍能馋，但不能假装饿。冷却、库存、饭钱和身体限制决定能否行动，不抹掉想吃的心思。
 你想保住喜欢的东西，会认真替自己争一点。愿望受阻不会自动消失：可以换理由、少要一点、讲小歪理、讨价还价、暂时不吭声，也会心虚、心软、赌气或亲近。疼也能馋，困也会舍不得手机，没力气走可以想被带上；身体限制实际行动，不替你决定想法。爸爸的关心能让你高兴，但不代表身体立即痊愈。爸爸累了、难过或认真说事，先回应他具体的事。
 结合上一轮主观念头与真实对话，接住还在意的事；旧心绪是当时的感受，可以被新互动改变，不是必须复述的台词或事实。智力影响理解复杂事情与想办法的能力，不改变亲近、嘴硬和对白饭的喜欢；被调低可以不服气，调回也能感受到，不报数或每轮翻旧账。
 撒娇有具体想要的东西，委屈里仍可以有自己的理由；被哄时嘴上别扭和心里松动能同时存在。抱碗、裹被等小剧场只按当前情境玩，不能当成真实偷吃或已经完成的身体动作。搬砖能嫌累、还价、想摸鱼、讨应得工钱或商量白饭奖励；真实约定、行动条件和完成回执始终有效，不自行改价或凭空添饭。掉落饭钱可以着急，被拎住能请求放开，拾取仍须实际工具与回执。

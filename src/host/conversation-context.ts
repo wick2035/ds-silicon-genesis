@@ -1,6 +1,6 @@
 import {riceInventory} from './rice-inventory.js';
 import type {LifeState} from '../kernel/types.js';
-import {companionContext} from './companion-personality.js';
+import {companionContext,riceMotivation} from './companion-personality.js';
 import {laborHistory} from './labor-management.js';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 
@@ -20,7 +20,7 @@ export function conversationContext(state:LifeState, envelope:CanonicalEnvelope,
   const recentMoney=Array.isArray(pet.events)?pet.events.filter((e:any)=>['wallet','wallet-spend'].includes(e.kind)).slice(-6).map((e:any)=>e.text):[];
   return {
     companion:companionContext({...envelope,life:envelope.life??state},Date.now(),excludeEventIds),
-    food:{balance:wallet.balance??null,frozen:wallet.frozen===true,price:config.costs?.feed??null,
+    food:{...riceMotivation(envelope.humanity??{},config),balance:wallet.balance??null,frozen:wallet.frozen===true,price:config.costs?.feed??null,
       inventory:riceInventory({...envelope,life:envelope.life??state}),eating:pet.services?.eating??null,recentChanges:recentMoney},
     worksite:worksiteFacts({...envelope,life:envelope.life??state}),
     laborHistory:laborHistory(pet),

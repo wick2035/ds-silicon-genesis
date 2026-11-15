@@ -13,8 +13,18 @@ import {createInteractionReactions} from '../dist/host/interaction-reactions.js'
 import {createLegacyResponses} from '../dist/host/legacy-responses.js';
 import {createSemanticGrounding,reviewedReply} from '../dist/host/semantic-grounding.js';
 import {createLaborCompletionNotices} from '../dist/host/labor-completion-notices.js';
+import {conversationContext} from '../dist/host/conversation-context.js';
 import {projectOutcome} from '../dist/host/outcome-projector.js';
 import {createDeterministicLife} from '../dist/host/deterministic-life.js';
+
+test('eating one bowl leaves hunger and a strong rice craving in the actual speech context',()=>{
+ const now=Date.now(),s=fixture(now).get();s.humanity.stats.satiety=20;s.humanity.lastFedAt=now;s.legacy.config.riceAppeal=100;
+ const food=conversationContext(s.life,s).food;
+ assert.equal(food.satiety,20);assert.equal(food.hunger,80);assert.match(food.fullness,/仍然明显饥饿/);assert.ok(food.craving>=85);assert.equal(food.wantsRice,true);
+ const full=riceMotivation({stats:{satiety:80},lastFedAt:now},{riceAppeal:100},now);
+ const tempted=riceMotivation({stats:{satiety:80},lastFedAt:now},{riceAppeal:500},now);
+ assert.match(full.fullness,/已经吃饱/);assert.ok(tempted.craving>full.craving);assert.equal(tempted.hunger,full.hunger);assert.equal(tempted.mealDue,false);
+});
 
 const hour=3600000;
 function event(id,type,at,extra={}){return {eventId:id,petId:'main',type,source:'desktop',actorId:'dad',occurredAt:new Date(at).toISOString(),receivedAt:new Date(at).toISOString(),evidenceLevel:'observed',payload:{},...extra};}

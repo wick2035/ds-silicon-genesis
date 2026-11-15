@@ -20,6 +20,13 @@ function fixture(resultStatus='COMPLETED'){
 const call=(id,name,input)=>({type:'tool-call-delta',index:1,id,name,argumentsDelta:JSON.stringify(input)});
 async function collect(stream){let text='';for await(const p of stream)if(p.type==='text')text+=p.text;return text;}
 
+test('prepared chat snapshots retain personality and current hunger in model input',async()=>{
+ const f=fixture();f.get().humanity.stats.satiety=20;
+ f.get().life.legacyContext={};f.get().life.memories=Array.from({length:20},(_,i)=>({id:'m'+i,content:'历史'.repeat(1000),sourceIds:[],valid:true}));
+ const model={async *stream(o){assert.match(o.system,/【你自己的心思和口吻】/);assert.match(o.system,/仍然明显饥饿/);assert.match(o.system,/"craving":89/);yield {type:'text',text:'还饿，想吃白饭。'};}};
+ assert.equal(await collect(f.speech.wrap(model).stream({...f.options,embodiedSnapshot:structuredClone(f.get())})),'还饿，想吃白饭。');
+});
+
 test('工具之前的台词不发布，完成回执返回模型再说话；吃饭编号可见',async()=>{
   const f=fixture();let rounds=0;
   const model={async *stream(o){rounds++;assert.match(o.system,/rice-1/);if(rounds===1){assert.ok(o.tools.some(t=>t.name==='act'));yield {type:'text',text:'我已经吃完啦'};yield call('c1','act',{actionType:'service.eat-rice',parameters:{itemId:'rice-1'}});}else{const receipt=JSON.parse(o.messages.at(-1).content);assert.equal(receipt.result.status,'COMPLETED');yield {type:'text',text:'饭吃到了，热乎乎的。'};}}};
