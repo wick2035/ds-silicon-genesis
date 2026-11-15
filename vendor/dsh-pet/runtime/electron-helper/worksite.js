@@ -10,7 +10,7 @@
     if(inside&&!wasInside)$('feedback').textContent='';
     const speech=s.location?.speech,showSpeech=inside&&['enter-forced','force-work','touch','drag'].includes(speech?.action)&&Date.now()-speech.at<12000;$('speech').hidden=!showSpeech;if(showSpeech)$('speech').textContent=speech.text;
     worker.hidden=!inside;$('release').hidden=!inside;
-    const forceable=inside&&(c?.status==='working'||c?.status==='paused')&&Number.isFinite(c.done)&&c.done<c.trips;$('force-work').disabled=!forceable||forcing;$('force-work').textContent=forcing?'正在开工…':c?.forced?'强制继续':'强制开工';$('force-work-hint').textContent=!inside?'先把她带进工地':!c?'先在饭钱页新增工作约定':c.status==='offered'?'先确认工作约定':c.status==='unpaid'||c.done>=c.trips?'这份工作已完成':'按当前约定继续搬运';
+    $('force-work').disabled=forcing;$('force-work').textContent=forcing?'正在开工…':c?.forced?'强制继续':'强制开工';$('force-work-hint').textContent='立即进工地，强制搬运';
     $('state').textContent=inside?(s.location.forced?'爸爸把她放进来了，等爸爸接她出去':'她自己走进了工地'):'工地空着，等她来';
     $('headline').textContent=!inside?'工地已经打开':c?.status==='working'?'她正在安排自己的工作':c?.status==='paused'?'她在工地歇一会儿':c?.status==='unpaid'?'砖都搬好了':'她在工地里';
     $('detail').textContent=!inside?'可以从桌面把她拖到这个窗口；她也会自己决定来工作。':s.location.forced?'你可以拖动她，或者点“接她出去”。':c?.status==='unpaid'?'等爸爸手动结算工钱。':'拖动她会打断当前动作，她会记得你的操作。';

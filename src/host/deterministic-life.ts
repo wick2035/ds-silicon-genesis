@@ -1,3 +1,4 @@
+import {hasForcedWork} from './forced-labor.js';
 import {advanceSpirit} from '../kernel/spirit.js';
 import {strategyScore} from '../kernel/index.js';
 import {expireCommitments} from '../kernel/goal-lifecycle.js';
@@ -45,14 +46,15 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     });
     if(signal.aborted)return;
     const human=await humanity.get(petId);
-    if(signal.aborted || !allowAutonomous || human.restrained || human.helperReady!==true)return;
+    const forceState=await reader.loadEnvelope(petId),forced=!!forceState&&hasForcedWork(forceState);
+    if(signal.aborted || !forced&&(!allowAutonomous || human.restrained) || human.helperReady!==true)return;
     const resting=await reader.loadEnvelope(petId);
     if(!resting)return;const spirit=advanceSpirit(resting.life);
-    if(human.sleeping){if(spirit.mode==='sleep' && spirit.value>=100 || spirit.mode==='nap' && Date.now()-spirit.sleepStartedAt!>=1200000)await service(petId,{key:'auto-wake:'+spirit.sleepStartedAt,command:'/醒来'},'autonomous');return;}
+    if(human.sleeping&&!forced){if(spirit.mode==='sleep' && spirit.value>=100 || spirit.mode==='nap' && Date.now()-spirit.sleepStartedAt!>=1200000)await service(petId,{key:'auto-wake:'+spirit.sleepStartedAt,command:'/醒来'},'autonomous');return;}
     if(spirit.value<=2 && !(resting.legacy as any).worksite?.inside){await service(petId,{key:'auto-sleep:'+Math.floor(Date.now()/3600000),command:'/休息'},'autonomous');return;}
-    if(Number.isFinite(human.restingUntil) && human.restingUntil>Date.now())return;
+    if(Number.isFinite(human.restingUntil) && human.restingUntil>Date.now()&&!forced)return;
     const state=await reader.loadEnvelope(petId);
-    if(signal.aborted || !state || state.life.constraints.paused)return;
+    if(signal.aborted || !state || state.life.constraints.paused&&!forced)return;
     const legacy=state.legacy as Record<string,any>, inventory=legacy.services?.inventory;
     // Only the worksite body may perform physical work while she is inside.
     // Desktop-only meals and coin pickup wait until she returns.
@@ -77,7 +79,7 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     // A confirmed work permit authorizes a bounded physical step, not a
     // fabricated trip. Actual progress only comes from the helper receipt.
     await gate.run(petId,async()=>{
-      let current=await reader.loadEnvelope(petId);if(!current||signal.aborted||current.life.constraints.paused)return;
+      let current=await reader.loadEnvelope(petId);if(!current||signal.aborted||current.life.constraints.paused&&!hasForcedWork(current))return;
       if(blocksNewLabor(current) || current.life.actions.some(a=>a.actionType==='service.eat-rice' && ['PENDING','DISPATCHED'].includes(a.status)))return;
       let pet=current.legacy as Record<string,any>, contract=pet.labor?.contracts?.find((c:any)=>c.status==='working');
       if(!contract || !Number.isFinite(contract.done) || contract.done>=contract.trips)return;
@@ -92,7 +94,7 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
         // A forced batch overrides the body/rest decision; the distress it causes
         // is recorded as real evidence downstream, not suppressed here.
         const choice=contract.forced?'work':(overdue||tired||weak?'rest':'work');
-        await uow.apply(petId,current.version,draft=>{const c=(draft.legacy as Record<string,any>).labor?.contracts?.find((x:any)=>x.id===contract.id);if(!c||c.status!=='working'||c.workPermit||draft.life.constraints.paused)throw Error('工作状态已变化');
+        await uow.apply(petId,current.version,draft=>{const c=(draft.legacy as Record<string,any>).labor?.contracts?.find((x:any)=>x.id===contract.id);if(!c||c.status!=='working'||c.workPermit||draft.life.constraints.paused&&!hasForcedWork(draft))throw Error('工作状态已变化');
           c.workPermit=choice==='work';c.batchRemaining=choice==='work'?Math.min(c.trips-c.done,workGoal?2:1):0;c.lastWorkDecision=now;c.nextDecision=now+(choice==='work'?60000:300000);c.behavior=choice==='work'?(contract.forced?'爸爸强行让我继续搬砖':'决定继续一小批工作'):'决定先休息并重新考虑';
           const site=(draft.legacy as Record<string,any>).worksite||={inside:false,forced:false};site.suppressUntilDecision=false;if(choice==='work'&&!site.inside)site.requested=true;
           const at=new Date(now).toISOString(),eventId='labor-decision:'+randomUUID();c.workDecisionEvent=eventId;draft.life.events.push({eventId,petId,type:'labor.decision',source:'scheduler',occurredAt:at,receivedAt:at,evidenceLevel:'inferred',payload:{contractId:c.id,choice,reason:contract.forced?'forced':overdue?'unpaid':tired?'body':weak?'experience':'agreement',sourceIds:[...(dad?.sourceIds||[]),...state.goals.filter(g=>g.kind==='work'&&g.status==='active').flatMap(g=>g.sourceIds)]}});return {};});
@@ -112,9 +114,9 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
       if(!command || !['queued','running'].includes(command.status) || command.source!=='labor' || command.labor?.id!==contract.id) {
         const now=Date.now(),id=randomUUID(),target=contract.carrying?'right':'left';
         await uow.apply(petId,current.version,draft=>{const p=draft.legacy as Record<string,any>,c=p.labor?.contracts?.find((x:any)=>x.id===contract.id);
-          if(!c || c.status!=='working' || !c.workPermit || draft.life.constraints.paused)throw Error('工作状态已变化');
+          if(!c || c.status!=='working' || !c.workPermit || draft.life.constraints.paused&&!hasForcedWork(draft))throw Error('工作状态已变化');
           if(!p.worksite?.inside)throw Error('她不在工地里');
-          p.world ||= {};p.world.command={id,epoch:id,source:'labor',surface:'web',issued:now,expires:now+90000,status:'queued',index:0,
+          p.world ||= {};p.world.command={id,epoch:id,source:'labor',forcedLabor:!!c.forced,surface:'web',issued:now,expires:now+90000,status:'queued',index:0,
             steps:[{action:'walk',target},{action:c.carrying?'putdown':'lift',target}],labor:{id:c.id,trip:c.done,leg:c.carrying?'deliver':'load',x:c.carrying?.78:.22}};return {};});
         current=await reader.loadEnvelope(petId);command=(current?.legacy as Record<string,any>)?.world?.command;
       }

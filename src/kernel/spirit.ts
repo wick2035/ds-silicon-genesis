@@ -59,7 +59,8 @@ export function checkSpirit(life:Life,kind:string,now=Date.now()):void {
   const s=advanceSpirit(life,now),cost=spiritCost(kind)*fatigueMultiplier(s,now);
   if(cost && (s.mode!=='awake'||s.value<cost))throw Error('精神不足或正在睡觉，需要休息');
 }
-export function spendSpirit(life:Life,kind:string,now=Date.now()):number {
-  checkSpirit(life,kind,now);const s=ensureSpirit(life,now),cost=spiritCost(kind)*fatigueMultiplier(s,now);
+export function spendSpirit(life:Life,kind:string,now=Date.now(),forcedLabor=false):number {
+  if(!forcedLabor||kind!=='labor.step')checkSpirit(life,kind,now);else advanceSpirit(life,now);
+  const s=ensureSpirit(life,now),cost=spiritCost(kind)*fatigueMultiplier(s,now);
   s.value=clamp(s.value-cost);return cost;
 }

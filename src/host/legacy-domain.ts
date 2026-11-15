@@ -239,11 +239,11 @@ export class LegacyDomain {
         draft.life.events.push({eventId,petId,type:'labor.changed',source:'user',actorId:'dad',occurredAt:at,receivedAt:at,evidenceLevel:'observed',payload:{contractId:input.id,action:input.action,description:event.text}});
         draft.life.memories.push({id:'labor-memory:'+requestId,kind:'autobiographical',content:event.text,sourceIds:[eventId],evidenceLevel:'observed',valid:true,createdAt:at});
       }
-      if (input.action === 'confirm' || input.action === 'pay') {
+      if (input.action === 'confirm' || input.action === 'pay' || input.action === 'settle-cancelled') {
         const contract = store.read(petId).labor?.contracts?.find((c: Obj) => c.id===input.id);
         if (!contract) throw new Error('工作约定不存在');
         const id = 'social-labor:'+requestId, now = new Date(store.clock()).toISOString();
-        draft.life.events.push({eventId:id,petId,type:input.action==='confirm'?'social.labor.confirmed':'social.labor.payment',source:'user',actorId:'dad',occurredAt:now,receivedAt:now,evidenceLevel:'observed',payload:{contractId:contract.id,amount:input.action==='pay'?input.amount:0,outstanding:Math.max(0,contract.wage-contract.paid)}});
+        draft.life.events.push({eventId:id,petId,type:input.action==='confirm'?'social.labor.confirmed':'social.labor.payment',source:'user',actorId:'dad',occurredAt:now,receivedAt:now,evidenceLevel:'observed',payload:{contractId:contract.id,amount:input.action!=='confirm'?input.amount:0,outstanding:Math.max(0,contract.wage-contract.paid)}});
         rebuildRelationships(draft.life);
       }
       return result;

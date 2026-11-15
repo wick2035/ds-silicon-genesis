@@ -10,6 +10,22 @@ type Obj = Record<string, any>;
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message); }
 const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n);
 const clamp = (n: number) => Math.max(0, Math.min(100, n));
+
+function forcedEffort(draft:CanonicalEnvelope,contract:Obj,next:Obj,human:Obj,effort:number,e:Obj,intent:OutboxIntent,occurredAt:string,sourceEventId:string){
+  if(effort<=0)return;
+  next.stats.stamina = Math.max(-100, next.stats.stamina - effort * .12);
+  next.stats.energy = Math.max(-100, next.stats.energy - effort * .08);
+  next.stats.satiety = clamp(next.stats.satiety - effort * .015);
+  next.stats.pain = clamp(next.stats.pain + effort * .25 + 3);
+  next.stats.stress = clamp(next.stats.stress + effort * .2 + 2);
+  next.stats.security=clamp(next.stats.security-effort*.12-1);
+  next.emotions.fear=clamp(next.emotions.fear+effort*.3+2);
+  next.emotions.sadness=clamp(next.emotions.sadness+effort*.15+1);
+  const eventId='forced-labor-sensation:'+intent.id;
+  const content=`我被强迫搬运，实际用力 ${e.effortSeconds} 秒；疼痛 ${human.stats.pain} → ${next.stats.pain}，压力 ${human.stats.stress} → ${next.stats.stress}，恐惧 ${human.emotions.fear} → ${next.emotions.fear}。`;
+  draft.life.events.push({eventId,petId:draft.petId,type:'body.forced-labor',source:'executor',occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'observed',payload:{contractId:contract.id,description:content,sourceIds:[sourceEventId,...(contract.forcedSource?[contract.forcedSource]:[])]}});
+  draft.life.memories.push({id:'forced-labor-memory:'+intent.id,kind:'autobiographical',content,sourceIds:[eventId],evidenceLevel:'observed',valid:true,createdAt:occurredAt});
+}
 /** Apply only validated results supplied by the registered trusted executor.
  * Called inside the same locked DB transaction as the receipt and outbox update.
  * Unknown, failed and cancelled operations never create positive outcomes. */
@@ -87,7 +103,10 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
     if(receipt.status==='cancelled') {
       assert(finite(e.effortSeconds) && e.effortSeconds>=0 && e.effortSeconds<=30 && finite(e.intensity) && e.intensity>=1 && e.intensity<=1.7 && human.stats && human.emotions,'体力回执无效');
       const interrupted=pet.world?.command;if(interrupted?.id===params.commandId&&['queued','running'].includes(interrupted.status)){interrupted.status='interrupted';interrupted.interruptedReason='execution-interrupted';}
-      const next=advanceHumanity(human,at),effort=e.effortSeconds*e.intensity;next.stats.stamina=clamp(next.stats.stamina-effort*.08);next.stats.energy=clamp(next.stats.energy-effort*.045);next.stats.satiety=clamp(next.stats.satiety-effort*.015);draft.humanity=next;return;
+      const next=advanceHumanity(human,at),effort=e.effortSeconds*e.intensity,contract=pet.labor?.contracts?.find((c:Obj)=>c.id===params.contractId);
+      if(contract&&(interrupted?.forcedLabor===true||contract.forced))forcedEffort(draft,contract,next,human,effort,e,intent,occurredAt,sourceEventId);
+      else {next.stats.stamina=Math.max(-100,next.stats.stamina-effort*.08);next.stats.energy=Math.max(-100,next.stats.energy-effort*.045);next.stats.satiety=clamp(next.stats.satiety-effort*.015);}
+      draft.humanity=next;return;
     }
     const cmd = pet.world?.command, contract = pet.labor?.contracts?.find((value: Obj) => value.id === params.contractId);
     assert(contract && contract.status === 'working' && cmd && cmd.source === 'labor' && cmd.id === params.commandId && cmd.labor?.id === contract.id && cmd.labor.trip === contract.done && e.commandId === cmd.id && e.index === cmd.index && e.surface === cmd.surface && e.played === true && finite(e.x) && finite(cmd.labor.x) && Math.abs(e.x - cmd.labor.x) <= .045 && ['queued','running'].includes(cmd.status), '搬砖回执与当前动作不匹配');
@@ -101,9 +120,11 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
       contract.workPermit = contract.batchRemaining > 0; contract.nextDecision = Math.max(at + 1000,(contract.lastWorkDecision || 0)+60000);
       if (contract.done === contract.trips) {
         contract.status = 'unpaid'; contract.finished = at;
+        if(!contract.wageUnspecified){
         const id = `labor-unpaid:${intent.id}`;
         draft.life.events.push({eventId:id,petId:draft.petId,type:'social.labor.unpaid',source:'executor',actorId:'dad',occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'observed',payload:{contractId:contract.id,outstanding:Math.max(0,contract.wage-(contract.paid||0))}});
         rebuildRelationships(draft.life);
+        }
       }
     }
     if (finite(e.effortSeconds)) {
@@ -112,11 +133,7 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
       if (contract.forced) {
         // A forced batch drains the body past its floor: stamina and energy may
         // go negative, and pain climbs as the overdraft becomes real distress.
-        next.stats.stamina = Math.max(-100, next.stats.stamina - effort * .12);
-        next.stats.energy = Math.max(-100, next.stats.energy - effort * .08);
-        next.stats.satiety = clamp(next.stats.satiety - effort * .015);
-        next.stats.pain = clamp(next.stats.pain + effort * .25 + 3);
-        next.stats.stress = clamp(next.stats.stress + effort * .2 + 2);
+        forcedEffort(draft,contract,next,human,effort,e,intent,occurredAt,sourceEventId);
       } else {
         next.stats.stamina = clamp(next.stats.stamina - effort * .08); next.stats.energy = clamp(next.stats.energy - effort * .045); next.stats.satiety = clamp(next.stats.satiety - effort * .015);
       }

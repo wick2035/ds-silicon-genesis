@@ -1,3 +1,4 @@
+import {isForcedLabor,forcedLaborState} from './forced-labor.js';
 import {sweetPrice} from './spirit-activity.js';
 import {selfActionState} from './self-action-state.js';
 import {checkSpirit} from '../kernel/spirit.js';
@@ -22,13 +23,13 @@ export class ActionCoordinator {
       if((draft.legacy as Record<string,any>).worksite?.inside && (action.actionType.startsWith('care.') || ['service.eat-rice','body.sleep','body.wake','token.pickup','body.activity'].includes(action.actionType)))throw Error('她在网页工地里，请先接她回桌面');
       if(action.actionType==='body.activity' && ((draft.legacy as Record<string,any>).space?.mode!=='outside' || (draft.legacy as Record<string,any>).labor?.contracts?.some((c:any)=>c.status==='working')))throw Error('当前桌面空间或工作状态不允许走动');
       if(action.actionType==='service.sweet')sweetPrice(draft);
-      checkSpirit(draft.life,action.actionType,this.now().valueOf());
+      if(!isForcedLabor(draft,action))checkSpirit(draft.life,action.actionType,this.now().valueOf());
       validateActionParameters(action.actionType,action.parameters);
       const state: LifeState = {...structuredClone(draft.life), petId, version:draft.version, ...projectActionBody(draft,this.body(draft),action.actionType)};
       const proposal={...action, expectedStateVersion:draft.version};
       if(action.actionType.startsWith('care.') && action.actionType!=='care.water' && !(draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])throw Error('照料须由用户手动发起');
 
-      if((draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])validateManualService(draft,state,proposal);else validateProposal(selfActionState(state,proposal),proposal);
+      if((draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])validateManualService(draft,state,proposal);else validateProposal(forcedLaborState(draft,selfActionState(state,proposal),proposal),proposal);
       if(action.actionType==='learning.observe'||action.actionType==='image.observe') {
         const pet=draft.legacy as Record<string,any>;
         const kind=action.parameters.kind;

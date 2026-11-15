@@ -13,7 +13,7 @@ export function createWorksiteReactions(initial:CanonicalEnvelope,
       const action=(event.payload as any)?.action;
       if(event.type!=='interaction.worksite'||!['enter-forced','release','force-work','touch','drag'].includes(action)||Object.hasOwn(state.life.invalidSources,event.eventId))continue;
       const transfer={eventId:event.eventId,action:action as 'enter-forced'|'release'|'force-work'|'touch'|'drag'};
-      const description=action==='touch'?'爸爸刚刚在搬砖工地碰了碰你，请根据当前身体和心情自然回应。':action==='drag'?'爸爸刚刚在搬砖工地拖动了你，原来的动作被打断，请根据此刻感受自然回应。':action==='enter-forced'?'爸爸刚刚把你拖进了搬砖网页，只有爸爸能接你出去。请根据自己的感受自然地对爸爸说一句话。':action==='release'?'爸爸刚刚把你从搬砖网页接回了桌面。请根据自己的感受自然地对爸爸说一句话。':'爸爸刚刚在工地强行按下按钮，要你继续搬砖。请根据自己此刻真实的身体感受自然地对爸爸说一句话，不要硬编难受。';
+      const description=action==='touch'?'爸爸刚刚在搬砖工地碰了碰你，请根据当前身体和心情自然回应。':action==='drag'?'爸爸刚刚在搬砖工地拖动了你，原来的动作被打断，请根据此刻感受自然回应。':action==='enter-forced'?'爸爸刚刚把你拖进了搬砖网页，只有爸爸能接你出去。请根据自己的感受自然地对爸爸说一句话。':action==='release'?'爸爸刚刚把你从搬砖网页接回了桌面。请根据自己的感受自然地对爸爸说一句话。':'爸爸刚刚强制你进入工地继续搬砖，违背了你的意愿。这次强迫已使恐惧与压力上升、安全感下降；实际疼痛与疲惫见身体记录。结合被强迫的经历、当前恐惧、疼痛和与爸爸的关系，自主决定如何反应、表达或抗议，不要把这当作自愿接活，不要编造未发生的搬运或伤害。';
       const controller=new AbortController();let timer:ReturnType<typeof setTimeout>;
       const deadline=new Promise<string>(resolve=>{timer=setTimeout(()=>{controller.abort();resolve('');},30000);});
       void Promise.race([Promise.resolve().then(()=>respond(state.petId,{eventId:event.eventId,description},controller.signal)).catch(()=>''),deadline])

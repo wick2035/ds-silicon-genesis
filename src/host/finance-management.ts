@@ -12,7 +12,7 @@ export function createFinanceManagement(store:Reader,gate:PetGate,domain:LegacyD
     read:(id:string)=>gate.run(id,async()=>{
       const envelope=await store.loadEnvelope(id);if(!envelope)throw Error('饭钱状态不可用');
       const p=envelope.legacy as Record<string,any>, labor=p.labor||{},contracts=Array.isArray(labor.contracts)?labor.contracts:[];
-      return {wallet:p.wallet,costs:p.config?.costs,labor:{current:contracts.find((c:any)=>['offered','working','paused','unpaid'].includes(c.status))||null,history:contracts.filter((c:any)=>['paid','declined','cancelled'].includes(c.status)).slice(-12).reverse(),execution:labor.execution||null},
+      return {wallet:p.wallet,costs:p.config?.costs,labor:{current:contracts.find((c:any)=>['offered','working','paused','unpaid'].includes(c.status))||null,history:contracts.filter((c:any)=>(['paid','declined','cancelled'].includes(c.status)||c.status==='unpaid'&&c!==contracts.find((x:any)=>['offered','working','paused','unpaid'].includes(x.status)))).slice(-12).reverse(),execution:labor.execution||null},
         events:(Array.isArray(p.events)?p.events:[]).filter((e:any)=>['wallet','wallet-spend','labor'].includes(e.kind)).slice(-30).reverse().map((e:any)=>({id:e.id,text:e.text,ts:e.ts}))};
     }),
     write:async(id:string,input:Record<string,unknown>)=>{
