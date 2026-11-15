@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {selfModelContext} from '../dist/host/self-model-context.js';
+import {selfModelContext,STABLE_PERSONALITY} from '../dist/host/self-model-context.js';
+import {promptData} from '../dist/host/prompt-data.js';
 import {createEmbodiedSpeech} from '../dist/host/embodied-speech.js';
 import {createModelFacade} from '../dist/host/model-facade.js';
 import {createHumanity} from '../vendor/dsh-pet/src/host/humanity.mjs';
@@ -17,6 +18,19 @@ test('自我认识按类别读取近期有效摘要，完整历史保持原样',
   assert.deepEqual(state,original);
 });
 
+test('本地话题匹配能找回很久以前的经历，核心性格始终保留',()=>{
+  const selfModel=archive();
+  selfModel.autobiography.unshift({id:'old-rice',label:'共同经历',value:'爸爸以前带本鱼煮白饭。',valid:true,sourceIds:['old-source']});
+  const context=selfModelContext({selfModel,invalidSources:{}},'以前煮白饭');
+  assert.ok(context.autobiography.some(r=>r.id==='old-rice'));
+  for(const trait of ['本鱼','贪吃','白饭','傲娇','撒娇','撒泼','嘴硬心软'])assert.ok(STABLE_PERSONALITY.includes(trait));
+});
+
+test('动态资料预算产生完整 JSON，长记录不会把输入撑破',()=>{
+  const value={traits:Array.from({length:100},()=>({text:'经历'.repeat(2000)})),wallet:{balance:30,frozen:false}};
+  const result=promptData(value,1600);assert.ok(result.length<=1600);assert.deepEqual(JSON.parse(result).wallet,value.wallet);
+});
+
 test('大型成长存档能通过真实模型输入校验，sense_self 续轮也可完成',async()=>{
   const life={selfModel:archive(),events:[],invalidSources:{},actions:[],receipts:[],goals:[],constraints:{capabilities:[],permissions:[]}};
   const envelope={petId:'main',version:0,life,legacy:{},humanity:createHumanity(Date.now())};
@@ -26,7 +40,7 @@ test('大型成长存档能通过真实模型输入校验，sense_self 续轮也
   const facade=createModelFacade({version:1,defaultSelection:{provider:'p',model:'m'},providers:{p:{api:'openai-completions',baseURL:'https://example.invalid/v1',apiKey:'test',models:['m']}}},{leaseSignal:gate.signal,budget:{reserve:async()=>()=>{}}});
   try{
     globalThis.fetch=async(_url,init)=>{
-      const body=JSON.parse(init.body);assert.ok(body.messages[0].content.length<=32768);requests++;
+      const body=JSON.parse(init.body);assert.ok(body.messages[0].content.length<=32768);assert.ok(body.messages[0].content.includes(STABLE_PERSONALITY));requests++;
       const delta=requests===1?{tool_calls:[{index:0,id:'sense-1',type:'function',function:{name:'sense_self',arguments:'{}'}}]}:{content:'爸爸，我在呢。'};
       return new Response('data: '+JSON.stringify({choices:[{index:0,delta,finish_reason:requests===1?'tool_calls':'stop'}]})+'\n\ndata: [DONE]\n\n',{headers:{'content-type':'text/event-stream'}});
     };
