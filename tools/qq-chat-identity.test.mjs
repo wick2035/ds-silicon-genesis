@@ -4,7 +4,7 @@ import {CompanionStore} from '../vendor/pet-plugins/behavior/core.mjs';
 import {CanonicalChat} from '../dist/host/chat-service.js';
 import {isOwnerPrivateConversation} from '../dist/host/chat-identity.js';
 
-function fixture(events) {
+function fixture(events,reply='好呀') {
   const old=Object.create(CompanionStore.prototype);old.data={version:2,pets:{}};old.loaded=true;old.clock=Date.now;old.save=()=>{};old.load=()=>{};
   const legacy=old.read('main');legacy.wallet.balance=500;
   let envelope={petId:'main',version:0,legacy,humanity:{},life:{events,actions:[],receipts:[],invalidSources:{},relationships:[],constraints:{permissions:[]},memories:[],commitments:[],legacyContext:{personaDescription:'test'},body:{},emotions:{}}};
@@ -12,13 +12,29 @@ function fixture(events) {
   const store={loadEnvelope:async()=>structuredClone(envelope),load:async()=>structuredClone(envelope.life)};
   const uow={apply:async(_id,version,change)=>{assert.equal(version,envelope.version);const draft=structuredClone(envelope);change(draft);draft.version++;envelope=draft;}};
   const calls=[];
-  const model={agentDefaultModel:{currentSelection:()=>({provider:'test',model:'test'})},llm:{async *stream(options){calls.push(options);yield {type:'text',text:'好呀'};}}};
+  const model={agentDefaultModel:{currentSelection:()=>({provider:'test',model:'test'})},llm:{async *stream(options){calls.push(options);yield {type:'text',text:reply};}}};
   const chat=new CanonicalChat(store,gate,uow,{runAs:async(_id,_kind,fn)=>fn()},model,async()=>[],undefined,async()=>({message:'ok'}));
   return {chat,calls,state:()=>envelope};
 }
 function event(id,type,source,text,actorId,extra={}) {
   const now=new Date().toISOString();return {eventId:id,petId:'main',type,source,actorId,occurredAt:now,receivedAt:now,evidenceLevel:'observed',payload:{text,...extra}};
 }
+
+test('long group output is saved and returned within fifteen graphemes',async()=>{
+  const source=event('q1','social.message','qq','你好','qq-member:123',{scene:'group',groupId:'g1'});
+  const text='👨‍👩‍👧‍👦'+'鱼'.repeat(20),f=fixture([source],text);
+  const reply=await f.chat.qqTurn({petId:'main',scene:'group',messages:[{eventId:'q1',text:'你好',isOwner:false}]},new AbortController().signal);
+  assert.equal(reply,'👨‍👩‍👧‍👦'+'鱼'.repeat(14));
+  assert.equal(f.state().life.events.find(e=>e.type==='conversation.assistant').payload.text,reply);
+});
+
+test('group silence remains silent and private replies retain their length',async()=>{
+  const source=event('q1','social.message','qq','你好','qq-member:123',{scene:'group',groupId:'g1'});
+  const f=fixture([source],'<qq-silent/>');
+  assert.equal(await f.chat.qqTurn({petId:'main',scene:'group',messages:[{eventId:'q1',text:'你好',isOwner:false}]},new AbortController().signal),null);
+  const text='鱼'.repeat(30),privateChat=fixture([],text);
+  assert.equal(await privateChat.chat.turn({requestId:'private-long',petId:'main',channel:'desktop',actorId:'dad',text:'你好'},new AbortController().signal),text);
+});
 
 test('owner private history includes desktop and QQ but excludes group',async()=>{
   const events=[event('desktop-old','conversation.user','desktop','desktop-only','dad'),event('qq-old','conversation.user','qq-c2c','qq-private','dad'),event('group-old','conversation.user','qq-group','group-secret','qq-member:123',{groupId:'g1'})];

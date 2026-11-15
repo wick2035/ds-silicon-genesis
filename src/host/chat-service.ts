@@ -212,7 +212,7 @@ export class CanonicalChat {
       if(!this.grounding && worksiteIntent && !(state.legacyContext.worksite as any)?.inside && /我进去了|我进去啦/u.test(output))throw Error('动作状态尚未核实');
       let decidedToWork=false;
         if(worksiteIntent && laborProposal && ['resume','nudge'].includes(String(laborProposal.action)))laborProposal=undefined;
-        if(group && [...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(output)].length>15)throw Error('群聊回复超出长度限制');
+        if(group)output=[...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(output)].slice(0,15).map(part=>part.segment).join('').trim();
         await this.edit(input.petId,draft=>{
         const legacy=draft.legacy as Record<string,any>, turn=legacy.chatTurns?.[id];
         if(!turn||turn.status!=='running'||turn.fingerprint!==fingerprint)throw new Error('对话状态已变化');

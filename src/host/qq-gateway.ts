@@ -40,6 +40,7 @@ export class CanonicalQQGateway extends QQPetBridge {
   #timer?:ReturnType<typeof setTimeout>;
   #batchStarted=0;
   #lastGroupReply=0;
+  #groupPending=false;
   #queuedTurns=0;
   #serial:Promise<void>=Promise.resolve();
   #closed=false;
@@ -117,8 +118,19 @@ export class CanonicalQQGateway extends QQPetBridge {
   }
   private scheduleGroup():void {
     if(this.#timer)clearTimeout(this.#timer);
-    const now=Date.now(), flushAt=Math.max(now,Math.min(now+4000,this.#batchStarted+12000),this.#lastGroupReply+10000);
-    this.#timer=setTimeout(()=>{this.#timer=undefined; const items=this.#items.splice(0); this.#batchStarted=0; this.enqueueTurn('group',items);},flushAt-now);
+    if(this.#closed || this.#groupPending || !this.#items.length)return;
+    // Busy groups get one turn per four messages. Quiet groups still get a
+    // chance to chat after a short pause, without waiting for more speakers.
+    const now=Date.now(), readyAt=this.#items.length>=4?now:Math.min(now+4000,this.#batchStarted+12000);
+    const flushAt=Math.max(readyAt,this.#lastGroupReply+10000,this.#queuedTurns>=4?now+1000:now);
+    this.#timer=setTimeout(()=>{
+      this.#timer=undefined;
+      if(this.#queuedTurns>=4){this.scheduleGroup();return;}
+      const items=this.#items.splice(0,4);
+      this.#batchStarted=this.#items[0]?.receivedAt??0;
+      this.#groupPending=true;
+      this.enqueueTurn('group',items);
+    },flushAt-now);
   }
   private enqueueTurn(scene:'c2c'|'group',items:Item[]):void {
     if(this.#queuedTurns>=4) {
@@ -129,7 +141,10 @@ export class CanonicalQQGateway extends QQPetBridge {
       return;
     }
     this.#queuedTurns++;
-    this.#serial=this.#serial.then(()=>this.runTurn(scene,items)).catch(()=>this.statusSafe('message-failed')).finally(()=>{this.#queuedTurns--;});
+    this.#serial=this.#serial.then(()=>this.runTurn(scene,items)).catch(()=>this.statusSafe('message-failed')).finally(()=>{
+      this.#queuedTurns--;
+      if(scene==='group'){this.#groupPending=false;this.scheduleGroup();}
+    });
   }
   private statusSafe(state:string):void { try{this.#options.onStatus?.(state);}catch{} }
   private async runTurn(scene:'c2c'|'group',items:Item[]):Promise<void> {
