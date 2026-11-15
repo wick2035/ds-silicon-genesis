@@ -1,4 +1,4 @@
-import {riceInventory} from './rice-inventory.js';
+import {riceInventory,riceAvailability,validateRiceMeal} from './rice-inventory.js';
 import {COMPANION_PERSONALITY,TIME_AWARENESS,riceMotivation} from './companion-personality.js';
 import {createHash} from 'node:crypto';
 import {selfModelContext,STABLE_PERSONALITY} from './self-model-context.js';
@@ -38,7 +38,8 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
   async function sense(petId:string, excludeEventIds:string[]=[],query='',snapshot?:CanonicalEnvelope){
     const envelope=snapshot??await reader.loadEnvelope(petId);if(!envelope)throw Error('生命状态不可用');
     const events=envelope.life.events.filter(e=>!Object.hasOwn(envelope.life.invalidSources,e.eventId) &&
-      ['body.observed','body.adjusted','wallet','social.care','interaction','interaction.operation','interaction.worksite','labor.changed','action.receipt'].includes(e.type)).slice(-16);
+      ['body.observed','body.adjusted','wallet','social.care','interaction','interaction.operation','interaction.worksite','labor.changed','action.receipt','action.reconciled'].includes(e.type) &&
+      !(e.type==='action.receipt' && (e.payload as any)?.status==='UNKNOWN' && envelope.life.actions.some(a=>a.id===(e.payload as any)?.actionId&&a.status!=='UNKNOWN'))).slice(-16);
     return {envelope,context:{感受:humanityPrompt(envelope.humanity),生活:conversationContext({...envelope.life,petId,version:envelope.version} as any,envelope,excludeEventIds),
       近期真实经历:events.map(e=>({id:e.eventId,at:e.occurredAt,actor:e.actorId??'未确认',type:e.type,detail:e.payload})),
       自我认识:selfModelContext(envelope.life,query),当前目标:envelope.life.goals.filter(g=>g.status==='active').slice(-6),精神:envelope.life.spirit,可用能力:envelope.life.constraints.capabilities.filter(c=>c.enabled)}};
@@ -54,7 +55,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
       let current=await reader.loadEnvelope(speech.petId);if(!current||signal.aborted)throw Error('行动已取消');
       const prior=current.life.actions.find(a=>a.id===id);
       if(prior){if(prior.actionType!==type||JSON.stringify(prior.parameters)!==JSON.stringify(parameters))throw Error('行动标识冲突');return;}
-      if(type==='service.eat-rice'&&!(current.legacy as any).services?.inventory?.some((item:any)=>item.id===parameters.itemId&&item.status==='available'))throw Error('饭的编号不存在或已经吃完，请使用最新库存中 available 饭的完整 id');
+      if(type==='service.eat-rice')validateRiceMeal(current,parameters.itemId);
       if(conflicts(current,type,parameters))throw Error('身体还有未确认的行动，先等结果');
       const now=new Date().toISOString();
       await uow.apply(speech.petId,current.version,draft=>{
@@ -68,7 +69,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
     const current=await reader.loadEnvelope(speech.petId),action=current?.life.actions.find(a=>a.id===id);
     if(action?.status==='PENDING'&&!signal.aborted)await dispatcher.dispatch(id);
     const fresh=await reader.loadEnvelope(speech.petId),result=fresh?.life.actions.find(a=>a.id===id);
-    return {actionId:id,status:result?.status??'UNKNOWN',receipt:fresh?.life.receipts.find(r=>r.actionId===id)??null};
+    return {actionId:id,status:result?.status??'UNKNOWN',receipt:fresh?.life.receipts.find(r=>r.actionId===id&&r.receiptId===result?.receiptId)??null};
   }
   return {wrap(model:Stream):Stream {return {async *stream(options:any){
     const speech=options.embodied as Speech|undefined;
@@ -93,7 +94,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
     }:initial.context;
     // Live body and actionable inventory are required inputs, never optional history.
     const livePet=initial.envelope.legacy as any;
-    const liveFood={身体:initial.envelope.humanity.stats,睡眠:{sleeping:initial.envelope.humanity.sleeping,restingUntil:initial.envelope.humanity.restingUntil},food:{...riceMotivation(initial.envelope.humanity as any,livePet.config??{}),price:livePet.config?.costs?.feed,frozen:livePet.wallet?.frozen===true},饭钱:livePet.wallet?.balance,库存:riceInventory(initial.envelope)};
+    const liveFood={身体:initial.envelope.humanity.stats,睡眠:{sleeping:initial.envelope.humanity.sleeping,restingUntil:initial.envelope.humanity.restingUntil},food:{...riceMotivation(initial.envelope.humanity as any,livePet.config??{}),price:livePet.config?.costs?.feed,frozen:livePet.wallet?.frozen===true},饭钱:livePet.wallet?.balance,库存:riceInventory(initial.envelope),食物可用性:riceAvailability(initial.envelope)};
     const system=options.system+'\n'+personality+'\n每次开口前，结合自己的感受、目标、刚才爸爸的操作和真实结果，判断此刻需不需要工具；可以只说话或安静，不必为了使用工具而行动。需要吃饭、喝水、睡觉、走动、学习或搬砖时调用工具，不能用台词冒充行动。失败后自己决定换办法、休息或向爸爸商量；条件未变不要重复失败的动作。感受和判断属于你，操作归因只依据真实来源，不知道是谁造成的就不要认定。通过真实结果理解自己喜欢什么、身体能做什么，不宣称凭空获得意识。每次工具返回后，由你继续决定调用下一项工具还是回答；例如买饭成功只代表饭已入库，你可以根据新库存中 status=available 的 id 再决定吃饭；unconfirmed 是旧碗结果未明，不选择它，吃饭必须等待自己的实际回执。无需让爸爸再发一条消息推动下一步，也不强制你购买后一定吃。工具后的回复针对结果自然地说，未知结果不能说完成。需要工具时先调用，工具调用之前不要输出面向对方的回答。\n此刻实况：'+promptData(context,2400);
     const liveSystem=system+'\n当前身体与食物（优先于旧对话和历史摘要）：'+JSON.stringify(liveFood);
     const seen=new Set<string>();let uncertainBody=false;
@@ -133,7 +134,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
           else throw Error('工具不存在');
         }catch(error){isError=true;result={status:'failed',reason:error instanceof Error?error.message:'行动失败'};}
         const current=await reader.loadEnvelope(speech.petId);
-        messages.push({role:'tool',toolCallId:c.id,isError,content:promptData({result,身体:current?.humanity?.stats,...(c.name==='act'&&['service.buy-rice','service.eat-rice'].includes(actionType??'')?{food:current?riceMotivation(current.humanity as any,(current.legacy as any).config??{}):null,饭钱:(current?.legacy as any)?.wallet?.balance,库存:current?riceInventory(current):[]}:{})},5000)});index++;
+        messages.push({role:'tool',toolCallId:c.id,isError,content:promptData({result,身体:current?.humanity?.stats,...(c.name==='act'&&['service.buy-rice','service.eat-rice'].includes(actionType??'')?{food:current?riceMotivation(current.humanity as any,(current.legacy as any).config??{}):null,饭钱:(current?.legacy as any)?.wallet?.balance,库存:current?riceInventory(current):[],食物可用性:current?riceAvailability(current):null}:{})},5000)});index++;
       }
     }
   }};}};

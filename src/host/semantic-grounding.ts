@@ -19,7 +19,7 @@ export function actionFacts(draft:CanonicalEnvelope,observation?:Observation) {
   const receipts=(life.actions??[]).slice(-30).flatMap(a=>{
     if(!(a.sourceIds??[]).every(id=>!Object.hasOwn(life.invalidSources,id)))return [];
     const receipt=(life.receipts??[]).find(r=>r.actionId===a.id&&r.receiptId===a.receiptId && !Object.hasOwn(life.invalidSources,r.receiptId));
-    const event=receipt&&(life.events??[]).find(e=>e.type==='action.receipt'&&e.causationId===receipt.receiptId&&!Object.hasOwn(life.invalidSources,e.eventId));
+    const event=receipt&&(life.events??[]).find(e=>['action.receipt','action.reconciled'].includes(e.type)&&e.causationId===receipt.receiptId&&!Object.hasOwn(life.invalidSources,e.eventId));
     if(!receipt||!event)return [];
     const detail=receipt.details as Record<string,unknown>;
     return [{id:'receipt:'+a.id,type:a.actionType,status:receipt.status,at:receipt.occurredAt,parameters:a.parameters,reason:detail?.reason??null}];

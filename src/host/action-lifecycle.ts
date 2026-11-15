@@ -1,5 +1,6 @@
 import {hasActiveConversation} from './active-conversation.js';
 import {validateRicePurchase} from './rice-purchase.js';
+import {validateRiceMeal} from './rice-inventory.js';
 import {isForcedLabor,forcedLaborState} from './forced-labor.js';
 import {sweetPrice} from './spirit-activity.js';
 import {selfActionState} from './self-action-state.js';
@@ -97,6 +98,7 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
       if(action.actionType==='body.sleep'&&hasActiveConversation(draft)&&!(draft.legacy as any).manualServiceRequests?.[action.id]&&!action.sourceIds.some(id=>id.startsWith('chat-user:')||id.startsWith('needs:')))throw Error('还有正在进行的决定，先完成这轮');
       if(action.actionType==='service.sweet')sweetPrice(draft);
       if(action.actionType==='service.buy-rice')validateRicePurchase(draft);
+      if(action.actionType==='service.eat-rice')validateRiceMeal(draft,action.parameters.itemId);
       if(!isForcedLabor(draft,action))checkSpirit(draft.life,action.actionType,this.clock().valueOf());
       const proposal={...action, expectedStateVersion:draft.version};
       if((draft.legacy as Record<string,any>).worksite?.inside && (action.actionType.startsWith('care.') || ['service.eat-rice','body.sleep','body.wake','token.pickup','body.activity'].includes(action.actionType)))throw Error('她在网页工地里，请先接她回桌面');

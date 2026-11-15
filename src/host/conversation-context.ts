@@ -1,4 +1,4 @@
-import {riceInventory} from './rice-inventory.js';
+import {riceAvailability} from './rice-inventory.js';
 import type {LifeState} from '../kernel/types.js';
 import {companionContext,riceMotivation} from './companion-personality.js';
 import {laborHistory} from './labor-management.js';
@@ -21,7 +21,7 @@ export function conversationContext(state:LifeState, envelope:CanonicalEnvelope,
   return {
     companion:companionContext({...envelope,life:envelope.life??state},Date.now(),excludeEventIds),
     food:{...riceMotivation(envelope.humanity??{},config),balance:wallet.balance??null,frozen:wallet.frozen===true,price:config.costs?.feed??null,
-      inventory:riceInventory({...envelope,life:envelope.life??state}),eating:pet.services?.eating??null,recentChanges:recentMoney},
+      ...riceAvailability({...envelope,life:envelope.life??state}),eating:pet.services?.eating??null,recentChanges:recentMoney},
     worksite:worksiteFacts({...envelope,life:envelope.life??state}),
     laborHistory:laborHistory(pet),
     resources:{coins:(pet.tokens?.coins??[]).filter((c:any)=>c.status==='floor').slice(0,12).map((c:any)=>({id:c.id,surface:c.surface})),attachments:state.events.filter(e=>e.type==='attachment.shared'&&!Object.hasOwn(state.invalidSources,e.eventId)).slice(-3).map(e=>({sourceId:e.eventId,attachmentId:(e.payload as any)?.attachmentId}))},
