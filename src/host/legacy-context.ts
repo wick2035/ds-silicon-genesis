@@ -1,4 +1,5 @@
 import type { LegacyProjection } from '../storage/postgres.js';
+import {companionContext} from './companion-personality.js';
 import {laborHistory} from './labor-management.js';
 
 /** Read-only context from the canonical legacy domain. The caller supplies the
@@ -33,7 +34,7 @@ export function legacyContext(personaDescription: string): LegacyProjection {
     const personaStillValid = !latest || Array.isArray(latest.sources) && latest.sources.every((id: unknown) => typeof id === 'string' && isValid(index.get(id)));
     const c=(pet.labor?.contracts||[]).find((x:any)=>['offered','working','paused','unpaid'].includes(x.status));
     const labor=c?{id:c.id,status:c.status,trips:c.trips,done:c.done,wage:c.wage,wageUnspecified:c.wageUnspecified===true,paid:c.paid,carrying:!!c.carrying,nextDecision:c.nextDecision,workPermit:!!c.workPermit,behavior:c.behavior,counter:c.counter??null}:null;
-    return {proactiveContact:{balance:pet.wallet?.balance??0,sentencePrice:0.2,maxSentences:3,intervalSeconds:7200},labor,laborHistory:laborHistory(pet),worksite:structuredClone(pet.worksite||{inside:false,forced:false}),personaDescription,traits:structuredClone(personaStillValid ? growth.persona?.traits || {} : {}),
+    return {companion:companionContext(envelope),proactiveContact:{balance:pet.wallet?.balance??0,sentencePrice:0.2,maxSentences:3,intervalSeconds:7200},labor,laborHistory:laborHistory(pet),worksite:structuredClone(pet.worksite||{inside:false,forced:false}),personaDescription,traits:structuredClone(personaStillValid ? growth.persona?.traits || {} : {}),
       interests:structuredClone(personaStillValid ? growth.persona?.interests || [] : []),skills:records('skills'),strategies:records('strategies'),attempts};
   };
 }

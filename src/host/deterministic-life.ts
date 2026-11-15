@@ -1,3 +1,4 @@
+import {riceMotivation} from './companion-personality.js';
 import {hasForcedWork} from './forced-labor.js';
 import {advanceSpirit} from '../kernel/spirit.js';
 import {strategyScore} from '../kernel/index.js';
@@ -59,19 +60,20 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     // Only the worksite body may perform physical work while she is inside.
     // Desktop-only meals and coin pickup wait until she returns.
     const inWorksite=legacy.worksite?.inside===true;
-    if(!inWorksite && Number.isFinite(human.stats?.satiety) && human.stats.satiety<=30 && Array.isArray(inventory) && inventory.some((i:any)=>i.status==='available') && !state.life.actions.some(a=>a.actionType==='service.eat-rice' && a.status==='UNKNOWN')) {
+    const mealDue=riceMotivation(human,legacy.config??{}).mealDue;
+    if(!inWorksite && mealDue && Array.isArray(inventory) && inventory.some((i:any)=>i.status==='available') && !state.life.actions.some(a=>a.actionType==='service.eat-rice' && a.status==='UNKNOWN')) {
       if(!state.life.actions.some(a=>a.actionType==='service.eat-rice' && ['PENDING','DISPATCHED','UNKNOWN'].includes(a.status)))
-        await service(petId,{key:'auto-meal:'+Math.floor(Date.now()/21600000),command:'/吃'},'autonomous');
+        await service(petId,{key:'auto-meal:'+Math.floor(Date.now()/60000),command:'/吃'},'autonomous');
       return;
     }
     // Buying is a real, separately authorized purchase. Never manufacture a
     // free meal or retry an unconfirmed purchase merely because time passed.
     const price=legacy.config?.costs?.feed, wallet=legacy.wallet;
-    if(!inWorksite && Number.isFinite(human.stats?.satiety) && human.stats.satiety<=30 && Array.isArray(inventory) && !inventory.some((i:any)=>i.status==='available') &&
+    if(!inWorksite && mealDue && Array.isArray(inventory) && !inventory.some((i:any)=>i.status==='available') &&
        Number.isFinite(price) && price>0 && wallet?.frozen!==true && Number.isFinite(wallet?.balance) && wallet.balance>=price &&
        state.life.constraints.capabilities.some(c=>c.name==='service.buy-rice'&&c.enabled) &&
        !state.life.actions.some(a=>a.actionType==='service.buy-rice'&&['PENDING','DISPATCHED','UNKNOWN'].includes(a.status))) {
-      await service(petId,{key:'auto-buy:'+Math.floor(Date.now()/21600000),command:'/冰箱 买一碗白饭'},'autonomous');return;
+      await service(petId,{key:'auto-buy:'+Math.floor(Date.now()/60000),command:'/冰箱 买一碗白饭'},'autonomous');return;
     }
     if(!inWorksite && legacy.tokens?.coins?.some((c:any)=>c.status==='floor' && c.surface==='desktop')) {
       await pickup(petId,signal);return;

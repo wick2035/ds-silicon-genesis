@@ -188,7 +188,7 @@ export function advanceHumanity(input, now = Date.now()) {
     b.comfort += h * ((b.satiety < 25 || b.hydration < 25) ? -2 : 1.5);
     b.security += h * (rest ? .3 : -.2);
     settleResponses(s, end);
-    for (const k of Object.keys(b)) b[k] = humanClamp(b[k]);
+    for (const k of Object.keys(b)) b[k] = ['stamina','energy','satiety'].includes(k) ? Math.max(-100, Math.min(100, Number.isFinite(b[k]) ? b[k] : 0)) : humanClamp(b[k]);
     // Emotions retain a memory of events, then gently return to their bodily baseline.
     const target = { joy: 25 + b.comfort * .35 - b.stress * .2 - b.pain * .25, anger: 3 + b.stress * .25,
       sadness: 5 + Math.min(18, (t - s.lastInteraction) / 3600000) + b.pain * .2, fear: 3 + (100 - b.security) * .25 + b.pain * .15,

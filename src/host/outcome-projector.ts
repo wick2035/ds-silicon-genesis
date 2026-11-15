@@ -120,6 +120,7 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
       contract.workPermit = contract.batchRemaining > 0; contract.nextDecision = Math.max(at + 1000,(contract.lastWorkDecision || 0)+60000);
       if (contract.done === contract.trips) {
         contract.status = 'unpaid'; contract.finished = at;
+        draft.life.events.push({eventId:`labor-completed:${intent.id}`,petId:draft.petId,type:'labor.completed',source:'executor',occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'observed',payload:{contractId:contract.id,done:contract.done,trips:contract.trips,wage:contract.wage,wageUnspecified:contract.wageUnspecified===true,paid:contract.paid||0}});
         if(!contract.wageUnspecified){
         const id = `labor-unpaid:${intent.id}`;
         draft.life.events.push({eventId:id,petId:draft.petId,type:'social.labor.unpaid',source:'executor',actorId:'dad',occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'observed',payload:{contractId:contract.id,outstanding:Math.max(0,contract.wage-(contract.paid||0))}});

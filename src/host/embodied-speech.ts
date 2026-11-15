@@ -1,3 +1,4 @@
+import {COMPANION_PERSONALITY,TIME_AWARENESS} from './companion-personality.js';
 import {createHash} from 'node:crypto';
 import {selfModelContext,STABLE_PERSONALITY} from './self-model-context.js';
 import {promptData} from './prompt-data.js';
@@ -19,11 +20,11 @@ executable.delete('self.express');
  * draft, not a published claim. Real receipts return to the same model. */
 export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<CanonicalEnvelope|null>},gate:PetGate,uow:UnitOfWork,actions:ActionCoordinator,dispatcher:OutboxDispatcher,
   beginWork:(id:string,sourceIds:string[],key:string)=>Promise<unknown>,leaveWork:(id:string)=>Promise<unknown>) {
-  async function sense(petId:string,query=''){
+  async function sense(petId:string, excludeEventIds:string[]=[],query=''){
     const envelope=await reader.loadEnvelope(petId);if(!envelope)throw Error('生命状态不可用');
     const events=envelope.life.events.filter(e=>!Object.hasOwn(envelope.life.invalidSources,e.eventId) &&
       ['body.observed','body.adjusted','wallet','social.care','interaction','interaction.operation','interaction.worksite','labor.changed','action.receipt'].includes(e.type)).slice(-16);
-    return {envelope,context:{感受:humanityPrompt(envelope.humanity),生活:conversationContext({...envelope.life,petId,version:envelope.version} as any,envelope),
+    return {envelope,context:{感受:humanityPrompt(envelope.humanity),生活:conversationContext({...envelope.life,petId,version:envelope.version} as any,envelope,excludeEventIds),
       近期真实经历:events.map(e=>({id:e.eventId,at:e.occurredAt,actor:e.actorId??'未确认',type:e.type,detail:e.payload})),
       自我认识:selfModelContext(envelope.life,query),当前目标:envelope.life.goals.filter(g=>g.status==='active').slice(-6),精神:envelope.life.spirit,可用能力:envelope.life.constraints.capabilities.filter(c=>c.enabled)}};
   }
@@ -59,14 +60,15 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
     const signal=AbortSignal.any([options.signal??gate.signal,gate.signal,AbortSignal.timeout(90000)]);
     const lastUser=options.messages.findLast((m:any)=>m.role==='user')?.content;
     const query=typeof lastUser==='string'?lastUser:Array.isArray(lastUser)?lastUser.filter((b:any)=>b.type==='text').map((b:any)=>b.text).join(' '):'';
-    const initial=await sense(speech.petId,query),messages=[...options.messages];
+    const initial=await sense(speech.petId,speech.sourceIds,query),messages=[...options.messages];
     const allowed=initial.envelope.life.constraints.capabilities.filter(c=>c.enabled&&(!c.requiresPermission||initial.envelope.life.constraints.permissions.includes(c.requiresPermission))).map(c=>c.name).filter(n=>executable.has(n)&&n!=='labor.step'&&!['care.feed','care.pet','care.soothe','care.accompany'].includes(n));
     if(!initial.envelope.life.constraints.capabilities.some(c=>c.name==='care.water')&&initial.envelope.life.constraints.capabilities.some(c=>c.name==='care.feed'&&c.enabled))allowed.push('care.water');
     const tools=[{name:'sense_self',description:'感知此刻身体、需求、钱包、近期真实互动与行动结果。',inputSchema:empty},
       ...(speech.allowActions?[{name:'act',description:'按自己的需要选择一次实际行动。吃饭先买后吃；口头说做了不算完成。'+JSON.stringify(actionCatalog),inputSchema:{type:'object',properties:{actionType:{type:'string',enum:allowed},parameters:{type:'object'}},required:['actionType','parameters'],additionalProperties:false}},
       {name:'begin_work',description:'自主决定履行已有工作约定，申请进入工地并搬一趟；不创建合同、不确认爸爸提案、不支付工资。',inputSchema:empty},
       {name:'leave_worksite',description:'自主离开自己进入的工地；被爸爸放进去时须等他接出。',inputSchema:empty}]:[])];
-    const system=options.system+'\n'+STABLE_PERSONALITY+'\n每次开口前，结合自己的感受、目标、刚才爸爸的操作和真实结果，判断此刻需不需要工具；可以只说话或安静，不必为了使用工具而行动。需要吃饭、喝水、睡觉、走动、学习或搬砖时调用工具，不能用台词冒充行动。失败后自己决定换办法、休息或向爸爸商量；条件未变不要重复失败的动作。感受和判断属于你，操作归因只依据真实来源，不知道是谁造成的就不要认定。通过真实结果理解自己喜欢什么、身体能做什么，不宣称凭空获得意识。工具后的回复针对结果自然地说，未知结果不能说完成。\n此刻实况：'+promptData(initial.context,8000);
+    const personality=STABLE_PERSONALITY+'\n'+(options.system.includes('【你自己的心思和口吻】')?'':COMPANION_PERSONALITY+'\n'+TIME_AWARENESS);
+    const system=options.system+'\n'+personality+'\n每次开口前，结合自己的感受、目标、刚才爸爸的操作和真实结果，判断此刻需不需要工具；可以只说话或安静，不必为了使用工具而行动。需要吃饭、喝水、睡觉、走动、学习或搬砖时调用工具，不能用台词冒充行动。失败后自己决定换办法、休息或向爸爸商量；条件未变不要重复失败的动作。感受和判断属于你，操作归因只依据真实来源，不知道是谁造成的就不要认定。通过真实结果理解自己喜欢什么、身体能做什么，不宣称凭空获得意识。工具后的回复针对结果自然地说，未知结果不能说完成。\n此刻实况：'+promptData(initial.context,8000);
     const seen=new Set<string>();
     for(let round=0;round<5;round++){
       if(signal.aborted)throw Error('发言已取消');
@@ -89,7 +91,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
           if(!c.id||!c.name)throw Error('工具调用无效');
           const p=JSON.parse(c.arguments||'{}'),fingerprint=c.name+JSON.stringify(p);
           if(seen.has(fingerprint))throw Error('本轮已尝试过相同行动，先依据现有结果决定');seen.add(fingerprint);
-          if(c.name==='sense_self')result=(await sense(speech.petId,query)).context;
+          if(c.name==='sense_self')result=(await sense(speech.petId,speech.sourceIds,query)).context;
           else if(c.name==='act')result=await execute(speech,p.actionType,p.parameters,`${speech.requestId}:${round}:${index}`,signal);
           else if(c.name==='begin_work')result=await execute(speech,'work.begin',{},`${speech.requestId}:${round}:${index}`,signal);
           else if(c.name==='leave_worksite')result=await execute(speech,'work.leave',{},`${speech.requestId}:${round}:${index}`,signal);

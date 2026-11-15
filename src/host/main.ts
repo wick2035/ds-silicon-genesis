@@ -1,3 +1,5 @@
+import {createLaborCompletionNotices} from './labor-completion-notices.js';
+import {companionContext,COMPANION_PERSONALITY} from './companion-personality.js';
 import {createInteractionReactions} from './interaction-reactions.js';
 import {createEmbodiedSpeech} from './embodied-speech.js';
 import {initializeSpirit} from './spirit-initialization.js';
@@ -166,7 +168,7 @@ export async function main():Promise<void> {
       if(!contract)throw Error('工作约定已变化，请刷新');
       if(contract.accepted||contract.counter)return {alreadyDecided:true};
       let raw='';
-      try{await budget.runAs(id,'interactive',async()=>{for await(const part of model!.llm.stream({...model!.agentDefaultModel.currentSelection(),system:persona+'\n根据身体状况和工作条件自主决定是否接受、还价或拒绝。只输出 JSON：{"choice":"accept|bargain|decline","trips":整数,"wage":整数}。还价时趟数为1–50，工钱为1–1000000；不假装工作或支付已完成。',messages:[{role:'user',content:JSON.stringify({trips:contract.trips,wage:contract.wage,stats:(state?.humanity as any)?.stats,emotions:(state?.humanity as any)?.emotions})}],signal:lease.signal,maxTokens:150}))if(part.type==='text'&&typeof part.text==='string')raw+=part.text;});}
+      try{await budget.runAs(id,'interactive',async()=>{for await(const part of model!.llm.stream({...model!.agentDefaultModel.currentSelection(),system:persona+'\n'+COMPANION_PERSONALITY+'\n根据身体状况和工作条件自主决定是否接受、还价或拒绝。只输出 JSON：{"choice":"accept|bargain|decline","trips":整数,"wage":整数}。还价时趟数为1–50，工钱为1–1000000；不假装工作或支付已完成。',messages:[{role:'user',content:JSON.stringify({trips:contract.trips,wage:contract.wage,companion:state?companionContext(state):null,stats:(state?.humanity as any)?.stats,emotions:(state?.humanity as any)?.emotions})}],signal:lease.signal,maxTokens:150}))if(part.type==='text'&&typeof part.text==='string')raw+=part.text;});}
       catch{throw Error('她暂时无法回应，请检查模型连接后重试');}
       let decision:any;try{decision=JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''));}catch{throw Error('她的回应无法确认，请重试');}
       if(!decision||!['accept','bargain','decline'].includes(decision.choice)||decision.choice==='bargain'&&(!Number.isInteger(decision.trips)||decision.trips<1||decision.trips>50||!Number.isInteger(decision.wage)||decision.wage<1||decision.wage>1000000))throw Error('她的回应无法确认，请重试');
@@ -228,6 +230,9 @@ export async function main():Promise<void> {
         publishWhisper=(text:string,image?:string,surface?:string)=>{const cfg=helpers.readAllConfig(deps.configPaths);const voiceTo=cfg.main?.voiceEnabled===true&&(surface==='web'||surface==='desktop')?surface:undefined;deps.state.writePet(petId,'say',{text,companionWhisper:true,...(image?{image}:{}),...(voiceTo?{voiceTo}:{})});};
         const reactToInteraction=createInteractionReactions(reactionBaseline,(id,event,signal)=>responses(id,'interaction',signal,event),text=>deps.state.writePet(petId,'say',careReactionLeaf(text,helpers.readAllConfig(deps.configPaths).main?.voiceEnabled===true)),lease.signal);
         unitOfWork.onCommit(reactToInteraction);dispatcher.onCommit(reactToInteraction);
+        const notifyCompletion=createLaborCompletionNotices(store,petId,(id,event,signal)=>responses(id,'completion',signal,event,{autonomous:true}),
+          text=>deps.state.writePet(petId,'say',careReactionLeaf(text,helpers.readAllConfig(deps.configPaths).main?.voiceEnabled===true)),lease.signal);
+        unitOfWork.onCommit(notifyCompletion);dispatcher.onCommit(notifyCompletion);notifyCompletion(reactionBaseline);
         const reactToCare=createCareReactions(reactionBaseline,(id,event,signal)=>responses(id,'care',AbortSignal.any([lease.signal,signal]),event),text=>deps.state.writePet(petId,'say',careReactionLeaf(text,helpers.readAllConfig(deps.configPaths).main?.voiceEnabled===true)));
         waitCareResponse=eventId=>reactToCare.wait(eventId);
         unitOfWork.onCommit(reactToCare);dispatcher.onCommit(reactToCare);

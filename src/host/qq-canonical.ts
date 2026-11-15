@@ -18,7 +18,7 @@ function relayText(draft:CanonicalEnvelope,answerId:string):string|null {
   const answer=draft.life.events.find(e=>e.eventId===answerId);
   const request=draft.life.events.find(e=>e.eventId===answer?.causationId);
   const selfExpression=request?.type==='action.receipt' && draft.life.actions.some(a=>a.id===(request.payload as Obj)?.actionId && a.actionType==='self.express' && a.status==='COMPLETED');
-  if(!answer||!request||answer.type!=='conversation.assistant'||answer.source!=='desktop'||(!selfExpression && (request.type!=='interaction.requested'||!['whisper','physical','care','worksite'].includes(String((request.payload as Obj)?.kind))))||Object.hasOwn(draft.life.invalidSources,answerId)||Object.hasOwn(draft.life.invalidSources,request.eventId))return null;
+  if(!answer||!request||answer.type!=='conversation.assistant'||answer.source!=='desktop'||(!selfExpression && (request.type!=='interaction.requested'||!['whisper','physical','care','worksite','completion'].includes(String((request.payload as Obj)?.kind))))||Object.hasOwn(draft.life.invalidSources,answerId)||Object.hasOwn(draft.life.invalidSources,request.eventId))return null;
   const text=redactDadNames(String((answer.payload as Obj)?.text||'').trim());
   let content='';for(const char of text){if(content.length+char.length>1800)break;content+=char;}
   return sentences(content).slice(0,MAX_REPLIES).join('')||null;

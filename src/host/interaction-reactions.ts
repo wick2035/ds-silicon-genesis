@@ -13,6 +13,11 @@ export function interactionDescription(event:Event,state?:CanonicalEnvelope):str
     const status=event.type==='action.cancelled'?'已取消':({COMPLETED:'已确认完成',FAILED:'未成功',CANCELLED:'已中断',UNKNOWN:'结果尚未确认，不能说已完成'} as Record<string,string>)[p.status];
     return name&&status?`爸爸请求的${name}${status}`:undefined;
   }
+  if(event.type==='labor.completed'&&event.source==='executor'&&state){
+    const contract=(state.legacy as Record<string,any>).labor?.contracts?.find((c:any)=>c.id===p.contractId);
+    if(!contract||!Number.isFinite(p.done)||p.done!==p.trips||contract.done<contract.trips)return undefined;
+    return `你按真实完成回执搬完了这份工作，共 ${p.done} 趟。主动找爸爸告诉他，带着自己当下的疲惫、得意和对白饭的惦记自然说一两句；工钱由爸爸聊天商量后手动加饭钱，尚未到账就只能商量，已有到账则认可，不要求去结算页面。`;
+  }
   if(event.type==='interaction.operation')return typeof p.description==='string'?p.description:undefined;
   if(event.type.startsWith('management.'))return ({'management.pause':p.paused?'爸爸暂停了你的自主活动，手动互动仍可继续':'爸爸恢复了你的自主活动','management.goal':'爸爸调整了你的目标状态','management.revoke':'爸爸撤回了一项权限','management.memory':'爸爸删除或纠正了记忆，请尊重这次修改，不复述被删除内容'} as Record<string,string>)[event.type];
   if(event.type==='body.adjusted')return '爸爸调整了你的身体数值，请根据当前身体状态回应';
@@ -49,6 +54,7 @@ export function createInteractionReactions(initial:CanonicalEnvelope,
     for(const event of state.life.events){
       if(seen.has(event.eventId))continue;seen.add(event.eventId);
       if(Object.hasOwn(state.life.invalidSources,event.eventId))continue;
+      if(event.type==='labor.completed')continue;
       const description=interactionDescription(event,state);if(description)queued.push({eventId:event.eventId,description});
     }
     if(queued.length)queueMicrotask(()=>{void run();});

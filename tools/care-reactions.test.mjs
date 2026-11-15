@@ -32,7 +32,7 @@ test('受伤保护姿态中喝水仍播放对应动作，完成后恢复原保�
   const video={readyState:2,paused:false,playbackRate:1,addEventListener(name,cb){if(name==='ended')setImmediate(cb);}};
   class Sprite {playIdle(){} switchTo(name){this.anim=name;} dispose(){} showWhisper(){}}
   const context={PetSprite:Sprite,window:{petBridge:{reportActionReceipt:async r=>{receipts.push(r);}}},document:{hidden:false},
-    requestAnimationFrame:fn=>setImmediate(fn),cancelAnimationFrame:clearImmediate,setTimeout,clearTimeout,performance};
+    requestAnimationFrame:fn=>setImmediate(fn),cancelAnimationFrame:clearImmediate,setTimeout,clearTimeout,setInterval,clearInterval,performance};
   vm.runInNewContext(crying+'\n'+source,context);
   const sprite=new Sprite();Object.assign(sprite,{ac:new AbortController(),pet:{id:'main'},bodyProtected:true,dragState:{active:false},
     humanity:{body:{phase:'guarded'},crying:false},painStage:{dataset:{bodyPhase:'guarded'},classList:{add:x=>classes.add(x),remove:x=>classes.delete(x)}},

@@ -1,9 +1,10 @@
 import type {LifeState} from '../kernel/types.js';
+import {companionContext} from './companion-personality.js';
 import {laborHistory} from './labor-management.js';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 
 /** Only committed, bounded facts; an intent or dispatch is never a receipt. */
-export function conversationContext(state:LifeState, envelope:CanonicalEnvelope) {
+export function conversationContext(state:LifeState, envelope:CanonicalEnvelope, excludeEventIds:string[]=[]) {
   const pet=envelope.legacy as Record<string,any>, config=pet.config??{}, wallet=pet.wallet??{};
   const abilities=pet.abilities??{}, inventory=Array.isArray(pet.services?.inventory)?pet.services.inventory:[];
   const actions=(state.actions??[]).filter(a=>(a.actionType.startsWith('care.')||['service.buy-rice','service.eat-rice','learning.observe','image.observe','body.sleep','body.wake'].includes(a.actionType)) && a.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id))).slice(-8).map(a=>{
@@ -17,6 +18,7 @@ export function conversationContext(state:LifeState, envelope:CanonicalEnvelope)
   const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
   const recentMoney=Array.isArray(pet.events)?pet.events.filter((e:any)=>['wallet','wallet-spend'].includes(e.kind)).slice(-6).map((e:any)=>e.text):[];
   return {
+    companion:companionContext({...envelope,life:envelope.life??state},Date.now(),excludeEventIds),
     food:{balance:wallet.balance??null,frozen:wallet.frozen===true,price:config.costs?.feed??null,
       inventory:inventory.filter((i:any)=>i.status!=='eaten').slice(0,12).map((i:any)=>({id:i.id,name:i.name,status:i.status})),eating:pet.services?.eating??null,recentChanges:recentMoney},
     worksite:worksiteFacts({...envelope,life:envelope.life??state}),

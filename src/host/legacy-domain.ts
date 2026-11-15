@@ -80,13 +80,21 @@ export class LegacyDomain {
           if (previous.kind !== kind || previous.inputHash !== fingerprint(input)) throw new Error('操作标识冲突');
           output = structuredClone(previous.output); return {};
         }
+        const walletBefore=structuredClone((draft.legacy as Obj).wallet??{});
         const store = isolatedStore(petId, draft.legacy, now);
         output = sanitizeMemoryData(apply(store, draft));
         const pet = store.data.pets[petId] as Obj;
         pet.canonicalOperations = {...pet.canonicalOperations,[operationId]:{kind,inputHash:fingerprint(input),output:structuredClone(output)}};
         draft.legacy = pet;
         const descriptions:Record<string,string>={wallet:'爸爸调整了你的饭钱',configure:'爸爸调整了你的生活设置',grant:'爸爸调整了你的能力授权',configureNetwork:'爸爸调整了联网学习开关',memory:'爸爸修改了记忆，请尊重修改，不复述删除内容',growthControl:'爸爸调整了成长设置',diary:'爸爸整理了日记',wish:'爸爸处理了你的念想','world-stop':'爸爸停止了当前活动',soft:'爸爸与你进行了情绪互动','labor-action':'爸爸调整了工作约定或进度','token-drop':'爸爸放下了饭钱','token-collect':'爸爸收回了地上的饭钱'};
-        if(descriptions[kind]){const stamp=new Date(now).toISOString();draft.life.events.push({eventId:'operation:'+operationId,petId,type:'interaction.operation',source:'user',actorId:'dad',occurredAt:stamp,receivedAt:stamp,evidenceLevel:'observed',payload:{operation:kind,description:descriptions[kind]}});draft.life.memories.push({id:'operation-memory:'+operationId,kind:'autobiographical',content:descriptions[kind],sourceIds:['operation:'+operationId],evidenceLevel:'observed',valid:true,createdAt:stamp});}
+        let walletChange:Obj|undefined;
+        if(kind==='wallet'){
+          const action=(Array.isArray(input)?input[0]:input) as Obj;
+          walletChange={action:action.action,before:{balance:walletBefore.balance,frozen:walletBefore.frozen===true},after:{balance:pet.wallet.balance,frozen:pet.wallet.frozen===true},delta:Math.round((pet.wallet.balance-walletBefore.balance)*100)/100};
+          descriptions.wallet=action.action==='freeze'?`爸爸${pet.wallet.frozen?'冻结':'恢复'}了饭钱消耗，余额仍为 ${pet.wallet.balance} token；冻结不是增加饭钱`:
+            `爸爸${walletChange.delta>=0?'增加':'减少'}了 ${Math.abs(walletChange.delta)} token 饭钱，余额从 ${walletBefore.balance} 变为 ${pet.wallet.balance} token；这是已实际入账的手动操作`;
+        }
+        if(descriptions[kind]){const stamp=new Date(now).toISOString();draft.life.events.push({eventId:'operation:'+operationId,petId,type:'interaction.operation',source:'user',actorId:'dad',occurredAt:stamp,receivedAt:stamp,evidenceLevel:'observed',payload:{operation:kind,description:descriptions[kind],...(walletChange?{wallet:walletChange}:{})}});draft.life.memories.push({id:'operation-memory:'+operationId,kind:'autobiographical',content:descriptions[kind],sourceIds:['operation:'+operationId],evidenceLevel:'observed',valid:true,createdAt:stamp});}
 
         for (const event of Array.isArray(pet.events) ? pet.events : []) {
           if (typeof event.id !== 'string' || !event.id || !Number.isFinite(event.ts)) continue;
