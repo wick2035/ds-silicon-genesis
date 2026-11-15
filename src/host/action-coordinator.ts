@@ -1,3 +1,4 @@
+import {reserveExploration} from './exploration-budget.js';
 import {hasActiveConversation} from './active-conversation.js';
 import {validateRicePurchase} from './rice-purchase.js';
 import {isForcedLabor,forcedLaborState} from './forced-labor.js';
@@ -40,12 +41,7 @@ export class ActionCoordinator {
         const ability=action.actionType==='image.observe'?'image':kind==='bili'?'bili':kind==='fetch'?'fetch':'search';
         if((ability!=='image'&&!pet.config?.networkLearning) || pet.abilities?.[ability]?.status!=='granted' || (ability==='search' && pet.abilities?.fetch?.status!=='granted')) throw new Error('探索权限不可用');
         if(ability==='image' && (!pet.attachments?.[action.parameters.attachmentId as string] || Object.hasOwn(draft.life.invalidSources,action.parameters.attachmentSourceId as string) || !draft.life.events.some(e=>e.eventId===action.parameters.attachmentSourceId && (e.payload as any)?.attachmentId===action.parameters.attachmentId)))throw Error('图片来源无效');
-        const daily=pet.config?.exploration?.dailyRuns;
-        if(!Number.isSafeInteger(daily)||daily<0||!pet.usage||typeof pet.usage!=='object')throw new Error('探索额度配置无效');
-        const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
-        const usage=pet.usage[day] ||= {exploreRuns:0,modelCalls:0,diaryAttempts:0,diarySuccess:0,totalCalls:0,newStrategies:0,reflectionAttempts:0};
-        if(!Number.isSafeInteger(usage.exploreRuns)||usage.exploreRuns<0||usage.exploreRuns>=daily)throw new Error('今日探索额度已用完');
-        usage.exploreRuns++;
+        reserveExploration(pet,ability,this.now());
         const charges=pet.explorationCharges ||= {};
         if(Object.hasOwn(charges,actionId))throw Error('探索费用标识冲突');
         charges[actionId]={amount:0,status:'reserved'};

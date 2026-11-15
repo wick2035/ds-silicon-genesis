@@ -31,6 +31,15 @@ test('联网开关与分项能力同时控制权威联网权限',async()=>{
   assert.equal((await f.post({operation:'config',intelligence:75})).status,200);
   assert.ok(!f.state().life.constraints.permissions.includes('network'));
 });
+test('探索和搜索设置接受新上限并拒绝超限值',async()=>{
+  const f=fixture();
+  assert.equal((await f.post({operation:'config',exploration:{dailyRuns:10,dailySearches:20}})).status,200);
+  assert.equal(f.state().legacy.config.exploration.dailyRuns,10);
+  assert.equal(f.state().legacy.config.exploration.dailySearches,20);
+  assert.equal((await f.post({operation:'config',exploration:{dailyRuns:11}})).status,409);
+  assert.equal((await f.post({operation:'config',exploration:{dailySearches:21}})).status,409);
+  assert.equal(f.state().legacy.config.exploration.dailySearches,20);
+});
 test('身体调整的冲突和照料拒绝会返回失败，不伪装成成功',async()=>{
   const f=fixture(),revision=f.state().humanity.adjustmentRevision||0;
   assert.equal((await f.post({operation:'adjust',stats:{pain:25},expectedRevision:revision})).status,200);

@@ -8,7 +8,7 @@ import { attachTokenStore } from './tokens.mjs';
 
 export const SLOT = Symbol.for('dsh.pet.companion.v1');
 export const ABILITIES = { image: '观察已分享图片', search: '搜索公开网页', fetch: '阅读公开网页', bili:'阅读B站视频字幕' };
-export const defaults = () => ({ intelligenceEnabled: true, intelligence: 70, riceAppeal: 100, costs: { chat: .2, whisper: .1, feed: 20, diary: 100, explore: 100 }, begging: { minRounds: 3, maxRounds: 5, intervalMinutes: 10, hourlyMax: 4 }, exploration: { dailyRuns: 1, dailyModelCalls: 2 }, diaryEnabled: true });
+export const defaults = () => ({ intelligenceEnabled: true, intelligence: 70, riceAppeal: 100, costs: { chat: .2, whisper: .1, feed: 20, diary: 100, explore: 100 }, begging: { minRounds: 3, maxRounds: 5, intervalMinutes: 10, hourlyMax: 4 }, exploration: { dailyRuns: 10, dailySearches: 20, dailyModelCalls: 20 }, diaryEnabled: true });
 export const dayOf = (ts) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong', year: 'numeric', month: '2-digit', day: '2-digit' }).format(ts);
 export const minuteOf = (ts) => { const p = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Hong_Kong', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(ts).split(':').map(Number); return p[0] * 60 + p[1]; };
 export const digest = (v) => createHash('sha256').update(String(v)).digest('hex').slice(0, 24);
@@ -66,7 +66,7 @@ export class CompanionStore {
       for (const k of ['intelligenceEnabled', 'diaryEnabled']) if (Object.hasOwn(input, k)) { if (typeof input[k] !== 'boolean') throw new Error('开关值无效'); p.config[k] = input[k]; }
       if (Object.hasOwn(input, 'intelligence')) p.config.intelligence = integer(input.intelligence, 0, 100);
       if (Object.hasOwn(input, 'riceAppeal')) { const beforeRice = p.config.riceAppeal ?? 100, afterRice = integer(input.riceAppeal, 100, 500); p.config.riceAppeal = afterRice; if (beforeRice !== afterRice) { p.riceAppealChange = { before: beforeRice, after: afterRice, ts: this.clock() }; this.eventIn(p, 'rice-appeal', `爸把大白饭对我的诱惑从 ${beforeRice}% 调到 ${afterRice}%`, null); } }
-      for (const [group, limits] of Object.entries({ costs: { chat: [0,100000], whisper: [0,100000], feed: [0,100000], diary: [0,100000], explore: [0,100000] }, begging: { minRounds: [1,30], maxRounds: [1,30], intervalMinutes: [10,1440], hourlyMax: [0,4] }, exploration: { dailyRuns: [0,1], dailyModelCalls: [0,20] }, learning:{dailyModelCalls:[0,20]} })) {
+      for (const [group, limits] of Object.entries({ costs: { chat: [0,100000], whisper: [0,100000], feed: [0,100000], diary: [0,100000], explore: [0,100000] }, begging: { minRounds: [1,30], maxRounds: [1,30], intervalMinutes: [10,1440], hourlyMax: [0,4] }, exploration: { dailyRuns: [0,10], dailySearches: [0,20], dailyModelCalls: [0,20] }, learning:{dailyModelCalls:[0,20]} })) {
         if (Object.hasOwn(input, group)) { if (!input[group] || typeof input[group] !== 'object') throw new Error('设置格式无效'); for (const [key, v] of Object.entries(input[group])) { if (!limits[key]) throw new Error('未知设置：' + key); p.config[group][key] = (group === 'costs' ? tokenAmount : integer)(v, ...limits[key]); } }
       }
       if (p.config.begging.minRounds > p.config.begging.maxRounds) throw new Error('最少轮数不能大于最多轮数');
