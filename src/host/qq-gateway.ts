@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { writeFileSync, renameSync } from 'node:fs';
 import { QQPetBridge } from '../../vendor/pet-plugins/behavior/qq-bridge.mjs';
 import { CanonicalQQ, createQQExecutor, type QQIncoming, type QQTransport } from './qq-canonical.js';
 import type { OutboxIntent, ExecutionReceipt } from '../storage/uow.js';
@@ -16,12 +17,24 @@ export interface QQGatewayOptions {
   /** Dispatches an already persisted outbox row, never directly sends. */
   dispatch(actionId:string):Promise<unknown>;
   onStatus?:(state:string)=>void;
+  diagnosticPath?:string;
+}
+
+/** Private transport metadata only: never persist content, codes or OpenIDs. */
+function diagnostics(path?:string) {
+  const latest:Record<string,unknown>={startedAt:new Date().toISOString()};
+  return (stage:string,details:Record<string,unknown>)=>{
+    if(!path)return;
+    latest[stage]={at:new Date().toISOString(),...details};
+    try {writeFileSync(path+'.tmp',JSON.stringify(latest,null,2)+'\n',{mode:0o600});renameSync(path+'.tmp',path);}catch{}
+  };
 }
 type Item={text:string;isOwner:boolean;eventId:string;messageId:string;receivedAt:number};
 /** Reuses only original QQ gateway handshake, heartbeat and reconnection. All
  * application input, pairing and outbound delivery are overridden below. */
 export class CanonicalQQGateway extends QQPetBridge {
   readonly #options:QQGatewayOptions;
+  readonly #diagnostic:ReturnType<typeof diagnostics>;
   #items:Item[]=[];
   #timer?:ReturnType<typeof setTimeout>;
   #batchStarted=0;
@@ -32,8 +45,13 @@ export class CanonicalQQGateway extends QQPetBridge {
   #abort=()=>{this.stop();};
   readonly executor:(petId:string,intent:OutboxIntent,signal:AbortSignal)=>Promise<ExecutionReceipt>;
   constructor(options:QQGatewayOptions) {
-    super(options.config,{status:()=>{},canSpeak:()=>true});
+    const diagnostic=diagnostics(options.diagnosticPath);
+    super(options.config,{status:(status:any)=>{
+      diagnostic('connection',{state:status.state,reason:status.reason,lastGroupEventType:status.groups?.lastEventType,lastGroupEventAt:status.groups?.lastEventAt});
+      try{options.onStatus?.(status.state);}catch{}
+    },canSpeak:()=>true});
     this.#options=options;
+    this.#diagnostic=diagnostic;
     this.executor=createQQExecutor({send:(input,signal)=>this.sendMessage(input,signal)});
     if(options.signal.aborted) this.#closed=true; else options.signal.addEventListener('abort',this.#abort,{once:true});
   }
@@ -59,12 +77,21 @@ export class CanonicalQQGateway extends QQPetBridge {
   }
   async receive(message:any,scene:'c2c'|'group'='c2c',eventType=''):Promise<void> {
     if(this.#closed || this.#options.signal.aborted) return;
+    this.#diagnostic('inbound',{scene,eventType});
     const actor=scene==='group'?message?.author?.member_openid:message?.author?.user_openid;
-    if(typeof actor!=='string'||typeof message?.id!=='string'||typeof message?.content!=='string'||message.author?.bot===true || (scene==='group'&&this.botId===actor)) return;
-    const age=Date.now()-Date.parse(message.timestamp); if(!Number.isFinite(age)||age>240000||age < -60000)return;
-    const input:QQIncoming={messageId:message.id,scene,actorOpenid:actor,...(scene==='group'?{groupOpenid:message.group_openid,mentioned:eventType==='GROUP_AT_MESSAGE_CREATE'}:{}),text:message.content.trim(),occurredAt:message.timestamp};
+    if(typeof actor!=='string'||typeof message?.id!=='string'||typeof message?.content!=='string'||message.author?.bot===true || (scene==='group'&&this.botId===actor)) {this.#diagnostic('inbound',{scene,eventType,result:'invalid-or-self-message'});return;}
+    const age=Date.now()-Date.parse(message.timestamp); if(!Number.isFinite(age)||age>240000||age < -60000){this.#diagnostic('inbound',{scene,eventType,result:'invalid-or-stale-timestamp'});return;}
+    let text=message.content.trim();
+    // Some group deliveries retain a leading bot mention. Strip only our own
+    // structured mention; mentions of other members must remain ordinary text.
+    if(scene==='group') {
+      const mention=/^<@!?([^>]+)>\s*/u.exec(text);
+      if(mention && [this.botId,this.#options.config.appId].includes(mention[1]))text=text.slice(mention[0].length).trim();
+    }
+    const input:QQIncoming={messageId:message.id,scene,actorOpenid:actor,...(scene==='group'?{groupOpenid:message.group_openid,mentioned:eventType==='GROUP_AT_MESSAGE_CREATE'}:{}),text,occurredAt:message.timestamp};
     const petId=this.#options.config.petId||'main';
     const paired=await this.#options.canonical.pair(petId,input,this.#options.ingressAuthority);
+    if(/^\/绑定(?:群)?\s/u.test(text))this.#diagnostic('pairing',{scene,paired:paired.paired});
     if(paired.paired && paired.eventId) { await this.respond(scene,[{text:'',isOwner:true,eventId:paired.eventId,messageId:message.id,receivedAt:Date.now()}],scene==='group'?'群绑定好啦。':'绑定好啦。'); return; }
     const result=await this.#options.canonical.receive(petId,input,this.#options.ingressAuthority);
     if(!result.accepted||!result.eventId||this.#closed) return;

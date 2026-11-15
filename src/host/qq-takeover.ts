@@ -21,6 +21,7 @@ export interface QQTakeoverOptions {
   onTurn:QQGatewayOptions['onTurn'];
   dispatch:QQGatewayOptions['dispatch'];
   onStatus?:QQGatewayOptions['onStatus'];
+  diagnosticPath?:string;
 }
 async function optionalRows(path:string, kind:'inbound'|'outbound'):Promise<Receipt[]|Outbound[]> {
   let raw:string;
@@ -51,7 +52,7 @@ export async function prepareQQTakeover(options:QQTakeoverOptions):Promise<
   if(config.pairingCode && Number.isFinite(config.pairingExpiresAt) && config.pairingExpiresAt!>Date.now())codes.owner={code:config.pairingCode,expiresAt:config.pairingExpiresAt!};
   if(config.groupPairingCode && Number.isFinite(config.groupPairingExpiresAt) && config.groupPairingExpiresAt!>Date.now())codes.group={code:config.groupPairingCode,expiresAt:config.groupPairingExpiresAt!};
   if(codes.owner || codes.group)await options.canonical.configurePairing(petId,codes);
-  const gateway=new CanonicalQQGateway({config,canonical:options.canonical,ingressAuthority:options.ingressAuthority,signal:options.signal,onTurn:options.onTurn,dispatch:options.dispatch,onStatus:options.onStatus});
+  const gateway=new CanonicalQQGateway({config,canonical:options.canonical,ingressAuthority:options.ingressAuthority,signal:options.signal,onTurn:options.onTurn,dispatch:options.dispatch,onStatus:options.onStatus,diagnosticPath:options.diagnosticPath});
   return {status:'ready',petId,gateway,executor:gateway.executor};
 }
 
@@ -79,7 +80,7 @@ export async function prepareFreshQQ(options:Omit<QQTakeoverOptions,'legacyHome'
   if(config.groupPairingCode && Number.isFinite(config.groupPairingExpiresAt) && config.groupPairingExpiresAt!>Date.now())codes.group={code:config.groupPairingCode,expiresAt:config.groupPairingExpiresAt!};
   if(codes.owner || codes.group)await options.canonical.configurePairing(options.petId,codes);
   if(options.signal.aborted)throw Error('QQ 接入已取消');
-  const gateway=new CanonicalQQGateway({config,canonical:options.canonical,ingressAuthority:options.ingressAuthority,signal:options.signal,onTurn:options.onTurn,dispatch:options.dispatch,onStatus:options.onStatus});
+  const gateway=new CanonicalQQGateway({config,canonical:options.canonical,ingressAuthority:options.ingressAuthority,signal:options.signal,onTurn:options.onTurn,dispatch:options.dispatch,onStatus:options.onStatus,diagnosticPath:options.diagnosticPath});
   return {status:'ready',petId:options.petId,gateway,executor:gateway.executor};
 }
 

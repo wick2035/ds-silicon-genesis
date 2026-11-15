@@ -304,7 +304,7 @@ export async function main():Promise<void> {
     if(process.env.SILICON_DISABLE_QQ!=='1' && (freshQQ || await verifyQQCutoverProof(targetHome))) {
       const ingressAuthority={};
       const canonical=new CanonicalQQ(store,unitOfWork,lease,projectBody,ingressAuthority);
-      const shared={canonical,ingressAuthority,signal:lease.signal,onTurn:chat.qqTurn.bind(chat),dispatch:(id:string)=>dispatcher.dispatch(id)};
+      const shared={canonical,ingressAuthority,signal:lease.signal,onTurn:chat.qqTurn.bind(chat),dispatch:(id:string)=>dispatcher.dispatch(id),diagnosticPath:join(targetHome,'dsh-pet','qq-fresh-status.json')};
       const takeover=freshQQ ? await prepareFreshQQ({...shared,home:targetHome,petId}) :
         await prepareQQTakeover({...shared,legacyHome:targetHome,stopHook:{stopAndVerify:async()=>await verifyOldQQAbsent(root)?'absent':'unknown'}});
       if(takeover.status==='ready') {
