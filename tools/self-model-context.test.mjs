@@ -50,3 +50,10 @@ test('大型成长存档能通过真实模型输入校验，sense_self 续轮也
     assert.equal(text,'爸爸，我在呢。');assert.equal(requests,2);
   }finally{facade.dispose();globalThis.fetch=original;}
 });
+
+
+test('dynamic prompt compression preserves complete resource ids and source ids',()=>{
+ const id='rice:speech-action:'+ 'f'.repeat(64),source='chat-user:'+'a'.repeat(64);
+ const data=JSON.parse(promptData({inventory:[{id,name:'饭'.repeat(1000),status:'available'}],itemId:id,sourceIds:[source],description:'历史'.repeat(2000)},700));
+ assert.equal(data.inventory[0].id,id);assert.equal(data.itemId,id);assert.equal(data.sourceIds[0],source);
+});

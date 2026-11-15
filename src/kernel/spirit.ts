@@ -49,7 +49,7 @@ export function setSpiritRest(life:Life,mode:Spirit['mode'],now=Date.now()):void
   else {delete s.sleepStartedAt;delete s.sleepStartValue;}
 }
 export function spiritCost(kind:string):number {
-  if(['body.sleep','body.wake','service.sweet','qq.send'].includes(kind)||kind.startsWith('care.'))return 0;
+  if(['body.sleep','body.wake','service.sweet','service.buy-rice','service.eat-rice','qq.send'].includes(kind)||kind.startsWith('care.'))return 0;
   if(kind==='learning.observe'||kind==='image.observe')return 4;
   if(kind==='labor.step')return 2;
   if(kind==='body.activity')return 1;
@@ -62,5 +62,11 @@ export function checkSpirit(life:Life,kind:string,now=Date.now()):void {
 export function spendSpirit(life:Life,kind:string,now=Date.now(),forcedLabor=false):number {
   if(!forcedLabor||kind!=='labor.step')checkSpirit(life,kind,now);else advanceSpirit(life,now);
   const s=ensureSpirit(life,now),cost=spiritCost(kind)*fatigueMultiplier(s,now);
+  s.value=clamp(s.value-cost);return cost;
+}
+
+/** User-initiated conversation remains possible when exhausted; fatigue is retained. */
+export function spendConversationSpirit(life:Life,now=Date.now()):number {
+  const s=advanceSpirit(life,now),cost=spiritCost('thought')*fatigueMultiplier(s,now);
   s.value=clamp(s.value-cost);return cost;
 }

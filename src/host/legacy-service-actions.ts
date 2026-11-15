@@ -1,3 +1,4 @@
+import {availableRice} from './rice-inventory.js';
 import {createHash} from 'node:crypto';
 import {actHumanity} from '../../vendor/dsh-pet/src/host/humanity.mjs';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
@@ -27,7 +28,7 @@ export function createLegacyServiceActions(store:{loadEnvelope(id:string):Promis
       }
       if(!action){
         if(input.wishId!==undefined && (!wish || wish.status!=='pending' || wish.topic!==phone?.[1].trim() || wish.ability!==input.ability || !['search','fetch','bili','image'].includes(wish.ability)))throw Error('念想或能力已变化');
-        const item=kind==='service.eat-rice'?(state.legacy as any).services?.inventory?.find((x:any)=>x.status==='available'):null;
+        const item=kind==='service.eat-rice'?availableRice(state)[0]:null;
         if(kind==='service.eat-rice'&&!item)throw Error('没有可吃的饭，先从冰箱买一碗');
         const fetchUrl=wish?.ability==='fetch'?phone?.[1].match(/https?:\/\/[^\s]+/i)?.[0]:undefined;
         if(wish?.ability==='fetch'&&!fetchUrl)throw Error('网页念想需要有效的公开网址');

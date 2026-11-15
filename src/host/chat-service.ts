@@ -1,3 +1,4 @@
+import {setSpiritRest} from '../kernel/spirit.js';
 import {promptData} from './prompt-data.js';
 import {COMPANION_PERSONALITY,TIME_AWARENESS,GROUP_PERSONALITY} from './companion-personality.js';
 import {extractThought} from './thought-expression.js';
@@ -74,7 +75,7 @@ export class CanonicalChat {
       if(memoryMatch && actor==='dad') {const content=memoryMatch[1].trim();if(content){const memoryId='chat-memory:'+id;draft.life.memories.push({id:memoryId,kind:'semantic',content,sourceIds:[userId],evidenceLevel:'reported',valid:true,createdAt:now});if(/(?:我会|我答应|我承诺|我保证)/u.test(content))draft.life.commitments.push({id:'chat-commitment:'+id,description:content,status:'open',sourceIds:[userId]});}}
       if(input.channel==='desktop')draft.life.events.push({eventId:'chat-social:'+id,petId:input.petId,type:'social.message',source:input.channel,actorId:'dad',occurredAt:now,receivedAt:now,evidenceLevel:'observed',causationId:userId,payload:{}});
       rebuildRelationships(draft.life);
-      if(!text.startsWith('/')&&!/^(?:确认|确认开工|我确认|就这么定了)[。！!]?$/u.test(text))modelTicket=this.budget.reserveInteractive?.(draft);legacy.chatTurns[id]={fingerprint,status:'running',at:Date.now()};if(this.reader.projectEnvelope){turnSnapshot=structuredClone(draft);snapshotReady({reply:null});}return {reply:null};
+      if(!text.startsWith('/')&&!/^(?:确认|确认开工|我确认|就这么定了)[。！!]?$/u.test(text))modelTicket=this.budget.reserveInteractive?.(draft);legacy.chatTurns[id]={fingerprint,status:'running',at:Date.now(),wakeRequested:actor==='dad'&&input.channel!=='qq-group'};if(this.reader.projectEnvelope){turnSnapshot=structuredClone(draft);snapshotReady({reply:null});}return {reply:null};
     });
     void initialCommit.catch(()=>reservationAbort.abort());
     const initial=await Promise.race([initialCommit,prepared]);
@@ -103,6 +104,19 @@ export class CanonicalChat {
         const reply=input.channel==='qq-group'?'工作约定已处理。':'已按确认的条件处理工作约定。';
         await this.edit(input.petId,draft=>{const legacy=draft.legacy as Record<string,any>,p=legacy.chatLaborProposals?.[code],turn=legacy.chatTurns?.[id];if(!p||p.status!=='pending'||!turn||turn.status!=='running')throw Error('工作提案已变化');p.status='confirmed';p.confirmationSource='chat-user:'+id;turn.status='completed';turn.reply=reply;turn.sources=[p.sourceId,'chat-user:'+id];const at=new Date().toISOString();draft.life.events.push({eventId:'chat-assistant:'+id,petId:input.petId,type:'conversation.assistant',source:input.channel,occurredAt:at,receivedAt:at,evidenceLevel:'inferred',causationId:'chat-user:'+id,payload:{text:reply,channel:input.channel,sourceIds:turn.sources}});});
         return reply;
+      }
+      const beforeWake=turnSnapshot??await this.reader.loadEnvelope(input.petId);
+      if((beforeWake?.legacy as any)?.chatTurns?.[id]?.wakeRequested){
+        const human=beforeWake!.humanity as any;
+        if(human.sleeping){
+          await initialCommit;
+          // Wake through the actual desktop command/receipt path, not a claimed wake.
+          if(this.service)await this.service(input.petId,{key:'chat-wake:'+id.slice(0,32),command:'/醒来'});
+          turnSnapshot=await this.reader.loadEnvelope(input.petId)??undefined;
+        }else if(beforeWake!.life.spirit?.mode!=='awake'||human.restingUntil>Date.now()){
+          await initialCommit;await this.edit(input.petId,draft=>{setSpiritRest(draft.life,'awake');(draft.humanity as any).restingUntil=0;});
+          turnSnapshot=await this.reader.loadEnvelope(input.petId)??undefined;
+        }
       }
       // Infer from the prepared turn snapshot; publication and tool effects wait for its commit.
       const state=turnSnapshot&&this.reader.projectEnvelope?this.reader.projectEnvelope(turnSnapshot):await this.reader.load(input.petId);if(!state||!state.legacyContext?.personaDescription)throw new Error('角色状态不可用');

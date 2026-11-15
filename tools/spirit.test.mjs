@@ -102,3 +102,12 @@ test('chat reservation charges its first model call in the same transaction and 
  await budget.runInteractiveReserved('main',ticket,async()=>{await budget.reserve('provider','model',f.gate.signal);assert.equal(f.d.life.spirit.value,spirit);await assert.rejects(budget.reserve('provider','model',f.gate.signal),/额度不足/);});
  assert.equal(f.d.legacy.usage[day].interactiveCalls,1);assert.throws(()=>budget.runInteractiveReserved('main',ticket,async()=>{}),/票据无效/);
 });
+
+
+test('exhaustion and sleep never reject interactive model calls or essential food actions',async()=>{
+ const f=fixture(),budget=new DurableCognitiveBudget(f.store,f.uow,f.gate);f.d.life.spirit.value=0;setSpiritRest(f.d.life,'sleep');
+ checkSimulatedSpending(f.d,'chat');
+ await budget.runAs('main','interactive',()=>budget.reserve('provider','model',f.gate.signal));assert.equal(f.d.life.spirit.value,0);
+ assert.equal(f.d.life.spirit.mode,'sleep');assert.equal(await budget.reserve('main'),null);
+ setSpiritRest(f.d.life,'awake');f.d.life.spirit.value=0;assert.doesNotThrow(()=>spendSpirit(f.d.life,'service.buy-rice'));assert.doesNotThrow(()=>spendSpirit(f.d.life,'service.eat-rice'));assert.equal(f.d.life.spirit.value,0);
+});

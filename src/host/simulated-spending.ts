@@ -4,7 +4,8 @@ import type {CanonicalEnvelope} from '../storage/postgres.js';
 type Kind='chat'|'whisper'|'diary'|'feed';
 /** Validate both before an expensive model call and in its result transaction. */
 export function checkSimulatedSpending(draft:CanonicalEnvelope,kind:Kind):void {
-  if(kind==='chat'||kind==='whisper'){checkSpirit(draft.life,kind);return;}
+  if(kind==='chat')return;
+  if(kind==='whisper'){checkSpirit(draft.life,kind);return;}
   const pet=draft.legacy as Record<string,any>,wallet=pet.wallet,cost=pet.config?.costs?.[kind];
   if(!wallet||!Number.isFinite(wallet.balance)||wallet.balance<0||typeof wallet.frozen!=='boolean'||!Number.isFinite(cost)||cost<0)throw Error('模拟饭钱配置不可用');
   if(kind==='diary'&&!wallet.frozen&&wallet.balance<cost)throw Error('模拟饭钱不足，请先添加饭钱');

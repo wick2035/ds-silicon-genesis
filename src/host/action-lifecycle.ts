@@ -1,3 +1,4 @@
+import {hasActiveConversation} from './active-conversation.js';
 import {isForcedLabor,forcedLaborState} from './forced-labor.js';
 import {sweetPrice} from './spirit-activity.js';
 import {selfActionState} from './self-action-state.js';
@@ -92,6 +93,7 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
     try {
       // A proposal was accepted earlier. Revalidate it against the locked latest
       // state, not against its historical proposal version.
+      if(action.actionType==='body.sleep'&&hasActiveConversation(draft)&&!(draft.legacy as any).manualServiceRequests?.[action.id]&&!action.sourceIds.some(id=>id.startsWith('chat-user:')))throw Error('爸爸正在和我说话，先完成这轮对话');
       if(action.actionType==='service.sweet')sweetPrice(draft);
       if(!isForcedLabor(draft,action))checkSpirit(draft.life,action.actionType,this.clock().valueOf());
       const proposal={...action, expectedStateVersion:draft.version};

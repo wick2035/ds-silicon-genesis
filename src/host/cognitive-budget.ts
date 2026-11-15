@@ -1,4 +1,4 @@
-import {spendSpirit} from '../kernel/spirit.js';
+import {spendSpirit,spendConversationSpirit} from '../kernel/spirit.js';
 import {budgetView} from './budget-view.js';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -26,7 +26,7 @@ export class DurableCognitiveBudget implements CognitiveBudget, ModelBudget {
     });
   }
   private chargeDraft(draft:CanonicalEnvelope,category:Category):void {
-    try{spendSpirit(draft.life,'thought');}catch{throw exhausted;}
+    try{if(category==='interactive')spendConversationSpirit(draft.life);else spendSpirit(draft.life,'thought');}catch{throw exhausted;}
     const pet=draft.legacy as Record<string,any>, constraints=draft.life.constraints;
     const limit=pet.config?.learning?.dailyModelCalls;
     if(category!=='interactive' && (constraints.paused || !Number.isSafeInteger(limit) || limit<0))throw exhausted;
