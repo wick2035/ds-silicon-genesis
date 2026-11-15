@@ -51,7 +51,7 @@ test('移动与动画都结束后才报告走动完成',async()=>{
   const video={readyState:2,paused:false,duration:3,playbackRate:1,addEventListener(name,cb){if(name==='ended')ended=cb;}};
   class Sprite {playIdle(){} switchTo(name){this.anim=name;} dispose(){} showWhisper(){}}
   const ctx={PetSprite:Sprite,window:{petBridge:{canStartIdleMotion:async()=>true,reportActionReceipt:async r=>receipts.push(r)}},S:{screenOfBox:()=>0},AREAS:[{x:0,width:1000}],VIEW:{w:1000,h:1000},
-    requestAnimationFrame(fn){return setImmediate(()=>{frames++;if(frames===2)ended?.();if(frames===4){sprite.pos.x=200;sprite.posFollow=null;}fn();});},cancelAnimationFrame:clearImmediate,setTimeout,clearTimeout};
+    requestAnimationFrame(fn){return setImmediate(()=>{frames++;if(frames===2)ended?.();if(frames===4){sprite.pos.x=200;sprite.posFollow=null;}fn();});},cancelAnimationFrame:clearImmediate,setTimeout,clearTimeout,setInterval,clearInterval};
   vm.runInNewContext(source,ctx);const sprite=new Sprite();Object.assign(sprite,{ac:new AbortController(),pet:{id:'main'},dragState:{active:false},front:0,videoA:video,videoB:video,pos:{x:0,y:0},halfW:10,halfH:10,posFollow:null,stopMove(){},throwSpaceOf(){return {};},moveToCenter(){this.posFollow=1;}});
   await sprite.executeBody({id:'walk-4',actionId:'walk-4',index:0,source:'silicon-walk',steps:[{action:'walk',target:'right'}]},{walk:['walk']});
   assert.ok(frames>=4);assert.deepEqual(receipts.map(r=>r.status),['playing','completed']);assert.equal(receipts[1].distance,200);
@@ -82,4 +82,19 @@ test('原地玩耍无需伪造位移，完成的动画才有回执',async()=>{
   await channel.receipt({petId:'main',id,actionId:id,index:0,surface:'desktop',status:'completed',activity:'cube',played:true,distance:0});
   const result=await pending;assert.equal(result.status,'completed');
   assert.doesNotThrow(()=>projectOutcome({legacy:{},humanity:{},life:{}},intent,result,new Date().toISOString(),'receipt'));channel.close();
+});
+
+
+test('操作其他窗口的鼠标或键盘会中断正在播放的自主玩耍，并清理检测计时器',async()=>{
+  const source=await readFile(new URL('../vendor/dsh-pet/runtime/electron-helper/sprite/desktop-body.js',import.meta.url),'utf8');
+  const receipts=[];let checkInput,cleared=false,stops=0,checks=0;
+  class Sprite{playIdle(){this.returned=true;}switchTo(name){this.anim=name;}dispose(){}showWhisper(){}}
+  const video={readyState:2,paused:false,addEventListener(){}};
+  const ctx={PetSprite:Sprite,window:{petBridge:{canStartIdleMotion:async()=>++checks===1,reportActionReceipt:async r=>receipts.push(r)}},
+    requestAnimationFrame:()=>1,cancelAnimationFrame(){},setTimeout,clearTimeout,setInterval(fn){checkInput=fn;return 42;},clearInterval(id){cleared=id===42;}};
+  vm.runInNewContext(source,ctx);const sprite=new Sprite();Object.assign(sprite,{ac:new AbortController(),dragState:{active:false},pos:{x:50,y:60},stopMove(){stops++;},videoA:video,videoB:video});
+  const pending=sprite.executeBody({id:'cube-interrupted',actionId:'cube-interrupted',index:0,source:'silicon-walk',steps:[{action:'cube'}]},{cube:['原地专心玩魔方']});
+  await new Promise(setImmediate);assert.equal(sprite.bodyExecuting,true);await checkInput();await pending;
+  assert.equal(receipts.at(-1).status,'interrupted');assert.equal(sprite.bodyExecuting,false);assert.equal(sprite.returned,true);assert.equal(cleared,true);assert.ok(stops>=2);
+  assert.deepEqual(sprite.pos,{x:50,y:60});
 });

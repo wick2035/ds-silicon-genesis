@@ -10,7 +10,10 @@ type Obj = Record<string,any>;
 const hash = (s:string) => createHash('sha256').update(s).digest('hex');
 const key = (s:unknown): s is string => typeof s === 'string' && s.length > 0 && s.length <= 200 && !/[\x00-\x1f]/.test(s);
 const relayKey = (eventId:string) => hash('proactive-relay:'+eventId);
-const RELAY_LIFETIME=120000, CONTACT_INTERVAL=6*60*60*1000, CONTACT_DAY=24*60*60*1000;
+const RELAY_LIFETIME=120000, CONTACT_INTERVAL=2*60*60*1000;
+const MAX_REPLIES=3, SENTENCE_PRICE=0.2;
+const sentenceSegmenter=new Intl.Segmenter('zh',{granularity:'sentence'});
+const sentences=(text:string)=>text.split(/\r?\n/u).flatMap(line=>[...sentenceSegmenter.segment(line)].map(s=>s.segment.trim())).filter(Boolean);
 function relayText(draft:CanonicalEnvelope,answerId:string):string|null {
   const answer=draft.life.events.find(e=>e.eventId===answerId);
   const request=draft.life.events.find(e=>e.eventId===answer?.causationId);
@@ -18,7 +21,7 @@ function relayText(draft:CanonicalEnvelope,answerId:string):string|null {
   if(!answer||!request||answer.type!=='conversation.assistant'||answer.source!=='desktop'||(!selfExpression && (request.type!=='interaction.requested'||!['whisper','physical','care','worksite'].includes(String((request.payload as Obj)?.kind))))||Object.hasOwn(draft.life.invalidSources,answerId)||Object.hasOwn(draft.life.invalidSources,request.eventId))return null;
   const text=redactDadNames(String((answer.payload as Obj)?.text||'').trim());
   let content='';for(const char of text){if(content.length+char.length>1800)break;content+=char;}
-  return content||null;
+  return sentences(content).slice(0,MAX_REPLIES).join('')||null;
 }
 function nextReplySeq(draft:CanonicalEnvelope,replyTo:string,scene:string):number {
   return Math.max(0,...draft.life.actions.filter(a=>a.actionType==='qq.send' && (a.parameters as Obj).replyTo===replyTo && (a.parameters as Obj).scene===scene).map(a=>Number((a.parameters as Obj).replySeq)||1))+1;
@@ -132,7 +135,7 @@ export class CanonicalQQ {
       if(replyTo && (!source || (source.payload as Obj)?.messageId!==replyTo)) throw new Error('QQ 回复来源不匹配');
       const actionId='qq-send:'+id;
       const content=redactDadNames(text.trim());
-      const replySeq=nextReplySeq(draft,replyTo,scene);if(replySeq>5)throw Error('QQ 回复次数已用完');
+      const replySeq=nextReplySeq(draft,replyTo,scene);if(replySeq>MAX_REPLIES)throw Error('QQ 连续回复最多三条');
       const proposal:ActionProposal={id:actionId,petId,actionType:'qq.send',parameters:{scene,destination,content,replyTo,replySeq},priority:50,interruptPolicy:'noninterruptible',requiredCapabilities:['qq.send'],expectedStateVersion:draft.version,sourceIds:[sourceEventId]};
       const state:LifeState={...structuredClone(draft.life),petId,version:draft.version,...this.body(draft)};
       qq.outbound[id]={at:Date.now(),state:'pending',actionId,fingerprint};
@@ -152,19 +155,29 @@ export class CanonicalQQ {
     return this.change(petId,draft=>{
       const qq=(draft.legacy as Obj).qq, started=this.#relayStarted.get(petId), now=Date.now();
       if(!Number.isFinite(started)||!key(qq?.identity?.ownerOpenid)||!qq.outbound)return {value:null};
-      const attempts=(Object.values(qq.outbound) as Obj[]).filter(e=>e.proactive===true && Number.isFinite(e.at) && e.at<=now && now-e.at<CONTACT_DAY);
-      if(attempts.length>=2 || attempts.some(e=>now-e.at<CONTACT_INTERVAL))return {value:null};
+      const attempts=(Object.values(qq.outbound) as Obj[]).filter(e=>e.proactive===true && Number.isFinite(e.at));
+      if(attempts.some(e=>now-e.at<CONTACT_INTERVAL))return {value:null};
 
       for(const event of draft.life.events){
         const at=Date.parse(event.receivedAt);
         if(!Number.isFinite(at)||at<started!||at>now||now-at>RELAY_LIFETIME)continue;
         const content=relayText(draft,event.eventId);if(!content)continue;
         const id=relayKey(event.eventId);if(qq.outbound[id])continue;
+        const wallet=(draft.legacy as Obj).wallet, amount=Math.round(sentences(content).length*SENTENCE_PRICE*100)/100;
+        if(!Number.isFinite(wallet?.balance)||wallet.balance<amount)continue;
         const scene='c2c', actionId='qq-send:'+id, sourceEventId=event.eventId;
         const fingerprint=hash(JSON.stringify({scene,text:content,sourceEventId}));
         const proposal:ActionProposal={id:actionId,petId,actionType:'qq.send',parameters:{scene,destination:qq.identity.ownerOpenid,content,proactive:true},priority:50,interruptPolicy:'noninterruptible',requiredCapabilities:['qq.send'],expectedStateVersion:draft.version,sourceIds:[sourceEventId]};
-        qq.outbound[id]={at:now,state:'pending',actionId,fingerprint,proactive:true};
+        qq.outbound[id]={at:now,state:'pending',actionId,fingerprint,proactive:true,amount};
         const state:LifeState={...structuredClone(draft.life),petId,version:draft.version,...this.body(draft)};validateQQReply(draft,state,proposal);
+        // Reserve the price with the durable send intent. Unknown delivery must
+        // never be retried or charged a second time. Explicit contact fees also
+        // apply when ordinary daily consumption is frozen.
+        wallet.balance=Math.round((wallet.balance-amount)*100)/100;
+        if(wallet.balance===0){wallet.emptySince=now;delete wallet.emptyAskedAt;}
+        const financeId='finance:'+actionId,stampFinance=new Date(now).toISOString();
+        ((draft.legacy as Obj).events ||= []).push({id:financeId,kind:'wallet-spend',text:`主动联系消耗 ${amount} token，余额 ${wallet.balance} token`,ts:now});
+        draft.life.events.push({eventId:financeId,petId,type:'wallet.spend',source:'canonical',occurredAt:stampFinance,receivedAt:stampFinance,evidenceLevel:'observed',payload:{kind:'proactive',amount,balance:wallet.balance}});
         const stamp=new Date(now).toISOString();draft.life.actions.push({...proposal,status:'PENDING',createdAt:stamp,updatedAt:stamp});
         return {value:actionId,intents:[{id:actionId,type:'qq.send',payload:{actionId,petId,actionType:'qq.send',parameters:proposal.parameters}}]};
       }
@@ -212,7 +225,7 @@ export function validateQQReply(draft:CanonicalEnvelope,state:LifeState,proposal
     return;
   }
   const anchor=source;
-  if(proposal.actionType!=='qq.send' || !entry || entry.fingerprint!==fingerprint || !anchor || anchor.source!=='qq' || anchor.evidenceLevel!=='observed' || !['social.message','social.paired'].includes(anchor.type) || (anchor.payload as Obj)?.messageId!==p.replyTo || (anchor.payload as Obj)?.scene!==p.scene || proposal.sourceIds.length!==1 || (p.replySeq!==undefined&&(!Number.isInteger(p.replySeq)||p.replySeq<1||p.replySeq>5))) throw Error('QQ 会话回复来源无效');
+  if(proposal.actionType!=='qq.send' || !entry || entry.fingerprint!==fingerprint || !anchor || anchor.source!=='qq' || anchor.evidenceLevel!=='observed' || !['social.message','social.paired'].includes(anchor.type) || (anchor.payload as Obj)?.messageId!==p.replyTo || (anchor.payload as Obj)?.scene!==p.scene || proposal.sourceIds.length!==1 || (p.replySeq!==undefined&&(!Number.isInteger(p.replySeq)||p.replySeq<1||p.replySeq>MAX_REPLIES))) throw Error('QQ 会话回复来源无效');
   const interactive={...state,constraints:{...state.constraints,paused:false}};
   validateProposal(interactive,proposal);
 }

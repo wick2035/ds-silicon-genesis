@@ -25,14 +25,14 @@ test('forwards only new proactive expression text without a QQ reply window',asy
   assert.equal((await execute('main',f.intents[0],new AbortController().signal)).status,'completed');assert.equal(sent[0].replyTo,undefined);
 });
 
-test('ignores expired, deleted and unrelated expressions; zero rice money does not mute speech',async()=>{
+test('ignores expired, deleted and unrelated expressions; zero rice money prevents proactive contact',async()=>{
   const f=fixture();await f.qq.enableRelay('main');f.expression('expired');f.state.life.events.at(-1).receivedAt=new Date(Date.now()-121000).toISOString();f.expression('deleted');f.state.life.invalidSources['request-deleted']='removed';f.expression('other','help');
-  assert.equal(await f.qq.enqueueNextRelay('main',f.authority),null);f.expression('unfunded','physical');f.state.legacy.wallet.balance=0;assert.ok(await f.qq.enqueueNextRelay('main',f.authority));
+  assert.equal(await f.qq.enqueueNextRelay('main',f.authority),null);f.expression('unfunded','physical');f.state.legacy.wallet.balance=0;assert.equal(await f.qq.enqueueNextRelay('main',f.authority),null);
 });
 
-test('attempts share a durable six-hour and two-per-day budget, including unknown results',async()=>{
+test('attempts share a durable two-hour interval including unknown results, without the old daily cap',async()=>{
   const f=fixture();await f.qq.enableRelay('main');f.expression('first');assert.ok(await f.qq.enqueueNextRelay('main',f.authority));const first=Object.values(f.state.legacy.qq.outbound)[0];first.state='unknown';f.expression('second','care');assert.equal(await f.qq.enqueueNextRelay('main',f.authority),null);
-  Object.values(f.state.legacy.qq.outbound)[0].at=Date.now()-6*60*60*1000-1000;assert.ok(await f.qq.enqueueNextRelay('main',f.authority));const second=Object.values(f.state.legacy.qq.outbound)[1];second.at=Date.now()-6*60*60*1000-1000;f.expression('third','worksite');assert.equal(await f.qq.enqueueNextRelay('main',f.authority),null);
+  Object.values(f.state.legacy.qq.outbound)[0].at=Date.now()-2*60*60*1000-1000;assert.ok(await f.qq.enqueueNextRelay('main',f.authority));const second=Object.values(f.state.legacy.qq.outbound)[1];second.at=Date.now()-2*60*60*1000-1000;f.expression('third','worksite');assert.ok(await f.qq.enqueueNextRelay('main',f.authority));
 });
 
 test('gateway posts proactive messages without a reply id or sequence',async()=>{
@@ -45,4 +45,33 @@ test('gateway posts proactive messages without a reply id or sequence',async()=>
     assert.equal((await gateway.executor('main',intent,controller.signal)).status,'completed');
     assert.match(calls[0].url,/\/v2\/users\/owner\/messages$/);assert.deepEqual(calls[0].body,{content:'早上好',msg_type:0});
   } finally {controller.abort();gateway.stop();}
+});
+
+
+test('charges 0.2 per sentence once, caps at three, and ignores daily freeze',async()=>{
+  const f=fixture();await f.qq.enableRelay('main');f.state.legacy.wallet={balance:0.6,frozen:true};
+  f.expression('priced','whisper','想爸爸了。今天很开心！想聊聊天？第四句。');
+  const id=await f.qq.enqueueNextRelay('main',f.authority);assert.ok(id);
+  assert.equal(f.state.life.actions.find(a=>a.id===id).parameters.content,'想爸爸了。今天很开心！想聊聊天？');
+  assert.equal(f.state.legacy.wallet.balance,0);
+  assert.equal(f.state.life.events.filter(e=>e.type==='wallet.spend').length,1);
+  assert.equal(await f.qq.enqueueNextRelay('main',f.authority),null);
+  assert.equal(f.state.legacy.wallet.balance,0);
+});
+
+test('insufficient balance never queues or charges a multi-sentence contact',async()=>{
+  const f=fixture();await f.qq.enableRelay('main');f.state.legacy.wallet.balance=0.39;
+  f.expression('too-expensive','whisper','第一句。第二句。');
+  assert.equal(await f.qq.enqueueNextRelay('main',f.authority),null);
+  assert.equal(f.state.legacy.wallet.balance,0.39);assert.equal(f.intents.length,0);
+});
+
+test('one QQ incoming message permits at most three replies, with idempotent replay',async()=>{
+  const f=fixture(),source=f.event('incoming','social.message','qq','你好',{payload:{messageId:'message',scene:'c2c'}});
+  f.state.life.events.push(source);
+  for(let i=1;i<=3;i++)await f.qq.enqueue('main','reply-'+i,'c2c','回复'+i,'incoming','message',f.authority);
+  assert.deepEqual(f.state.life.actions.map(a=>a.parameters.replySeq),[1,2,3]);
+  await f.qq.enqueue('main','reply-3','c2c','回复3','incoming','message',f.authority);
+  await assert.rejects(()=>f.qq.enqueue('main','reply-4','c2c','第四条','incoming','message',f.authority),/最多三条/);
+  assert.equal(f.intents.length,3);assert.equal(f.state.legacy.wallet.balance,100);
 });

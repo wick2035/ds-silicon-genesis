@@ -67,10 +67,17 @@
     if(gentleCare){this.bodyProtected=false;this.painStage?.classList.remove('is-crying');this.paintSoft?.();}
     this.stopMove();
     if(step.action==='beg')this.showRiceProp?.('bowl');
-    const from={...this.pos};let cancelled=false,played=false,videoEnded=false,video,frame,timer;
+    const from={...this.pos};let cancelled=false,played=false,videoEnded=false,video,frame,timer,inputTimer,inputCheck=false,inputActive=true;
     try{
       const done=new Promise((resolve,reject)=>{
         this.cancelBody=()=>{cancelled=true;this.stopMove();reject(Error('爸爸的互动或新动作打断了这次尝试'));};
+        // System input anywhere on the computer ends autonomous play, including
+        // typing in another window. Check throughout the action, not just before it.
+        if(c.source==='silicon-walk')inputTimer=setInterval(async()=>{
+          if(inputCheck||cancelled)return;inputCheck=true;
+          try{if(!await window.petBridge.canStartIdleMotion().catch(()=>false)&&inputActive)this.cancelBody?.();}
+          finally{inputCheck=false;}
+        },500);
         timer=setTimeout(()=>reject(Error('动作素材播放超时')),22000);
         this.switchTo(asset,true);
         const watch=()=>{
@@ -96,7 +103,7 @@
       await done;
       await post('completed',{played,distance:Math.hypot(this.pos.x-from.x,this.pos.y-from.y)});
     }catch(e){await post(cancelled?'interrupted':'failed',{reason:e.message});}
-    finally{clearTimeout(timer);cancelAnimationFrame(frame);if(video)video.playbackRate=1;this.bodyExecuting=false;this.cancelBody=null;this.careVisual=false;if(gentleCare&&this.humanity)this.syncPainState(this.humanity);this.paintSoft?.();if(!this.ac.signal.aborted&&!this.bodyProtected&&!this.sleeping)this.playIdle();}
+    finally{inputActive=false;clearTimeout(timer);clearInterval(inputTimer);cancelAnimationFrame(frame);if(video)video.playbackRate=1;this.bodyExecuting=false;this.cancelBody=null;this.careVisual=false;if(gentleCare&&this.humanity)this.syncPainState(this.humanity);this.paintSoft?.();if(!this.ac.signal.aborted&&!this.bodyProtected&&!this.sleeping)this.playIdle();}
   };
   proto.dispose=function(...args){this.cancelBody?.();return old.dispose.apply(this,args);};
 })();
