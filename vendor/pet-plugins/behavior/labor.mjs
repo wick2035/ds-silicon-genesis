@@ -123,7 +123,7 @@ export function attachLaborRuntime(Runtime) {
       const l=ledger(p), c=active(p);
       if(o.action==='offer') {
         if(c && c.status!=='offered') throw Error('先完成并结清上一份工钱');
-        const trips=number(o.trips,50), wage=number(o.wage,1000000);
+        const trips=number(o.trips,500), wage=number(o.wage,1000000);
         if(c)c.status='declined';
         const contract={id:randomUUID(),status:'offered',trips,wage,done:0,paid:0,carrying:false,created:now,surface:'desktop',assetRoot:o.assetRoot||id,reminders:0,lastReminder:0,payments:[],decisions:[],nextDecision:0,workPermit:false,thought:'',behavior:'商量工钱',awaitingChat:!!o.fromChat};
         l.draft=null;l.execution=null;
@@ -300,7 +300,7 @@ export function attachLaborRuntime(Runtime) {
           fresh.thought=String(d.thought||'').slice(0,100);fresh.behavior={accept:'勉强答应啦',bargain:'撒娇讲价',work:'按计划接着搬',slack:'蹲下摸鱼',tantrum:'气鼓鼓耍赖',protest:'嘟囔着抱怨',rest:'坐下歇一会儿',beg:'伸手讨工钱'}[d.choice];
           fresh.workPermit=d.choice==='work';fresh.batchRemaining=fresh.workPermit?Math.min(fresh.trips-fresh.done,Number.isInteger(d.batchTrips)&&d.batchTrips>=1&&d.batchTrips<=WORK_BATCH?d.batchTrips:WORK_BATCH):0;
           fresh.nextDecision=this.store.clock()+Math.max(phase==='work'?WORK_REPLAN_MS:20000,Math.min(60,Math.max(20,Number(d.seconds)||30))*1000);
-          if(phase==='offer'){fresh.accepted=d.choice==='accept';fresh.counter=d.choice==='bargain'?{wage:Number.isInteger(d.counterWage)&&d.counterWage>0&&d.counterWage<=1000000?d.counterWage:fresh.wage,trips:Number.isInteger(d.counterTrips)&&d.counterTrips>0&&d.counterTrips<=50?d.counterTrips:fresh.trips}:null;}
+          if(phase==='offer'){fresh.accepted=d.choice==='accept';fresh.counter=d.choice==='bargain'?{wage:Number.isInteger(d.counterWage)&&d.counterWage>0&&d.counterWage<=1000000?d.counterWage:fresh.wage,trips:Number.isInteger(d.counterTrips)&&d.counterTrips>0&&d.counterTrips<=500?d.counterTrips:fresh.trips}:null;}
           this.store.eventIn(p,'labor-choice',`我自己决定：${fresh.behavior}${fresh.batchRemaining?'，计划连续搬 '+fresh.batchRemaining+' 趟':''}`,null);
           p.labor.error=null;
         });
@@ -353,7 +353,7 @@ export function attachLaborRuntime(Runtime) {
     if(c?.awaitingChat&&c.id===expected&&generated.ok)this.store.update(id,p=>{
       const c=active(p);c.awaitingChat=false;
       if(!plan||!['accept','bargain'].includes(plan.choice)){p.labor.error='她还没有明确答应这份活，可以在聊天里再问问，或点“催她一下”。';return;}
-      c.accepted=plan.choice==='accept';c.counter=plan.choice==='bargain'?{wage:Number.isInteger(plan.counterWage)&&plan.counterWage>0&&plan.counterWage<=1000000?plan.counterWage:c.wage,trips:Number.isInteger(plan.counterTrips)&&plan.counterTrips>0&&plan.counterTrips<=50?plan.counterTrips:c.trips}:null;
+      c.accepted=plan.choice==='accept';c.counter=plan.choice==='bargain'?{wage:Number.isInteger(plan.counterWage)&&plan.counterWage>0&&plan.counterWage<=1000000?plan.counterWage:c.wage,trips:Number.isInteger(plan.counterTrips)&&plan.counterTrips>0&&plan.counterTrips<=500?plan.counterTrips:c.trips}:null;
       c.behavior=c.accepted?'勉强答应啦':'撒娇讲价';c.decisions.push({phase:'offer',status:'done',choice:plan.choice,speech:generated.text.replace(/<body>[\s\S]*?<\/body>/g,'').slice(0,240),ts:this.store.clock()});
       this.store.eventIn(p,'labor-choice','我在聊天里'+(c.accepted?'答应了搬砖约定':'提出了新的搬砖条件'),null);p.labor.error=null;
     });

@@ -37,7 +37,7 @@ export function createFinanceManagement(store:Reader,gate:PetGate,domain:LegacyD
         const action=input.action;
         if(!['offer','confirm','decline','pause','resume','counter','nudge','pay','adjust','cancel','settle-cancelled'].includes(String(action)))throw Error('工作操作无效');
         if(action==='offer'||action==='adjust') {
-          if(!Number.isInteger(input.trips)||Number(input.trips)<1||Number(input.trips)>50||!Number.isInteger(input.wage)||Number(input.wage)<1||Number(input.wage)>1_000_000)throw Error('趟数须为 1–50，工钱须为 1–1000000 的整数');
+          if(!Number.isInteger(input.trips)||Number(input.trips)<1||Number(input.trips)>500||!Number.isInteger(input.wage)||Number(input.wage)<1||Number(input.wage)>1_000_000)throw Error('趟数须为 1–500，工钱须为 1–1000000 的整数');
           if(action==='adjust'&&(typeof input.id!=='string'||!input.id||input.id.length>140))throw Error('工作约定无效');
           return domain.laborAction(id,requestId,{action,...(action==='adjust'?{id:input.id}:{}),trips:input.trips,wage:input.wage});
         }

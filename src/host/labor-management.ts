@@ -24,7 +24,7 @@ export function manageLabor(store:any,petId:string,input:Obj) {
     if(!['offered','working','paused','unpaid'].includes(c.status))throw Error('这份工作已经结束，请刷新后重试');
     const before={trips:c.trips,wage:c.wage,done:c.done,status:c.status};
     if(input.action==='adjust'){
-      if(!Number.isInteger(input.trips)||input.trips<1||input.trips>50||input.trips<c.done)throw Error('趟数须为 1–50，且不能少于已完成趟数');
+      if(!Number.isInteger(input.trips)||input.trips<1||input.trips>500||input.trips<c.done)throw Error('趟数须为 1–500，且不能少于已完成趟数');
       if(!Number.isInteger(input.wage)||input.wage<1||input.wage>1000000)throw Error('工钱须为 1–1000000 的整数');
       c.trips=input.trips;c.wage=input.wage;c.wageUnspecified=false;c.counter=null;
       if(c.status==='offered')c.accepted=false;

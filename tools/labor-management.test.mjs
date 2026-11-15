@@ -18,15 +18,18 @@ function fixture(){
 const write=(f,action,extra={})=>f.finance.write('main',{kind:'labor',requestId:'request-'+action,action,id:'contract',...extra});
 
 test('途中修改条件保留已完成进度并使旧动作失效',async()=>{
-  const f=fixture();await write(f,'adjust',{trips:12,wage:220});
-  const p=f.get().legacy,c=p.labor.contracts[0];assert.equal(c.done,5);assert.equal(c.trips,12);assert.equal(c.wage,220);assert.equal(c.carrying,false);assert.equal(p.world.command.status,'interrupted');assert.equal(c.revisions[0].before.wage,100);
+  const f=fixture();await write(f,'adjust',{trips:500,wage:220});
+  const p=f.get().legacy,c=p.labor.contracts[0];assert.equal(c.done,5);assert.equal(c.trips,500);assert.equal(c.wage,220);assert.equal(c.carrying,false);assert.equal(p.world.command.status,'interrupted');assert.equal(c.revisions[0].before.wage,100);
+  await assert.rejects(f.finance.write('main',{kind:'labor',requestId:'request-too-many',action:'adjust',id:c.id,trips:501,wage:220}),/1–500/);
   await assert.rejects(f.finance.write('main',{kind:'labor',requestId:'request-bad-edit',action:'adjust',id:c.id,trips:4,wage:1}),/已完成/);
 });
 test('取消一半的工作不会自动结半薪，也不会阻止新增工作',async()=>{
   const f=fixture();await write(f,'cancel');await write(f,'cancel');
   const c=f.get().legacy.labor.contracts[0];assert.equal(c.status,'cancelled');assert.equal(c.done,5);assert.equal(c.paid,0);assert.equal(f.get().legacy.wallet.balance,10000);
   assert.equal((await f.finance.read('main')).labor.current,null);assert.equal((await f.finance.read('main')).labor.history[0].id,c.id);
-  await f.finance.write('main',{kind:'labor',requestId:'request-new-task',action:'offer',trips:3,wage:30});assert.equal(f.get().legacy.labor.contracts.length,2);
+  await f.finance.write('main',{kind:'labor',requestId:'request-new-task',action:'offer',trips:500,wage:30});assert.equal(f.get().legacy.labor.contracts.length,2);
+  assert.equal(f.get().legacy.labor.contracts[1].trips,500);
+  await assert.rejects(f.finance.write('main',{kind:'labor',requestId:'request-too-many-offer',action:'offer',trips:501,wage:30}),/1–500/);
   assert.equal(f.get().legacy.labor.contracts[0].done,5);
 });
 test('取消后的工钱可为零、部分或额外支付，重复请求只入账一次',async()=>{
