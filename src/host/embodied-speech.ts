@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+import {selfModelContext} from './self-model-context.js';
 import {actionCatalog,validateActionParameters} from './action-parameters.js';
 import {conversationContext} from './conversation-context.js';
 import {humanityPrompt} from '../../vendor/dsh-pet/src/host/humanity.mjs';
@@ -23,7 +24,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
       ['body.observed','body.adjusted','wallet','social.care','interaction','interaction.operation','interaction.worksite','labor.changed','action.receipt'].includes(e.type)).slice(-16);
     return {envelope,context:{感受:humanityPrompt(envelope.humanity),生活:conversationContext({...envelope.life,petId,version:envelope.version} as any,envelope),
       近期真实经历:events.map(e=>({id:e.eventId,at:e.occurredAt,actor:e.actorId??'未确认',type:e.type,detail:e.payload})),
-      自我认识:envelope.life.selfModel,当前目标:envelope.life.goals.filter(g=>g.status==='active').slice(-6),精神:envelope.life.spirit,可用能力:envelope.life.constraints.capabilities.filter(c=>c.enabled)}};
+      自我认识:selfModelContext(envelope.life),当前目标:envelope.life.goals.filter(g=>g.status==='active').slice(-6),精神:envelope.life.spirit,可用能力:envelope.life.constraints.capabilities.filter(c=>c.enabled)}};
   }
   async function execute(speech:Speech,type:string,parameters:Record<string,unknown>,key:string,signal:AbortSignal){
     if(!speech.allowActions||signal.aborted||gate.signal.aborted)throw Error('当前发言不能执行行动');
