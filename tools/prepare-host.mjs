@@ -24,6 +24,9 @@ function replaceOnce(needle,replacement) {
   if(output.split(needle).length!==2) throw Error('独立宿主的桥接点格式已改变');
   output=output.replace(needle,replacement);
 }
+// The outer listener buffers requests before plugin routes run. Match the
+// attachment API's binary limit without widening JSON or settings endpoints.
+replaceOnce('const limit = pathname === "/standalone-ai/settings" ? MAX_SETTINGS_BYTES : MAX_REQUEST_BYTES;', 'const limit = pathname === "/api/life/attachment" && req.method === "POST" ? 5_000_000 : pathname === "/standalone-ai/settings" ? MAX_SETTINGS_BYTES : MAX_REQUEST_BYTES;');
 replaceOnce("    const wallet = globalThis[Symbol.for('dsh.pet.companion.v1')]?.store?.read(id)?.wallet;\n    const walletPainChanged = wallet?.balance === 0 && next.stats.pain !== 100;\n    if (wallet?.balance === 0) next.stats.pain = 100;",'    const walletPainChanged = false;');
 replaceOnce('function getHumanityStore() {\n  if (!humanStore)', 'function getHumanityStore() {\n  if (globalThis[Symbol.for("silicon.genesis.enabled")]) throw new Error("旧身心存储已禁用");\n  if (!humanStore)');
 replaceOnce('function observeHumanity(id, leaf, data) {\n  const allow', 'function observeHumanity(id, leaf, data) {\n  if (globalThis[Symbol.for("silicon.genesis.enabled")]) return true;\n  const allow');
