@@ -1,3 +1,4 @@
+import {advanceSpirit} from '../kernel/spirit.js';
 import {applyGoalProposal} from '../kernel/goal-lifecycle.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { strategyScore, validateProposal } from '../kernel/index.js';
@@ -20,9 +21,10 @@ export class CognitiveResultCoordinator {
   async claimCognition(petId:string,intervalSeconds:number,signal:AbortSignal):Promise<boolean>{
     return this.gate.run(petId,async()=>{
       const state=await this.reader.loadEnvelope(petId);if(!state||state.life.constraints.paused||signal.aborted||this.gate.signal.aborted)return false;
+      const spirit=advanceSpirit(state.life);if(spirit.mode!=='awake'||spirit.value<2)return false;
       const now=Date.now(), prior=state.life.nextCognitionAt;
       if(prior && (!Number.isFinite(Date.parse(prior)) || Date.parse(prior)>now))return false;
-      await this.uow.apply(petId,state.version,draft=>{draft.life.nextCognitionAt=new Date(now+intervalSeconds*1000).toISOString();return {};});
+      await this.uow.apply(petId,state.version,draft=>{draft.life.nextCognitionAt=new Date(now+intervalSeconds*(.7+Math.random()*1.6)*1000).toISOString();return {};});
       return true;
     });
   }
@@ -36,6 +38,12 @@ export class CognitiveResultCoordinator {
         if(state.constraints.paused) throw new Error('自主行为已暂停');
         const valid=(id:string)=>!Object.hasOwn(life.invalidSources,id) && life.events.some(e=>e.eventId===id);
         const candidates=result.candidates;
+        if(candidates.thought){
+          const t=candidates.thought;if(!t.sourceIds.every(valid))throw Error('念头来源已变化');
+          const id='thought:'+randomUUID(),at=new Date().toISOString();
+          life.events.push({eventId:id,petId,type:'self.thought',source:'model',occurredAt:at,receivedAt:at,evidenceLevel:'inferred',payload:{...t,sourceIds:t.sourceIds,spirit:life.spirit?.value}});
+          life.memories.push({id:'memory:'+id,kind:'autobiographical',content:t.text+'\n当时感受：'+t.feeling+'\n想做的事：'+t.desire,sourceIds:[id,...t.sourceIds],evidenceLevel:'inferred',valid:true,createdAt:at,feeling:t.feeling,salience:t.salience??.5});
+        }
         if([...candidates.goals,...candidates.plan,...candidates.interests,...candidates.selfModel].some(x=>!x.sourceIds.length||!x.sourceIds.every(valid))) throw new Error('认知来源无效');
         for(const candidate of candidates.goals){
           const id=key('goal',candidate);if(life.goals.some(g=>g.id===id))continue;
@@ -98,7 +106,7 @@ export class CognitiveResultCoordinator {
       catch(error){await this.rejectProposal(petId,actionId,error instanceof Error?error.message:'行动不可用');return;}
       try{await this.actions.queue(petId,actionId,state.version);}catch(error){
         const message=error instanceof Error?error.message:'';
-        if(!/当前桌面空间或工作状态不允许走动|她在网页工地里|探索权限不可用|探索额度配置无效|今日探索额度已用完|探索饭钱配置无效|模拟饭钱不足|图片来源无效/.test(message))throw error;
+        if(!/当前桌面空间或工作状态不允许走动|她在网页工地里|精神不足|探索权限不可用|探索额度配置无效|今日探索额度已用完|探索饭钱配置无效|模拟饭钱不足|图片来源无效/.test(message))throw error;
         const fresh=await this.reader.loadEnvelope(petId);if(fresh?.life.actions.find(a=>a.id===actionId)?.status==='PROPOSED')await this.rejectProposal(petId,actionId,message);else throw error;return;
       }
     }

@@ -1,3 +1,5 @@
+import {sweetPrice} from './spirit-activity.js';
+import {checkSpirit,spendSpirit} from '../kernel/spirit.js';
 import {completeReceiptGoals} from '../kernel/goal-lifecycle.js';
 import {rebuildOutcomeDevelopment} from '../kernel/outcome-development.js';
 import {validateManualService} from './manual-service-validation.js';
@@ -88,12 +90,14 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
     try {
       // A proposal was accepted earlier. Revalidate it against the locked latest
       // state, not against its historical proposal version.
+      if(action.actionType==='service.sweet')sweetPrice(draft);
+      checkSpirit(draft.life,action.actionType,this.clock().valueOf());
       const proposal={...action, expectedStateVersion:draft.version};
       if((draft.legacy as Record<string,any>).worksite?.inside && (action.actionType.startsWith('care.') || ['service.eat-rice','body.sleep','body.wake','token.pickup','body.activity'].includes(action.actionType)))throw Error('她在网页工地里，请先接她回桌面');
       if(action.actionType==='body.activity' && ((draft.legacy as Record<string,any>).space?.mode!=='outside' || (draft.legacy as Record<string,any>).labor?.contracts?.some((c:any)=>c.status==='working')))throw Error('当前桌面空间或工作状态不允许走动');
       if(action.actionType==='labor.step' && (!(draft.legacy as Record<string,any>).worksite?.inside || (draft.legacy as Record<string,any>).world?.command?.surface!=='web'))throw Error('她不在网页工地里');
       if(action.actionType.startsWith('care.') && !(draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])throw Error('照料须由用户手动发起');
-      if(action.actionType==='body.sleep' && !(draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])throw Error('休息须由用户手动发起');
+
       if(action.actionType==='qq.send')validateQQReply(draft,state,proposal);
       else if((draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])validateManualService(draft,state,proposal);
       else validateProposal(state,proposal);
@@ -103,6 +107,7 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
     const now = this.now();
     const eventId = `action-dispatched:${action.id}`;
     assert(!draft.life.events.some(e => e.eventId === eventId), '行动派发事件冲突');
+    spendSpirit(draft.life,action.actionType,Date.parse(now));
     action.status = 'DISPATCHED'; action.updatedAt = now;
     if (intent.type === 'qq.send') {
       const qq = (draft.legacy as Record<string,any>).qq;

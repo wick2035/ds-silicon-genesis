@@ -1,3 +1,5 @@
+import {sweetPrice} from './spirit-activity.js';
+import {checkSpirit} from '../kernel/spirit.js';
 import {validateManualService} from './manual-service-validation.js';
 import { validateProposal } from '../kernel/index.js';
 import type { LifeState } from '../kernel/types.js';
@@ -18,14 +20,16 @@ export class ActionCoordinator {
       const action = matches[0];
       if((draft.legacy as Record<string,any>).worksite?.inside && (action.actionType.startsWith('care.') || ['service.eat-rice','body.sleep','body.wake','token.pickup','body.activity'].includes(action.actionType)))throw Error('她在网页工地里，请先接她回桌面');
       if(action.actionType==='body.activity' && ((draft.legacy as Record<string,any>).space?.mode!=='outside' || (draft.legacy as Record<string,any>).labor?.contracts?.some((c:any)=>c.status==='working')))throw Error('当前桌面空间或工作状态不允许走动');
+      if(action.actionType==='service.sweet')sweetPrice(draft);
+      checkSpirit(draft.life,action.actionType,this.now().valueOf());
       validateActionParameters(action.actionType,action.parameters);
       const state: LifeState = {...structuredClone(draft.life), petId, version:draft.version, ...projectActionBody(draft,this.body(draft),action.actionType)};
       const proposal={...action, expectedStateVersion:draft.version};
       if(action.actionType.startsWith('care.') && !(draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])throw Error('照料须由用户手动发起');
-      if(action.actionType==='body.sleep' && !(draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])throw Error('休息须由用户手动发起');
+
       if((draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])validateManualService(draft,state,proposal);else validateProposal(state,proposal);
       if(action.actionType==='learning.observe'||action.actionType==='image.observe') {
-        const pet=draft.legacy as Record<string,any>, wallet=pet.wallet, cost=pet.config?.costs?.explore;
+        const pet=draft.legacy as Record<string,any>;
         const kind=action.parameters.kind;
         const ability=action.actionType==='image.observe'?'image':kind==='bili'?'bili':kind==='fetch'?'fetch':'search';
         if((ability!=='image'&&!pet.config?.networkLearning) || pet.abilities?.[ability]?.status!=='granted' || (ability==='search' && pet.abilities?.fetch?.status!=='granted')) throw new Error('探索权限不可用');
@@ -34,15 +38,11 @@ export class ActionCoordinator {
         if(!Number.isSafeInteger(daily)||daily<0||!pet.usage||typeof pet.usage!=='object')throw new Error('探索额度配置无效');
         const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
         const usage=pet.usage[day] ||= {exploreRuns:0,modelCalls:0,diaryAttempts:0,diarySuccess:0,totalCalls:0,newStrategies:0,reflectionAttempts:0};
-        if(!Number.isSafeInteger(usage.exploreRuns)||usage.exploreRuns<0||usage.exploreRuns>=Math.min(1,daily))throw new Error('今日探索额度已用完');
+        if(!Number.isSafeInteger(usage.exploreRuns)||usage.exploreRuns<0||usage.exploreRuns>=daily)throw new Error('今日探索额度已用完');
         usage.exploreRuns++;
-        if(!wallet || !Number.isFinite(wallet.balance) || !Number.isFinite(cost) || cost<0) throw new Error('探索饭钱配置无效');
-        const amount=wallet.frozen===true?0:cost;
-        if(wallet.balance<amount) throw new Error('模拟饭钱不足');
         const charges=pet.explorationCharges ||= {};
-        if(Object.hasOwn(charges,actionId)) throw new Error('探索费用标识冲突');
-        wallet.balance=Math.round((wallet.balance-amount)*100)/100;
-        charges[actionId]={amount,status:'reserved'};
+        if(Object.hasOwn(charges,actionId))throw Error('探索费用标识冲突');
+        charges[actionId]={amount:0,status:'reserved'};
       }
       const timestamp = this.now();
       if (!(timestamp instanceof Date) || !Number.isFinite(timestamp.valueOf())) throw new Error('时间无效');

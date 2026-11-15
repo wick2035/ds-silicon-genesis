@@ -13,7 +13,7 @@ export function createLegacyServiceActions(store:{loadEnvelope(id:string):Promis
     const hash=createHash('sha256').update(petId+'\0'+key).digest('hex'),id='legacy-service:'+hash;
     const phone=/^\/手机\s+([^\r\n]+)$/u.exec(command.trim());
     const careCommands:Record<string,string>={'/喂':'care.feed','/喝水':'care.water','/摸摸':'care.pet','/玩':'care.play','/安慰':'care.soothe','/陪伴':'care.accompany'};
-    const kind=command.trim()==='/休息'?'body.sleep':command.trim()==='/醒来'?'body.wake':careCommands[command.trim()]??(/^\/冰箱\s+(?:我要|给我|买|取)?(?:一碗)?(?:大白饭|白饭|白米饭|米饭)[。！!]?$/u.test(command.trim().replace(/\s+/g,' '))?'service.buy-rice':/^\/吃(?:\s+(?:大白饭|白饭|白米饭|米饭))?$/u.test(command.trim())?'service.eat-rice':phone?(input.ability==='image'?'image.observe':'learning.observe'):null);
+    const kind=command.trim()==='/甜食'?'service.sweet':['/休息','/打盹'].includes(command.trim())?'body.sleep':command.trim()==='/醒来'?'body.wake':careCommands[command.trim()]??(/^\/冰箱\s+(?:我要|给我|买|取)?(?:一碗)?(?:大白饭|白饭|白米饭|米饭)[。！!]?$/u.test(command.trim().replace(/\s+/g,' '))?'service.buy-rice':/^\/吃(?:\s+(?:大白饭|白饭|白米饭|米饭))?$/u.test(command.trim())?'service.eat-rice':phone?(input.ability==='image'?'image.observe':'learning.observe'):null);
     if(!kind)throw Error('没有这个生活服务');
     if(kind.startsWith('care.')&&origin!=='user')throw Error('照料须由用户手动发起');
     return gate.run(petId,async()=>{
@@ -33,7 +33,7 @@ export function createLegacyServiceActions(store:{loadEnvelope(id:string):Promis
         if(wish?.ability==='fetch'&&!fetchUrl)throw Error('网页念想需要有效的公开网址');
         const attachment=kind==='image.observe'?[...state.life.events].reverse().find(e=>e.type==='attachment.shared'&&!Object.hasOwn(state!.life.invalidSources,e.eventId)&&(state!.legacy as any).attachments?.[(e.payload as any)?.attachmentId]):undefined;
         if(kind==='image.observe'&&!attachment)throw Error('还没有可观察的已分享图片');
-        const now=new Date().toISOString(),parameters={legacyCommand:command,...(item?{itemId:item.id}:{}),...(phone?{kind:wish?.ability||'search',query:phone[1].trim(),...(input.careAction==='explore'?{careAction:'explore'}:{}),...(fetchUrl?{url:fetchUrl}:{}),...(typeof input.wishId==='string'?{wishId:input.wishId}:{}),...(attachment?{attachmentId:(attachment.payload as any).attachmentId,attachmentSourceId:attachment.eventId}:{})}:{})};
+        const now=new Date().toISOString(),parameters={legacyCommand:command,...(command.trim()==='/打盹'?{mode:'nap'}:{}),...(item?{itemId:item.id}:{}),...(phone?{kind:wish?.ability||'search',query:phone[1].trim(),...(input.careAction==='explore'?{careAction:'explore'}:{}),...(fetchUrl?{url:fetchUrl}:{}),...(typeof input.wishId==='string'?{wishId:input.wishId}:{}),...(attachment?{attachmentId:(attachment.payload as any).attachmentId,attachmentSourceId:attachment.eventId}:{})}:{})};
         await uow.apply(petId,state.version,draft=>{const sourceId='manual-service:'+hash;
           if(origin==='user') { const legacy=draft.legacy as Record<string,any>; (legacy.manualServiceRequests ||= {})[id]={kind,sourceId}; draft.life.events.push({eventId:sourceId,petId,type:'service.requested',source:'user',actorId:'dad',occurredAt:now,receivedAt:now,evidenceLevel:'observed',payload:{actionId:id,kind}}); }
           draft.life.actions.push({id,petId,actionType:kind,parameters,priority:60,interruptPolicy:'safe-point',requiredCapabilities:[kind],expectedStateVersion:draft.version,sourceIds:origin==='user'?[sourceId]:[],status:'PROPOSED',createdAt:now,updatedAt:now});return {};});
@@ -44,7 +44,7 @@ export function createLegacyServiceActions(store:{loadEnvelope(id:string):Promis
       state=await store.loadEnvelope(petId);action=state?.life.actions.find(a=>a.id===id);
       const status=action?.status,reason=state?.life.receipts.find(r=>r.actionId===id)?.details?.reason;
       const careReason=kind.startsWith('care.')&&typeof reason==='string'&&['睡眠、恢复、学习或爸爸正在互动','爸爸的互动或新动作打断了这次尝试','动作被其他互动打断','动作素材播放超时','照料动画素材不可用'].includes(reason)?reason:undefined;
-      return {key,command,actionId:id,ok:status==='COMPLETED'||status==='PENDING'||status==='DISPATCHED',status:status==='COMPLETED'?'done':status==='PENDING'||status==='DISPATCHED'?'pending':String(status||'unknown').toLowerCase(),message:status==='COMPLETED'?(kind==='service.buy-rice'?'已得到一碗饭':kind==='service.eat-rice'?'已确认吃完':kind.startsWith('care.')?'照料已完成':kind==='body.sleep'?'已经休息':kind==='body.wake'?'已经醒来':'已读取真实资料，来源可在记忆中查看'):status==='PENDING'||status==='DISPATCHED'?'行动正在等待桌宠完成':status==='UNKNOWN'?'结果待确认，不能重复执行':careReason||'行动未完成'};
+      return {key,command,actionId:id,ok:status==='COMPLETED'||status==='PENDING'||status==='DISPATCHED',status:status==='COMPLETED'?'done':status==='PENDING'||status==='DISPATCHED'?'pending':String(status||'unknown').toLowerCase(),message:status==='COMPLETED'?(kind==='service.buy-rice'?'已得到一碗饭':kind==='service.eat-rice'?'已确认吃完':kind.startsWith('care.')?'照料已完成':kind==='body.sleep'?'已经休息':kind==='body.wake'?'已经醒来':kind==='service.sweet'?'吃了一点甜食，精神缓过来一些':'已读取真实资料，来源可在记忆中查看'):status==='PENDING'||status==='DISPATCHED'?'行动正在等待桌宠完成':status==='UNKNOWN'?'结果待确认，不能重复执行':careReason||'行动未完成'};
     });
   };
 }

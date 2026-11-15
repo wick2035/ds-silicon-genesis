@@ -31,7 +31,8 @@ export class CanonicalMemoryRetrieval {
     const conversations=state.events.filter(e=>e.type==='conversation.user'&&!Object.hasOwn(state.invalidSources,e.eventId)).slice(-3);
     const query=[...conversations.reverse().map(e=>{const p=e.payload as Record<string,unknown>;return typeof p?.text==='string'?p.text:'';}),...state.goals.filter(g=>g.status==='active').map(g=>g.title)].join(' ').slice(0,500);
     const matches=await this.search(state.petId,query,12), recent=state.memories.filter(m=>m.valid&&m.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id))).slice(-6);
-    const unique=new Map([...matches,...recent].map(m=>[m.id,m]));let remaining=9000;
+    const felt=state.memories.filter(m=>m.valid&&m.feeling&&m.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id))).sort((a,b)=>(b.salience??0)-(a.salience??0)||Date.parse(b.createdAt)-Date.parse(a.createdAt)).slice(0,4);
+    const unique=new Map([...matches,...recent,...felt].map(m=>[m.id,m]));let remaining=9000;
     return [...unique.values()].filter(m=>{if(m.content.length>remaining)return false;remaining-=m.content.length;return true;});
   }
 }

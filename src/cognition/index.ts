@@ -13,7 +13,8 @@ const Candidate = z.object({ title: z.string().min(1).max(200), description: z.s
 const GoalCandidate=Candidate.extend({completion:z.object({type:z.literal('read-url'),url:z.string().url().max(2000)}).strict().optional()});
 const GoalUpdate=z.object({goalId:z.string().min(1).max(200),kind:z.enum(['progress','reprioritize','complete']),evidenceId:z.string().min(1).max(200),priority:z.number().finite().min(0).max(100).optional()}).strict();
 const Step = z.object({ actionType: z.string().min(1).max(100), parameters: z.record(z.string(),z.json()), goalId:z.string().min(1).max(200).optional(), description: z.string().min(1).max(1000), requiredCapabilities: z.array(z.string().min(1).max(100)).min(1).max(20), sourceIds: z.array(z.string().min(1).max(200)).min(1).max(50) }).strict();
-const Output = z.object({ action: Draft.nullable(), goals: z.array(GoalCandidate).max(5), goalUpdates:z.array(GoalUpdate).max(5).default([]), plan: z.array(Step).max(10), interests: z.array(Candidate).max(5), selfModel: z.array(Candidate).max(5) }).strict();
+const Thought=z.object({salience:z.number().finite().min(0).max(1).default(.5),text:z.string().min(1).max(500),feeling:z.string().max(200),desire:z.string().max(300),sourceIds:z.array(z.string().min(1).max(200)).min(1).max(20)}).strict();
+const Output = z.object({ thought:Thought.nullable().default(null), action: Draft.nullable(), goals: z.array(GoalCandidate).max(5), goalUpdates:z.array(GoalUpdate).max(5).default([]), plan: z.array(Step).max(10), interests: z.array(Candidate).max(5), selfModel: z.array(Candidate).max(5) }).strict();
 type ModelOutput = z.infer<typeof Output>;
 export interface CognitiveContext { observation: string[]; recall: string[]; appraisal: string[]; motivations: string[]; rankedGoals: Array<{goalId: string; score: number}> }
 /** The model receives an isolated workspace and proposes data; it cannot execute tools. */

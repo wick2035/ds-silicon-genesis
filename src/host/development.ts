@@ -17,7 +17,7 @@ export function createDevelopment(store:Reader,gate:PetGate,uow:UnitOfWork,budge
       const pet=state.legacy as Record<string,any>;
       if(kind==='diary' && (!manual && pet.config?.diaryEnabled===false || pet.diaries?.[date] || pet.deletedDays?.includes(date)))return null;
       const used=new Set<string>(Object.entries(pet.developmentClaims||{}).filter(([key,value]:[string,any])=>key.startsWith(kind+':')&&value?.status==='completed').flatMap(([,value]:[string,any])=>Array.isArray(value.sourceIds)?value.sourceIds:[]));
-      const events=state.life.events.filter(e=>!used.has(e.eventId)&&!Object.hasOwn(state.life.invalidSources,e.eventId)&&['observed','verified','reported'].includes(e.evidenceLevel)&&!e.type.startsWith('development.')&&e.occurredAt.slice(0,10)<=date).slice(-30);
+      const events=state.life.events.filter(e=>!used.has(e.eventId)&&!Object.hasOwn(state.life.invalidSources,e.eventId)&&(['observed','verified','reported'].includes(e.evidenceLevel)||e.type==='self.thought')&&!e.type.startsWith('development.')&&e.occurredAt.slice(0,10)<=date).slice(-30);
       if(!events.length)return null;
       const key=kind+':'+date,previous=pet.developmentClaims?.[key];
       // An explicit retry may recover a failed attempt; an in-flight or
@@ -29,7 +29,7 @@ export function createDevelopment(store:Reader,gate:PetGate,uow:UnitOfWork,budge
     });
     if(!claim)return false;
     try{
-      const sel=model.agentDefaultModel.currentSelection(),system=kind==='diary'?'根据给出的真实事件写简短第一人称日记。不要编造未发生的事。只返回 JSON：{"text":"...","sources":["事件ID"]}。':'从真实事件中谨慎总结可能的兴趣与习惯，不要把一次经历当稳定性格。只返回 JSON：{"text":"...","sources":["事件ID"]}。';
+      const sel=model.agentDefaultModel.currentSelection(),system=kind==='diary'?'根据给出的真实事件写简短第一人称日记。不要编造未发生的事。保留当时的感受、惊讶、舒适或不适，以及自己觉得值得或不值得的地方，供以后的自己回忆，不要写任务指引。只返回 JSON：{"text":"...","sources":["事件ID"]}。':'结合真实事件及其中标明为主观的 self.thought，保留当时感受，谨慎总结可能的兴趣与习惯，不要把一次经历当稳定性格。只返回 JSON：{"text":"...","sources":["事件ID"]}。';
       // Reasoning models count their thinking tokens toward the completion
       // limit, even when the final diary itself is short.
       let text='';await budget.runAs(id,manual?'interactive':kind,async()=>{for await(const chunk of model.llm.stream({...sel,system,messages:[{role:'user',content:JSON.stringify(claim.events)}],signal:AbortSignal.any([signal,gate.signal]),maxTokens:4096,temperature:.3,reasoningEffort:'low'})){if(chunk.type==='text'&&typeof chunk.text==='string'){text+=chunk.text;if(text.length>10000)throw Error('整理结果过长');}}});

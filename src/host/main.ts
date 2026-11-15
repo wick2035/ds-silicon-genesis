@@ -1,3 +1,4 @@
+import {initializeSpirit} from './spirit-initialization.js';
 import {createCanonicalTodos,createTodoRoute} from './canonical-todos.js';
 import {createLegacyResponses} from './legacy-responses.js';
 import {createCareReactions,careReactionLeaf} from './care-reactions.js';
@@ -95,6 +96,7 @@ export async function main():Promise<void> {
     // blocked by the default body limits. The decision layer (tired/forced) owns
     // whether she works, so widen the physical floor on existing archives.
     await lease.run(petId,async()=>{const state=await store.loadEnvelope(petId);if(!state)return;const cap=state.life.constraints.capabilities.find(c=>c.name==='labor.step');if(cap&&(!cap.bodyLimits||cap.bodyLimits.minStamina===undefined||cap.bodyLimits.minStamina>=0))await unitOfWork.apply(petId,state.version,draft=>{const c=draft.life.constraints.capabilities.find((x:any)=>x.name==='labor.step');if(c)c.bodyLimits={...(c.bodyLimits||{}),allowSleeping:true,allowRestrained:true,allowInjured:true,minStamina:-101,maxPain:101};return {};});});
+    await lease.run(petId,async()=>{const state=await store.loadEnvelope(petId);if(state&&(!state.life.spirit||!['self.express','service.sweet'].every(name=>state.life.constraints.capabilities.some(c=>c.name===name))))await unitOfWork.apply(petId,state.version,draft=>{initializeSpirit(draft);return {};});});
     const authority={},observerAuthority={},helperAuthority={};
     const humanity=new CanonicalHumanityAdapter(store,unitOfWork,lease,authority,observerAuthority);
     const domain=new LegacyDomain(store,unitOfWork,lease,observerAuthority);
@@ -219,6 +221,8 @@ export async function main():Promise<void> {
           } else if(!sleeping && deps.sleep.sleeping(petId))deps.sleep.wake(petId);
         };
         unitOfWork.onCommit(sync);dispatcher.onCommit(sync);
+        const expressed=new Set<string>((reactionBaseline.life.events||[]).filter(e=>e.eventId.startsWith('self-expression:')).map(e=>e.eventId));
+        dispatcher.onCommit(draft=>{for(const e of draft.life.events){if(e.eventId.startsWith('self-expression:') && !expressed.has(e.eventId)){expressed.add(e.eventId);const text=(e.payload as any)?.text;if(typeof text==='string')publishWhisper?.(text);}}});
         void store.loadEnvelope(petId).then(state=>{if(state)sync(state);}).catch(()=>{});
       },route:(original)=>async(url,method,body,signal)=>{
         const pathname=new URL(url,'http://127.0.0.1').pathname;

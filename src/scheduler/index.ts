@@ -90,11 +90,6 @@ export class LifeScheduler {
             const resumed=await this.options.resultCoordinator.resume(this.options.petId,this.controller.signal);
             const state = await this.kernel.getState(this.options.petId);
             if(!state.constraints.paused && this.options.development)await this.options.development.run(this.options.petId,this.controller.signal);
-            const whisper=this.options.whisper, whisperSettings=whisper?.settings();
-            if(!state.constraints.paused && whisper && whisperSettings?.automaticWhispers && Date.now()>=this.nextWhisperAt){
-              this.nextWhisperAt=Date.now()+whisperSettings.whisperIntervalSec*1000;
-              try{await whisper.run(this.options.petId,this.controller.signal);}catch{/* A failed utterance is not a completed action or a wakeup failure. */}
-            }
             const idleBefore=this.options.idle?.snapshot();
             const ongoing=(state.cognitivePlans||[]).some(p=>p.status==='active'||p.status==='failed') || state.goals.some(g=>g.status==='active');
             if (!resumed && !state.constraints.paused && (claim.changed || hasCognitiveDemand(state) || ongoing || (idleBefore?.seconds??0)>=120) && await this.options.resultCoordinator.claimCognition(this.options.petId,this.options.cognitiveIntervalSeconds??1800,this.controller.signal)) {

@@ -25,9 +25,9 @@ test('forwards only new proactive expression text without a QQ reply window',asy
   assert.equal((await execute('main',f.intents[0],new AbortController().signal)).status,'completed');assert.equal(sent[0].replyTo,undefined);
 });
 
-test('ignores expired, deleted, unrelated and unfunded expressions',async()=>{
+test('ignores expired, deleted and unrelated expressions; zero rice money does not mute speech',async()=>{
   const f=fixture();await f.qq.enableRelay('main');f.expression('expired');f.state.life.events.at(-1).receivedAt=new Date(Date.now()-121000).toISOString();f.expression('deleted');f.state.life.invalidSources['request-deleted']='removed';f.expression('other','help');
-  assert.equal(await f.qq.enqueueNextRelay('main',f.authority),null);f.expression('unfunded','physical');f.state.legacy.wallet.balance=0;assert.equal(await f.qq.enqueueNextRelay('main',f.authority),null);
+  assert.equal(await f.qq.enqueueNextRelay('main',f.authority),null);f.expression('unfunded','physical');f.state.legacy.wallet.balance=0;assert.ok(await f.qq.enqueueNextRelay('main',f.authority));
 });
 
 test('attempts share a durable six-hour and two-per-day budget, including unknown results',async()=>{

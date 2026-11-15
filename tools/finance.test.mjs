@@ -12,7 +12,7 @@ import {createHumanity} from '../vendor/dsh-pet/src/host/humanity.mjs';
 function fixture(){
   const old=Object.create(CompanionStore.prototype);old.data={version:2,pets:{}};old.loaded=true;old.clock=Date.now;old.save=()=>{};old.load=()=>{};
   const pet=old.read('main');
-  let envelope={petId:'main',version:0,legacy:pet,humanity:{},life:{events:[],invalidSources:{},relationships:[],constraints:{permissions:[]}}};
+  let envelope={petId:'main',version:0,legacy:pet,humanity:{},life:{memories:[],events:[],invalidSources:{},relationships:[],constraints:{permissions:[]}}};
   const gate={signal:new AbortController().signal,run:async(_id,fn)=>fn()};
   const store={loadEnvelope:async()=>structuredClone(envelope)};
   const uow={apply:async(_id,version,change)=>{assert.equal(version,envelope.version);const draft=structuredClone(envelope);change(draft);draft.version++;envelope=draft;return draft;}};
@@ -68,24 +68,16 @@ test('饭钱 HTTP 接口校验授权、方法及错误',async()=>{
   const ok=await handler(req('POST',wallet('wallet-http','add',5)));assert.equal(ok.status,200);assert.equal(f.get().legacy.wallet.balance,10005);
 });
 
-test('成功的聊天、碎碎念和日记按配置结算，冻结和不足余额有明确规则',()=>{
-  const f=fixture(),d=f.get(),p=d.legacy;
-  p.wallet.balance=100.25;
-  settleSimulatedSpending(d,'chat','test-chat');
-  assert.equal(p.wallet.balance,100.05);
-  settleSimulatedSpending(d,'whisper','test-whisper');
-  assert.equal(p.wallet.balance,99.95);
+test('聊天和碎碎念不扣饭钱，日记继续使用饭钱与冻结规则',()=>{
+  const f=fixture(),d=f.get(),p=d.legacy;p.wallet.balance=99.95;
+  settleSimulatedSpending(d,'chat','test-chat');settleSimulatedSpending(d,'whisper','test-whisper');assert.equal(p.wallet.balance,99.95);
   assert.throws(()=>checkSimulatedSpending(d,'diary'),/不足/);
   p.wallet.frozen=true;settleSimulatedSpending(d,'diary','test-frozen');assert.equal(p.wallet.balance,99.95);
-  p.wallet.frozen=false;p.wallet.balance=100;
-  settleSimulatedSpending(d,'diary','test-diary');assert.equal(p.wallet.balance,0);
-  assert.ok(Number.isFinite(p.wallet.emptySince));
-  assert.throws(()=>checkSimulatedSpending(d,'chat'),/用完/);
-  assert.deepEqual(p.events.filter(e=>e.kind==='wallet-spend').map(e=>e.text.split('消耗')[0]),['聊天','碎碎念','日记']);
-  assert.equal(d.life.events.filter(e=>e.type==='wallet.spend').length,3);
+  p.wallet.frozen=false;p.wallet.balance=100;settleSimulatedSpending(d,'diary','test-diary');assert.equal(p.wallet.balance,0);
+  checkSimulatedSpending(d,'chat');assert.equal(d.life.events.filter(e=>e.type==='wallet.spend').length,1);
 });
 
-test('真实聊天结果与扣账同事务提交，失败和重复请求不重复扣费',async()=>{
+test('聊天完成、失败和重复请求均不再扣饭钱',async()=>{
   const f=fixture(),life=f.get().life;
   Object.assign(life,{memories:[],commitments:[],legacyContext:{personaDescription:'test'},body:{},emotions:{}});
   f.store.load=async()=>structuredClone(f.get().life);
@@ -95,11 +87,11 @@ test('真实聊天结果与扣账同事务提交，失败和重复请求不重�
   const chat=new CanonicalChat(f.store,f.gate,f.uow,budget,model,async()=>[]);
   const input={requestId:'chat-request-123',petId:'main',channel:'desktop',actorId:'dad',text:'你好'};
   assert.equal(await chat.turn(input,new AbortController().signal),'好呀');
-  assert.equal(f.get().legacy.wallet.balance,9999.8);
+  assert.equal(f.get().legacy.wallet.balance,10000);
   assert.equal(await chat.turn(input,new AbortController().signal),'好呀');
-  assert.equal(f.get().legacy.wallet.balance,9999.8);
+  assert.equal(f.get().legacy.wallet.balance,10000);
   fail=true;await assert.rejects(chat.turn({...input,requestId:'chat-request-fail'},new AbortController().signal));
-  assert.equal(f.get().legacy.wallet.balance,9999.8);
+  assert.equal(f.get().legacy.wallet.balance,10000);
 });
 
 test('只有可信喂饭完成回执才扣除喂饭价格',()=>{

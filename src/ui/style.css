@@ -19,3 +19,5 @@ dialog{border:0;border-radius:20px;padding:28px;width:min(520px,calc(100vw - 40p
 .chat-panel{min-height:450px;height:calc(100vh - 230px)}.chat-composer .primary{background:#147daf}.chat-composer textarea::placeholder{color:#5d7889}@media(max-width:850px){.chat-panel{min-height:450px;height:calc(100vh - 210px)}nav button[data-page=chat]{font-size:12px;flex-direction:column;gap:4px}}
 
 #open-worksite{color:#1d6a8c;white-space:nowrap}
+
+.spirit-card .metrics{grid-template-columns:1fr}.spirit-card .state-note{color:#537386;line-height:1.7}.spirit-actions{flex-wrap:wrap}.spirit-actions button{white-space:nowrap;flex:1 0 auto}.card input[type=file]{max-width:100%;min-width:0}

@@ -14,7 +14,8 @@ const RELAY_LIFETIME=120000, CONTACT_INTERVAL=6*60*60*1000, CONTACT_DAY=24*60*60
 function relayText(draft:CanonicalEnvelope,answerId:string):string|null {
   const answer=draft.life.events.find(e=>e.eventId===answerId);
   const request=draft.life.events.find(e=>e.eventId===answer?.causationId);
-  if(!answer||!request||answer.type!=='conversation.assistant'||answer.source!=='desktop'||request.type!=='interaction.requested'||!['whisper','physical','care','worksite'].includes(String((request.payload as Obj)?.kind))||Object.hasOwn(draft.life.invalidSources,answerId)||Object.hasOwn(draft.life.invalidSources,request.eventId))return null;
+  const selfExpression=request?.type==='action.receipt' && draft.life.actions.some(a=>a.id===(request.payload as Obj)?.actionId && a.actionType==='self.express' && a.status==='COMPLETED');
+  if(!answer||!request||answer.type!=='conversation.assistant'||answer.source!=='desktop'||(!selfExpression && (request.type!=='interaction.requested'||!['whisper','physical','care','worksite'].includes(String((request.payload as Obj)?.kind))))||Object.hasOwn(draft.life.invalidSources,answerId)||Object.hasOwn(draft.life.invalidSources,request.eventId))return null;
   const text=redactDadNames(String((answer.payload as Obj)?.text||'').trim());
   let content='';for(const char of text){if(content.length+char.length>1800)break;content+=char;}
   return content||null;
@@ -153,7 +154,7 @@ export class CanonicalQQ {
       if(!Number.isFinite(started)||!key(qq?.identity?.ownerOpenid)||!qq.outbound)return {value:null};
       const attempts=(Object.values(qq.outbound) as Obj[]).filter(e=>e.proactive===true && Number.isFinite(e.at) && e.at<=now && now-e.at<CONTACT_DAY);
       if(attempts.length>=2 || attempts.some(e=>now-e.at<CONTACT_INTERVAL))return {value:null};
-      if(!Number.isFinite((draft.legacy as Obj).wallet?.balance)||(draft.legacy as Obj).wallet.balance<=0)return {value:null};
+
       for(const event of draft.life.events){
         const at=Date.parse(event.receivedAt);
         if(!Number.isFinite(at)||at<started!||at>now||now-at>RELAY_LIFETIME)continue;
@@ -205,7 +206,7 @@ export function validateQQReply(draft:CanonicalEnvelope,state:LifeState,proposal
   const fingerprint=hash(JSON.stringify({scene:p.scene,text:p.content,sourceEventId:proposal.sourceIds[0],replyTo:p.replyTo}));
   if(p.proactive===true) {
     const at=Date.parse(source?.receivedAt||'');
-    const valid=proposal.sourceIds.length===1 && entry?.proactive===true && entry===qq?.outbound?.[relayKey(proposal.sourceIds[0])] && p.scene==='c2c' && p.destination===qq?.identity?.ownerOpenid && p.replyTo===undefined && p.replySeq===undefined && relayText(draft,proposal.sourceIds[0])===p.content && Number.isFinite(at) && Date.now()>=at && Date.now()-at<=RELAY_LIFETIME && Number.isFinite((draft.legacy as Obj).wallet?.balance) && (draft.legacy as Obj).wallet.balance>0;
+    const valid=proposal.sourceIds.length===1 && entry?.proactive===true && entry===qq?.outbound?.[relayKey(proposal.sourceIds[0])] && p.scene==='c2c' && p.destination===qq?.identity?.ownerOpenid && p.replyTo===undefined && p.replySeq===undefined && relayText(draft,proposal.sourceIds[0])===p.content && Number.isFinite(at) && Date.now()>=at && Date.now()-at<=RELAY_LIFETIME;
     if(proposal.actionType!=='qq.send'||!entry||entry.fingerprint!==fingerprint||!valid)throw Error('QQ 主动表达来源无效');
     validateProposal(state,proposal);
     return;

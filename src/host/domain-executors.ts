@@ -76,6 +76,7 @@ export class TrustedDesktopBridge {
  * subsequent atomic commit, not an external purchase. */
 export function createDomainExecutors(bridge: TrustedDesktopBridge): ReadonlyMap<string,(petId:string,intent:OutboxIntent,signal:AbortSignal)=>Promise<ExecutionReceipt>> {
   return new Map<string,(petId:string,intent:OutboxIntent,signal:AbortSignal)=>Promise<ExecutionReceipt>>([
+    ...['self.express','service.sweet'].map(type=>[type,async(petId:string,intent:OutboxIntent,signal:AbortSignal):Promise<ExecutionReceipt>=>({status:signal.aborted?'cancelled':'completed',evidence:{actionId:intent.id,kind:type,confirmed:true}})] as const),
     ['body.activity',(petId,intent,signal) => bridge.execute(petId,intent,signal)],
     ['service.buy-rice',async (petId,intent,signal) => {
       if (signal.aborted || intent.payload.petId !== petId || intent.payload.actionId !== intent.id || intent.type !== 'service.buy-rice') return {status:'unknown',evidence:{reason:'购买意图不可确认'}};

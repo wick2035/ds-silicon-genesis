@@ -1,3 +1,5 @@
+import {sweetPrice} from './spirit-activity.js';
+import {setSpiritRest,advanceSpirit} from '../kernel/spirit.js';
 import {settleSimulatedSpending} from './simulated-spending.js';
 import { rebuildRelationships } from '../kernel/index.js';
 import { actHumanity, advanceHumanity, reactHumanity } from '../../vendor/dsh-pet/src/host/humanity.mjs';
@@ -26,8 +28,19 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
   const pet = draft.legacy as Obj, human = draft.humanity as Obj;
   assert(params && typeof params === 'object' && !Array.isArray(params), '行动参数无效');
   // Each recognized result is explicitly bound to this action and its executor.
-  if (!['body.activity','service.buy-rice','care.feed','care.water','care.pet','care.play','care.soothe','care.accompany','service.eat-rice','labor.step','token.pickup','body.sleep','body.wake','image.observe','learning.observe'].includes(intent.type)) return;
+  if (!['self.express','service.sweet','body.activity','service.buy-rice','care.feed','care.water','care.pet','care.play','care.soothe','care.accompany','service.eat-rice','labor.step','token.pickup','body.sleep','body.wake','image.observe','learning.observe'].includes(intent.type)) return;
   assert(e && e.actionId === intent.id && e.kind === intent.type && e.confirmed === true, '缺少与行动绑定的可信执行结果');
+  if(intent.type==='self.express') {
+    assert(typeof params.text==='string' && params.text.length<=200,'表达内容无效');
+    draft.life.events.push({eventId:'self-expression:'+intent.id,petId:draft.petId,type:'conversation.assistant',source:'desktop',occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'inferred',payload:{text:params.text,sourceIds:[sourceEventId]}});return;
+  }
+  if(intent.type==='service.sweet') {
+    const charge=sweetPrice(draft,at),s=advanceSpirit(draft.life,at);
+    pet.wallet.balance=Math.round((pet.wallet.balance-charge)*100)/100;s.value=Math.max(s.value,Math.min(99,s.value+s.config.sweetGain));s.lastSweetAt=at;
+    human.stats.satiety=Math.max(0,human.stats.satiety-8);
+    if(charge>0){(pet.events||=[]).push({id:'finance:'+intent.id,kind:'wallet-spend',text:`甜食消耗 ${charge} token，余额 ${pet.wallet.balance} token`,ts:at});draft.life.events.push({eventId:'finance:'+intent.id,petId:draft.petId,type:'wallet.spend',source:'canonical',occurredAt,receivedAt:occurredAt,evidenceLevel:'observed',payload:{kind:'sweet',amount:charge,balance:pet.wallet.balance}});}
+    draft.life.events.push({eventId:'sweet:'+intent.id,petId:draft.petId,type:'body.sweet',source:'executor',occurredAt,receivedAt:occurredAt,evidenceLevel:'observed',payload:{spiritGain:s.config.sweetGain,hungerIncrease:8,paid:charge}});return;
+  }
   if(intent.type==='body.activity'){assert(e.played===true && e.surface==='desktop' && e.activity===params.activity && (!['walk','run'].includes(params.activity) || finite(e.distance) && e.distance>=8 && e.distance<=10000),'桌面活动未完成');return;}
   if (intent.type === 'service.buy-rice') {
     const services = pet.services; const wallet = pet.wallet; const price = pet.config?.costs?.feed;
@@ -47,7 +60,7 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
     return;
   }
   if(intent.type==='care.feed'){assert(e.played===true && e.itemId==='parent','投喂动画未完成');const result=actHumanity(human,'feed',at);assert(result.ok,result.message||'当前不能投喂');settleSimulatedSpending(draft,'feed',intent.id);draft.humanity=result.state;draft.life.events.push({eventId:'care-feed:'+intent.id,petId:draft.petId,type:'social.care',source:'executor',actorId:'dad',occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'observed',payload:{action:'feed'}});rebuildRelationships(draft.life);return;}
-  if(['care.water','care.pet','care.play','care.soothe','care.accompany'].includes(intent.type)){const action=intent.type.slice(5);assert(e.played===true && e.itemId===action,'照料动画未完成');const result=actHumanity(human,action,at);assert(result.ok,result.message||'当前不能照料');draft.humanity=result.state;draft.life.events.push({eventId:'care-'+action+':'+intent.id,petId:draft.petId,type:'social.care',source:'executor',actorId:'dad',occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'observed',payload:{action}});rebuildRelationships(draft.life);return;}
+  if(['care.water','care.pet','care.play','care.soothe','care.accompany'].includes(intent.type)){const action=intent.type.slice(5);assert(e.played===true && e.itemId===action,'照料动画未完成');const result=actHumanity(human,action,at);assert(result.ok,result.message||'当前不能照料');draft.humanity=result.state;draft.life.events.push({eventId:'care-'+action+':'+intent.id,petId:draft.petId,type:'social.care',source:'executor',...(intent.id.startsWith('speech-action:')?{}:{actorId:'dad'}),occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'observed',payload:{action,selfInitiated:intent.id.startsWith('speech-action:')}});rebuildRelationships(draft.life);return;}
   if (intent.type === 'service.eat-rice') {
     const services = pet.services; const itemId = params.itemId;
     assert(typeof itemId === 'string' && e.itemId === itemId && e.played === true && services && Array.isArray(services.inventory), '吃饭回执无效');
@@ -62,7 +75,7 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
     if (services.eating?.itemId === itemId) services.eating = null;
     return;
   }
-  if(intent.type==='body.sleep'||intent.type==='body.wake') {const kind=intent.type==='body.sleep'?'sleep':'wake';assert(e.played===true && e.restKind===kind && human.sleeping===(kind==='wake'),'睡眠回执与身体状态不符');draft.humanity=reactHumanity(human,kind,at);return;}
+  if(intent.type==='body.sleep'||intent.type==='body.wake') {const kind=intent.type==='body.sleep'?'sleep':'wake';assert(e.played===true && e.restKind===kind && human.sleeping===(kind==='wake'),'睡眠回执与身体状态不符');setSpiritRest(draft.life,kind==='sleep'?(params.mode==='nap'?'nap':'sleep'):'awake',at);draft.humanity=reactHumanity(human,kind,at);return;}
   if(intent.type==='token.pickup') {
     const coin=pet.tokens?.coins?.find((c:Obj)=>c.id===params.coinId);
     assert(coin && coin.status==='floor' && coin.surface==='desktop' && coin.value===100 && e.coinId===coin.id && e.surface==='desktop' && e.played===true && finite(e.x) && finite(e.y) && finite(coin.x) && finite(coin.y) && Math.hypot(e.x-coin.x,e.y-coin.y)<=.045 && finite(pet.wallet?.balance) && finite(pet.tokens.recovered), '拾取结果与碎片不匹配');

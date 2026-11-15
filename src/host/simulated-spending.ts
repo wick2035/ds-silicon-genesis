@@ -1,16 +1,18 @@
+import {checkSpirit} from '../kernel/spirit.js';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 
 type Kind='chat'|'whisper'|'diary'|'feed';
 /** Validate both before an expensive model call and in its result transaction. */
 export function checkSimulatedSpending(draft:CanonicalEnvelope,kind:Kind):void {
+  if(kind==='chat'||kind==='whisper'){checkSpirit(draft.life,kind);return;}
   const pet=draft.legacy as Record<string,any>,wallet=pet.wallet,cost=pet.config?.costs?.[kind];
   if(!wallet||!Number.isFinite(wallet.balance)||wallet.balance<0||typeof wallet.frozen!=='boolean'||!Number.isFinite(cost)||cost<0)throw Error('模拟饭钱配置不可用');
-  if((kind==='chat'||kind==='whisper')&&wallet.balance<=0)throw Error('模拟饭钱已用完，请先添加饭钱');
   if(kind==='diary'&&!wallet.frozen&&wallet.balance<cost)throw Error('模拟饭钱不足，请先添加饭钱');
 }
 
 /** Called only in the same transaction that commits the successful result. */
 export function settleSimulatedSpending(draft:CanonicalEnvelope,kind:Kind,key:string):void {
+  if(kind==='chat'||kind==='whisper')return; // Model reservation already charged spirit, even on failure.
   checkSimulatedSpending(draft,kind);
   const pet=draft.legacy as Record<string,any>,wallet=pet.wallet,cost=pet.config.costs[kind];
   const before=wallet.balance,amount=wallet.frozen?0:Math.min(before,cost);

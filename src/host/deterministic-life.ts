@@ -1,3 +1,4 @@
+import {advanceSpirit} from '../kernel/spirit.js';
 import {strategyScore} from '../kernel/index.js';
 import {expireCommitments} from '../kernel/goal-lifecycle.js';
 import {projectBody} from './body-projection.js';
@@ -45,7 +46,10 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     if(signal.aborted)return;
     const human=await humanity.get(petId);
     if(signal.aborted || !allowAutonomous || human.restrained || human.helperReady!==true)return;
-    if(human.sleeping)return;
+    const resting=await reader.loadEnvelope(petId);
+    if(!resting)return;const spirit=advanceSpirit(resting.life);
+    if(human.sleeping){if(spirit.mode==='sleep' && spirit.value>=100 || spirit.mode==='nap' && Date.now()-spirit.sleepStartedAt!>=1200000)await service(petId,{key:'auto-wake:'+spirit.sleepStartedAt,command:'/醒来'},'autonomous');return;}
+    if(spirit.value<=2 && !(resting.legacy as any).worksite?.inside){await service(petId,{key:'auto-sleep:'+Math.floor(Date.now()/3600000),command:'/休息'},'autonomous');return;}
     if(Number.isFinite(human.restingUntil) && human.restingUntil>Date.now())return;
     const state=await reader.loadEnvelope(petId);
     if(signal.aborted || !state || state.life.constraints.paused)return;

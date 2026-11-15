@@ -1,3 +1,4 @@
+import {advanceSpirit,setSpiritRest} from '../kernel/spirit.js';
 import { rebuildRelationships } from '../kernel/index.js';
 import { advanceHumanity, describeHumanity, actHumanity, reactHumanity, adjustHumanity, humanityPrompt } from '../../vendor/dsh-pet/src/host/humanity.mjs';
 import type { CanonicalEnvelope } from '../storage/postgres.js';
@@ -7,6 +8,7 @@ interface Reader { loadEnvelope(petId: string): Promise<CanonicalEnvelope | null
 type HumanState = Record<string, any>;
 const clamp = (n: number) => Math.max(0, Math.min(100, n));
 const identifier = (value: string) => typeof value === 'string' && /^[a-zA-Z0-9:-]{8,140}$/.test(value);
+const humanRestChanged=(before:HumanState,after:HumanState)=>before.restingUntil!==after.restingUntil;
 const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 /** All mutation and receipts are committed to one envelope before this API resolves.
@@ -31,6 +33,10 @@ export class CanonicalHumanityAdapter {
       await this.uow.apply(petId, current.version, draft => {
         const edited = edit(structuredClone(draft.humanity), now, draft);
         if (!edited.state || !edited.state.stats || !edited.state.emotions) throw new Error('身体状态无效');
+        const spirit=advanceSpirit(draft.life,now);
+        if(edited.state.sleeping===true && spirit.mode==='awake')setSpiritRest(draft.life,'sleep',now);
+        else if(edited.state.sleeping!==true && edited.state.restingUntil>now && (humanRestChanged(draft.humanity,edited.state)||spirit.mode==='awake'))setSpiritRest(draft.life,'nap',now);
+        else if(edited.state.sleeping!==true && !(edited.state.restingUntil>now) && spirit.mode!=='awake')setSpiritRest(draft.life,'awake',now);
         draft.humanity = edited.state; result = structuredClone(edited.result);
         return {};
       });

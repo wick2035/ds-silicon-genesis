@@ -5,7 +5,7 @@ import type {CanonicalEnvelope} from '../storage/postgres.js';
 export function validateManualService(draft:CanonicalEnvelope,state:LifeState,proposal:ActionProposal):void {
   const marker=(draft.legacy as Record<string,any>).manualServiceRequests?.[proposal.id];
   const event=draft.life.events.find(e=>e.eventId===marker?.sourceId);
-  if(!['service.buy-rice','care.feed','care.water','care.pet','care.play','care.soothe','care.accompany','service.eat-rice','body.sleep','body.wake','learning.observe','image.observe'].includes(proposal.actionType) || marker?.kind!==proposal.actionType || proposal.sourceIds.length!==1 || proposal.sourceIds[0]!==marker.sourceId || !event || event.source!=='user' || event.actorId!=='dad' || (event.payload as any)?.kind!==proposal.actionType || event.type!=='service.requested' || (event.payload as any)?.actionId!==proposal.id) throw Error('手动服务来源无效');
+  if(!['service.sweet','service.buy-rice','care.feed','care.water','care.pet','care.play','care.soothe','care.accompany','service.eat-rice','body.sleep','body.wake','learning.observe','image.observe'].includes(proposal.actionType) || marker?.kind!==proposal.actionType || proposal.sourceIds.length!==1 || proposal.sourceIds[0]!==marker.sourceId || !event || event.source!=='user' || event.actorId!=='dad' || (event.payload as any)?.kind!==proposal.actionType || event.type!=='service.requested' || (event.payload as any)?.actionId!==proposal.id) throw Error('手动服务来源无效');
   // Existing installations already grant physical parent care via care.feed.
   // Derive the new water action's capability for this validated request only.
   const parentCare=state.constraints.capabilities.find(c=>c.name==='care.feed'&&c.enabled);

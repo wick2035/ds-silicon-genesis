@@ -1,3 +1,4 @@
+import {advanceSpirit} from '../kernel/spirit.js';
 import type { CanonicalEnvelope, Queryable } from './postgres.js';
 import type { ActionReceipt } from '../kernel/types.js';
 
@@ -26,6 +27,7 @@ export class UnitOfWork {
       if (result.rows.length !== 1 || Number(result.rows[0].version) !== expectedVersion) throw new Error('生命状态已变化');
       const draft = structuredClone(result.rows[0].payload) as CanonicalEnvelope;
       if (draft.petId !== petId || draft.version !== expectedVersion) throw new Error('生命状态信封不一致');
+      advanceSpirit(draft.life);
       const {intents = []} = change(draft);
       if (draft.petId !== petId || draft.version !== expectedVersion) throw new Error('领域操作不得修改身份或版本');
       if (Object.hasOwn(draft.life, 'body') || Object.hasOwn(draft.life, 'emotions')) throw new Error('身体状态只能由身体域保存');

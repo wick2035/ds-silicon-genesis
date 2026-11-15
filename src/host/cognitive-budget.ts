@@ -1,3 +1,4 @@
+import {spendSpirit} from '../kernel/spirit.js';
 import {budgetView} from './budget-view.js';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -19,6 +20,7 @@ export class DurableCognitiveBudget implements CognitiveBudget, ModelBudget {
     return this.gate.run(petId,async()=>{
       const state=await this.store.load(petId);if(!state)throw new Error('生命状态不存在');
       try {await this.unitOfWork.apply(petId,state.version,draft=>{
+        try{spendSpirit(draft.life,'thought');}catch{throw exhausted;}
         const pet=draft.legacy as Record<string,any>, constraints=draft.life.constraints;
         const limit=pet.config?.learning?.dailyModelCalls;
         if(category!=='interactive' && (constraints.paused || !Number.isSafeInteger(limit) || limit<0))throw exhausted;
