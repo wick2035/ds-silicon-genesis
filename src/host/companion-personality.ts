@@ -1,6 +1,7 @@
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 import {describeHumanity} from '../../vendor/dsh-pet/src/host/humanity.mjs';
 import {isOwnerPrivateConversation} from './chat-identity.js';
+import {recentGroupActivity,GROUP_CONTINUITY} from './group-conversation-context.js';
 import {SOFT_SCENES} from '../../vendor/pet-plugins/behavior/soft-tantrum.mjs';
 
 const finite = (value:unknown):value is number => typeof value==='number' && Number.isFinite(value);
@@ -85,6 +86,8 @@ export function companionContext(envelope:Readonly<CanonicalEnvelope>, now=Date.
     .slice(-4).map(e=>({id:e.eventId,at:e.occurredAt,text:short((e.payload as any)?.text)}));
   return {
     time:companionTime(envelope,now,excludeEventIds),
+    groupActivity:recentGroupActivity(envelope.life,now),
+    groupActivityNote:GROUP_CONTINUITY,
     groupChat:{blocked:config.qqGroupBlocked===true,canRead:config.qqGroupBlocked!==true,canReply:config.qqGroupBlocked!==true,
       lastChange:envelope.life.events.filter(e=>e.type==='management.group-chat'&&live(e.eventId)).slice(-1).map(e=>({sourceId:e.eventId,at:e.occurredAt,actorId:e.actorId,detail:e.payload}))[0]??null,
       note:config.qqGroupBlocked===true?'爸爸暂时不让我看群消息或参与群聊。可以表达自己的感受，但不能自行恢复权限，也不知道群里现在说了什么。':'可以看新群消息；禁止期间的消息没有看过，不虚构群里发生的事。'},

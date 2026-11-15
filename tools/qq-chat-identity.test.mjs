@@ -4,10 +4,10 @@ import {CompanionStore} from '../vendor/pet-plugins/behavior/core.mjs';
 import {CanonicalChat} from '../dist/host/chat-service.js';
 import {isOwnerPrivateConversation} from '../dist/host/chat-identity.js';
 
-function fixture(events,reply='好呀') {
+function fixture(events,reply='好呀',extra={}) {
   const old=Object.create(CompanionStore.prototype);old.data={version:2,pets:{}};old.loaded=true;old.clock=Date.now;old.save=()=>{};old.load=()=>{};
   const legacy=old.read('main');legacy.wallet.balance=500;
-  let envelope={petId:'main',version:0,legacy,humanity:{},life:{events,actions:[],receipts:[],invalidSources:{},relationships:[],constraints:{permissions:[]},memories:[],commitments:[],legacyContext:{personaDescription:'test'},body:{},emotions:{}}};
+  let envelope={petId:'main',version:0,legacy,humanity:{},life:{events,actions:[],receipts:[],invalidSources:{},relationships:[],constraints:{permissions:[]},memories:[],commitments:[],legacyContext:{personaDescription:'test'},body:{},emotions:{},...extra}};
   const gate={signal:new AbortController().signal,run:async(_id,fn)=>fn()};
   const store={loadEnvelope:async()=>structuredClone(envelope),load:async()=>structuredClone(envelope.life)};
   const uow={apply:async(_id,version,change)=>{assert.equal(version,envelope.version);const draft=structuredClone(envelope);change(draft);draft.version++;envelope=draft;}};
@@ -84,4 +84,21 @@ test('owner group commands stay executable and other members are rejected',async
   const owner=await f.chat.qqTurn({petId:'main',scene:'group',messages:[{eventId:'owner',isOwner:true,text:'/冰箱'}]},signal);
   assert.equal(owner,'结果请查看面板。');
   await assert.rejects(f.chat.qqTurn({petId:'main',scene:'group',messages:[{eventId:'friend',isOwner:false,text:'/冰箱'}]},signal),/需要已认证爸爸/);
+});
+
+test('private chat knows its own delivered group speech without turning group members into dad',async()=>{
+  const text='就一下啊，那我眼睛都不眨！';
+  const events=[event('q1','social.message','qq','给你看尾巴','qq-member:friend',{scene:'group',groupId:'g1'}),
+    {...event('group-user','conversation.user','qq-group','给你看尾巴','qq-member:friend',{groupId:'g1',sourceIds:['q1']}),causationId:'q1'},
+    {...event('group-reply','conversation.assistant','qq-group',text,undefined,{groupId:'g1'}),causationId:'group-user'},
+    {...event('delivery','action.receipt','outbox','',undefined,{actionId:'send'}),causationId:'receipt'}];
+  const f=fixture(events,'好呀',{actions:[{id:'send',actionType:'qq.send',status:'COMPLETED',receiptId:'receipt',sourceIds:['q1'],parameters:{scene:'group',content:text}}],
+    receipts:[{actionId:'send',receiptId:'receipt',status:'COMPLETED',details:{kind:'qq.send',messageId:'sent'}}]});
+  await f.chat.turn({requestId:'group-awareness',petId:'main',channel:'desktop',actorId:'dad',text:'我看你群里聊得挺欢呀'},new AbortController().signal);
+  assert.match(f.calls[0].system,/就一下啊，那我眼睛都不眨/);
+  assert.match(f.calls[0].system,/已确认发送/);assert.match(f.calls[0].system,/qq-member:friend/);
+  assert.match(f.calls[0].system,/群聊、桌面和私聊中的大肥鱼是同一个你/);
+  assert.doesNotMatch(JSON.stringify(f.calls[0].messages),/给你看尾巴/);
+  const answer=f.state().life.events.find(e=>e.source==='desktop'&&e.type==='conversation.assistant');
+  assert.ok(answer.payload.sourceIds.includes('group-reply'));assert.ok(answer.payload.sourceIds.includes('delivery'));
 });
