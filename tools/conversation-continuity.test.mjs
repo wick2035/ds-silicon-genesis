@@ -1,11 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {privateConversationHistory,historicalMemory} from '../dist/host/conversation-history.js';
+import {privateConversationHistory,recentPrivateActivity,privateConversationThread,historicalMemory} from '../dist/host/conversation-history.js';
 import {createLegacyResponses} from '../dist/host/legacy-responses.js';
 import {CanonicalChat} from '../dist/host/chat-service.js';
 import {CompanionStore} from '../vendor/pet-plugins/behavior/core.mjs';
 
 const event=(id,type,text,seconds,extra={})=>({eventId:id,type,source:'desktop',occurredAt:new Date(Date.UTC(2026,10,15,9,7,seconds)).toISOString(),payload:{text},...extra});
+
+test('ambient interaction speech cannot displace recent private dialogue or break its question and answer',()=>{
+  const events=[event('chat-user:topic','conversation.user','你自己问小金鲸答应你的大白饭',0,{actorId:'dad'}),
+    event('chat-assistant:topic','conversation.assistant','我自己去问',1,{causationId:'chat-user:topic'})];
+  for(let i=0;i<30;i++)events.push(event('touch:'+i,'interaction.requested','',i+2),event('reaction:'+i,'conversation.assistant','摸头后的回应'+i,i+2,{causationId:'touch:'+i}));
+  const state={events,invalidSources:{}},activity=recentPrivateActivity(state,Date.UTC(2026,10,15,9,8));
+  assert.deepEqual(activity.map(e=>e.eventId),['chat-user:topic','chat-assistant:topic','reaction:28','reaction:29']);
+  assert.deepEqual(privateConversationThread(state,activity).map(e=>e.eventId),['chat-user:topic','chat-assistant:topic']);
+  state.invalidSources['chat-user:topic']='deleted';
+  assert.deepEqual(privateConversationThread(state,recentPrivateActivity(state,Date.UTC(2026,10,15,9,8))),[]);
+});
 function fixture(){
   const old=Object.create(CompanionStore.prototype);Object.assign(old,{data:{version:2,pets:{}},loaded:true,clock:Date.now,save(){},load(){}});
   const state={petId:'main',version:0,legacy:old.read('main'),humanity:{stats:{satiety:25},emotions:{},desires:{}},life:{events:[],memories:[],actions:[],receipts:[],goals:[],commitments:[],relationships:[],invalidSources:{},constraints:{paused:false,permissions:[]},legacyContext:{personaDescription:'test'},body:{},emotions:{}}};
