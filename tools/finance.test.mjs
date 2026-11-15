@@ -79,7 +79,7 @@ test('聊天和碎碎念不扣饭钱，日记继续使用饭钱与冻结规则',
 
 test('聊天完成、失败和重复请求均不再扣饭钱',async()=>{
   const f=fixture(),life=f.get().life;
-  Object.assign(life,{memories:[],commitments:[],legacyContext:{personaDescription:'test'},body:{},emotions:{}});
+  Object.assign(life,{memories:[],commitments:[],actions:[],receipts:[],legacyContext:{personaDescription:'test'},body:{},emotions:{}});
   f.store.load=async()=>structuredClone(f.get().life);
   let fail=false;
   const model={agentDefaultModel:{currentSelection:()=>({provider:'test',model:'test'})},llm:{async *stream(){if(fail)throw Error('model unavailable');yield {type:'text',text:'好呀'};}}};

@@ -20,6 +20,23 @@ function fixture(resultStatus='COMPLETED'){
 const call=(id,name,input)=>({type:'tool-call-delta',index:1,id,name,argumentsDelta:JSON.stringify(input)});
 async function collect(stream){let text='';for await(const p of stream)if(p.type==='text')text+=p.text;return text;}
 
+test('after eating, continuation replaces pre-action system facts with current inventory and body',async()=>{
+  const f=fixture();f.get().humanity.stats.satiety=13;f.get().legacy.wallet.balance=30;
+  f.dispatcher.dispatch=async id=>{
+    const state=f.get(),action=state.life.actions.find(a=>a.id===id);action.status='COMPLETED';
+    state.life.receipts.push({actionId:id,status:'COMPLETED'});
+    state.legacy.services.inventory[0].status='eaten';state.humanity.stats.satiety=25;
+    state.humanity.lastFedAt=Date.now();state.legacy.wallet.balance=29.8;
+  };
+  let rounds=0;
+  const model={async *stream(o){
+    const live=JSON.parse(o.system.split('当前身体与食物（优先于旧对话和历史摘要）：').at(-1));
+    if(++rounds===1){assert.equal(live.身体.satiety,13);yield call('eat','act',{actionType:'service.eat-rice',parameters:{itemId:'rice-1'}});}
+    else{assert.equal(live.身体.satiety,25);assert.equal(live.饭钱,29.8);assert.deepEqual(live.库存,[]);assert.equal(live.food.lastFedAt,f.get().humanity.lastFedAt);yield {type:'text',text:'刚吃完了。'};}
+  }};
+  assert.equal(await collect(f.speech.wrap(model).stream(f.options)),'刚吃完了。');assert.equal(rounds,2);
+});
+
 test('prepared chat snapshots retain personality and current hunger in model input',async()=>{
  const f=fixture();f.get().humanity.stats.satiety=20;
  f.get().life.legacyContext={};f.get().life.memories=Array.from({length:20},(_,i)=>({id:'m'+i,content:'历史'.repeat(1000),sourceIds:[],valid:true}));
