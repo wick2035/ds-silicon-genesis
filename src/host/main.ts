@@ -331,6 +331,7 @@ export async function main():Promise<void> {
     app.setShutdown(()=>{void close();});
     process.once('SIGINT',()=>{void close();});process.once('SIGTERM',()=>{void close();});
     console.log('生命空间已准备好。');
+    console.log('生命空间链接（关闭网页后可用此链接重新打开）：'+app.lifeUrl);
     if(process.platform==='win32') {
       const browser=spawn('rundll32.exe',['url.dll,FileProtocolHandler',app.lifeUrl],{windowsHide:true,stdio:'ignore'});
       browser.on('error',()=>console.error('无法打开生命空间，请从桌宠菜单重新打开。'));
