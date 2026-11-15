@@ -46,6 +46,8 @@ import {isOwnerPrivateConversation} from './chat-identity.js';
 import {startStandalone} from './standalone.js';
 import {createLegacyServiceActions} from './legacy-service-actions.js';
 import {createDeterministicLife} from './deterministic-life.js';
+import {createAutonomousNeeds} from './autonomous-needs.js';
+import {localRiceReconciler} from './rice-purchase.js';
 import {createHelperTokens} from './helper-tokens.js';
 import {isPresentationRoute} from './visual-routes.js';
 import {CanonicalQQ} from './qq-canonical.js';
@@ -125,8 +127,10 @@ export async function main():Promise<void> {
     bili=createBiliReader(root);
     const executors=new Map(createDomainExecutors(commandChannel.bridge));
     executors.set('learning.observe',createExplorationExecutor(createPublicWeb(),bili));
-    const dispatcher=new OutboxDispatcher(lease,executors,lease,new CanonicalActionLifecycle(projectBody),new Map());
+    const dispatcher=new OutboxDispatcher(lease,executors,lease,new CanonicalActionLifecycle(projectBody),new Map([['service.buy-rice',localRiceReconciler(store)]]));
     await dispatcher.recoverInterrupted();
+    const interruptedPurchases=await store.loadEnvelope(petId);
+    for(const action of interruptedPurchases?.life.actions??[])if(action.actionType==='service.buy-rice'&&action.status==='UNKNOWN')await dispatcher.reconcile(action.id);
     const kernel=new LifeKernel(store,authority), budget=new DurableCognitiveBudget(store,unitOfWork,lease);
     const attachments=createAttachmentStore(store,lease,unitOfWork);
     model=createModelFacade(modelConfig,{leaseSignal:lease.signal,budget,resolveImage:attachments.resolve,persist:async value=>{const file=join(root,'data','model-config.json'),temporary=file+'.tmp';await writeFile(temporary,JSON.stringify(value,null,2),{mode:0o600});await rename(temporary,file);}});
@@ -220,6 +224,7 @@ export async function main():Promise<void> {
       reminders:{run:(id,signal)=>todos.remind(id,signal,t=>{if(!publishWhisper)throw Error('桌宠显示尚未就绪');publishWhisper('提醒：'+t.text);})},
       whisper:{settings:()=>model!.getSettings(),run:async(id,signal)=>{if(!publishWhisper)throw Error('桌宠显示尚未就绪');const text=await responses(id,'whisper',signal,undefined,{autonomous:true});if(!signal.aborted)publishWhisper(text);}},
       wakeCoordinator:wakes,deterministic,resultCoordinator:coordinator,
+      needs:createAutonomousNeeds(store,lease,unitOfWork,budget,model,text=>{if(!publishWhisper)throw Error('桌宠显示尚未就绪');publishWhisper(text);}),
       assertExclusive:async()=>lease.assertHeld()});
     app=await startStandalone({root,llm:model.llm,ai:{...model,queryBalance:meteredBalance,testConnection:(input:Record<string,unknown>)=>budget.runAs(petId,'interactive',()=>model!.testConnection(input))},agentDefaultModel:model.agentDefaultModel,helperChannel:helper,api,
       hostReady:(deps,helpers)=>{

@@ -1,4 +1,5 @@
 import {hasActiveConversation} from './active-conversation.js';
+import {validateRicePurchase} from './rice-purchase.js';
 import {isForcedLabor,forcedLaborState} from './forced-labor.js';
 import {sweetPrice} from './spirit-activity.js';
 import {selfActionState} from './self-action-state.js';
@@ -23,8 +24,9 @@ export class ActionCoordinator {
       const action = matches[0];
       if((draft.legacy as Record<string,any>).worksite?.inside && (action.actionType.startsWith('care.') || ['service.eat-rice','body.sleep','body.wake','token.pickup','body.activity'].includes(action.actionType)))throw Error('她在网页工地里，请先接她回桌面');
       if(action.actionType==='body.activity' && ((draft.legacy as Record<string,any>).space?.mode!=='outside' || (draft.legacy as Record<string,any>).labor?.contracts?.some((c:any)=>c.status==='working')))throw Error('当前桌面空间或工作状态不允许走动');
-      if(action.actionType==='body.sleep'&&hasActiveConversation(draft)&&!(draft.legacy as any).manualServiceRequests?.[action.id]&&!action.sourceIds.some(id=>id.startsWith('chat-user:')))throw Error('爸爸正在和我说话，先完成这轮对话');
+      if(action.actionType==='body.sleep'&&hasActiveConversation(draft)&&!(draft.legacy as any).manualServiceRequests?.[action.id]&&!action.sourceIds.some(id=>id.startsWith('chat-user:')||id.startsWith('needs:')))throw Error('还有正在进行的决定，先完成这轮');
       if(action.actionType==='service.sweet')sweetPrice(draft);
+      if(action.actionType==='service.buy-rice')validateRicePurchase(draft);
       if(!isForcedLabor(draft,action))checkSpirit(draft.life,action.actionType,this.now().valueOf());
       validateActionParameters(action.actionType,action.parameters);
       const state: LifeState = {...structuredClone(draft.life), petId, version:draft.version, ...projectActionBody(draft,this.body(draft),action.actionType)};

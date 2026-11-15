@@ -21,7 +21,7 @@ export function initGrowth(p) {
   p.jobs??=[];p.usage??={};p.wishes??=[];p.abilities??={};p.seen??=[];p.forgotten??=[];p.deletedDays??=[];
   p.config.networkLearning ??= false;
   p.config.autonomousPaused ??= false;
-  p.config.learning ??= {dailyModelCalls:6};
+  p.config.learning ??= {dailyModelCalls:20};
   p.abilities.bili ??= {status:'pending',remindedAt:0,deferredUntil:0};
   p.growth ??= {goals:[],attempts:[],strategies:[],memories:[],blocked:[],persona:{frozen:false,traits:{curiosity:.5,patience:.5,initiative:.5,expression:.5},interests:[],versions:[]},phone:{epoch:0,changedAt:0,closedByParent:false,notice:null,requestDay:null},lastSpeech:0,speech:[],lastReflection:0};
   p.growth.speech ??= [];

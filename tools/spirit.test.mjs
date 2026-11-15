@@ -111,3 +111,12 @@ test('exhaustion and sleep never reject interactive model calls or essential foo
  assert.equal(f.d.life.spirit.mode,'sleep');assert.equal(await budget.reserve('main'),null);
  setSpiritRest(f.d.life,'awake');f.d.life.spirit.value=0;assert.doesNotThrow(()=>spendSpirit(f.d.life,'service.buy-rice'));assert.doesNotThrow(()=>spendSpirit(f.d.life,'service.eat-rice'));assert.equal(f.d.life.spirit.value,0);
 });
+
+test('essential needs can think at zero spirit while respecting the configured daily autonomy cap',async()=>{
+ const f=fixture(),budget=new DurableCognitiveBudget(f.store,f.uow,f.gate);f.d.life.spirit.value=0;setSpiritRest(f.d.life,'sleep');
+ f.d.legacy.config.learning.dailyModelCalls=20;
+ await budget.runAs('main','needs',()=>budget.reserve('provider','model',f.gate.signal));
+ assert.equal(f.d.life.spirit.value,0);assert.equal(f.d.life.spirit.mode,'sleep');
+ f.d.legacy.config.learning.dailyModelCalls=2;
+ await assert.rejects(budget.runAs('main','needs',()=>budget.reserve('provider','model',f.gate.signal)),/额度不足/);
+});

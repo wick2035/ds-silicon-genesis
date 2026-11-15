@@ -13,7 +13,7 @@ export interface WakeCoordinator {
   release(petId: string, cursor: string): Promise<void>;
 }
 /** Must invoke the authoritative body/action adapter, never fabricate outcomes. */
-export interface DeterministicActivity { run(petId: string, signal: AbortSignal, options: { allowAutonomous: boolean }): Promise<void> }
+export interface DeterministicActivity { run(petId: string, signal: AbortSignal, options: { allowAutonomous: boolean;needsManaged?:boolean }): Promise<void> }
 export interface SchedulerOptions {
   connectionString: string;
   petId: string;
@@ -21,6 +21,7 @@ export interface SchedulerOptions {
   signal: AbortSignal;
   wakeCoordinator: WakeCoordinator;
   deterministic: DeterministicActivity;
+  needs?: {run(petId:string,signal:AbortSignal):Promise<boolean>};
   resultCoordinator: CognitiveResultCoordinator;
   development?: {run(petId:string,signal:AbortSignal):Promise<void>};
   reminders?: {run(petId:string,signal:AbortSignal):Promise<void>};
@@ -85,14 +86,16 @@ export class LifeScheduler {
             if(this.options.reminders)await this.options.reminders.run(this.options.petId,this.controller.signal);
             const before = await this.kernel.getState(this.options.petId);
             if (this.controller.signal.aborted) throw new Error('Scheduler stopped');
-            await this.options.deterministic.run(this.options.petId, this.controller.signal, { allowAutonomous: !before.constraints.paused });
+            let needsHandled=false;
+            if(!before.constraints.paused&&this.options.needs){try{needsHandled=await this.options.needs.run(this.options.petId,this.controller.signal);}catch{this.report({status:'degraded',reason:'needs_unavailable'});}}
+            await this.options.deterministic.run(this.options.petId, this.controller.signal, { allowAutonomous: !before.constraints.paused,needsManaged:needsHandled });
             if (this.controller.signal.aborted) throw new Error('Scheduler stopped');
-            const resumed=await this.options.resultCoordinator.resume(this.options.petId,this.controller.signal);
+            const resumed=needsHandled?false:await this.options.resultCoordinator.resume(this.options.petId,this.controller.signal);
             const state = await this.kernel.getState(this.options.petId);
             if(!state.constraints.paused && this.options.development)await this.options.development.run(this.options.petId,this.controller.signal);
             const idleBefore=this.options.idle?.snapshot();
             const ongoing=(state.cognitivePlans||[]).some(p=>p.status==='active'||p.status==='failed') || state.goals.some(g=>g.status==='active');
-            if (!resumed && !state.constraints.paused && (claim.changed || hasCognitiveDemand(state) || ongoing || (idleBefore?.seconds??0)>=120) && await this.options.resultCoordinator.claimCognition(this.options.petId,this.options.cognitiveIntervalSeconds??1800,this.controller.signal)) {
+            if (!needsHandled && !resumed && !state.constraints.paused && (claim.changed || hasCognitiveDemand(state) || ongoing || (idleBefore?.seconds??0)>=120) && await this.options.resultCoordinator.claimCognition(this.options.petId,this.options.cognitiveIntervalSeconds??1800,this.controller.signal)) {
               const fresh=await this.kernel.getState(this.options.petId);
               const result = await this.cognition.propose(fresh, this.controller.signal, () => this.kernel.getState(this.options.petId));
               if (result.status === 'proposed' && !this.controller.signal.aborted) {

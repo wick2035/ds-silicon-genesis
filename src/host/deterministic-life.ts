@@ -38,7 +38,7 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
       return (await dispatcher.dispatch(id)).status==='completed';
     });
   }
-  async function run(petId:string,signal:AbortSignal,{allowAutonomous}:{allowAutonomous:boolean}) {
+  async function run(petId:string,signal:AbortSignal,{allowAutonomous,needsManaged=false}:{allowAutonomous:boolean;needsManaged?:boolean}) {
     if(signal.aborted)return;
     await refreshBudget(petId);
     if(signal.aborted)return;
@@ -54,7 +54,7 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     const resting=await reader.loadEnvelope(petId);
     if(!resting)return;if(hasActiveConversation(resting)&&!forced)return;const spirit=advanceSpirit(resting.life);
     if(human.sleeping&&!forced){if(spirit.mode==='sleep' && spirit.value>=100 || spirit.mode==='nap' && Date.now()-spirit.sleepStartedAt!>=1200000)await service(petId,{key:'auto-wake:'+spirit.sleepStartedAt,command:'/醒来'},'autonomous');return;}
-    if(spirit.value<=2 && !(resting.legacy as any).worksite?.inside){await service(petId,{key:'auto-sleep:'+Math.floor(Date.now()/3600000),command:'/休息'},'autonomous');return;}
+    if(!needsManaged && spirit.value<=2 && !(resting.legacy as any).worksite?.inside){await service(petId,{key:'auto-sleep:'+Math.floor(Date.now()/3600000),command:'/休息'},'autonomous');return;}
     if(Number.isFinite(human.restingUntil) && human.restingUntil>Date.now()&&!forced)return;
     const state=await reader.loadEnvelope(petId);
     if(signal.aborted || !state || state.life.constraints.paused&&!forced)return;
@@ -63,7 +63,7 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     // Desktop-only meals and coin pickup wait until she returns.
     const inWorksite=legacy.worksite?.inside===true;
     const mealDue=riceMotivation(human,legacy.config??{}).mealDue;
-    if(!inWorksite && mealDue && Array.isArray(inventory) && availableRice(state).length>0) {
+    if(!needsManaged && !inWorksite && mealDue && Array.isArray(inventory) && availableRice(state).length>0) {
       if(!state.life.actions.some(a=>a.actionType==='service.eat-rice' && ['PENDING','DISPATCHED'].includes(a.status)))
         await service(petId,{key:'auto-meal:'+Math.floor(Date.now()/60000),command:'/吃'},'autonomous');
       return;
@@ -71,7 +71,7 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     // Buying is a real, separately authorized purchase. Never manufacture a
     // free meal or retry an unconfirmed purchase merely because time passed.
     const price=legacy.config?.costs?.feed, wallet=legacy.wallet;
-    if(!inWorksite && mealDue && Array.isArray(inventory) && !inventory.some((i:any)=>i.status==='available') &&
+    if(!needsManaged && !inWorksite && mealDue && Array.isArray(inventory) && !inventory.some((i:any)=>i.status==='available') &&
        Number.isFinite(price) && price>0 && wallet?.frozen!==true && Number.isFinite(wallet?.balance) && wallet.balance>=price &&
        state.life.constraints.capabilities.some(c=>c.name==='service.buy-rice'&&c.enabled) &&
        !state.life.actions.some(a=>a.actionType==='service.buy-rice'&&['PENDING','DISPATCHED','UNKNOWN'].includes(a.status))) {

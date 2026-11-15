@@ -27,6 +27,12 @@ test('eating one bowl leaves hunger and a strong rice craving in the actual spee
 });
 
 const hour=3600000;
+test('autonomy model allowance accepts 20 daily calls and rejects values above 20',async()=>{
+ const f=fixture(),domain=new LegacyDomain(f.reader,f.uow,f.gate,{});
+ await domain.configure('main','allowance-20',{learning:{dailyModelCalls:20}});
+ assert.equal(f.get().legacy.config.learning.dailyModelCalls,20);
+ await assert.rejects(domain.configure('main','allowance-21',{learning:{dailyModelCalls:21}}));
+});
 function event(id,type,at,extra={}){return {eventId:id,petId:'main',type,source:'desktop',actorId:'dad',occurredAt:new Date(at).toISOString(),receivedAt:new Date(at).toISOString(),evidenceLevel:'observed',payload:{},...extra};}
 function fixture(now=Date.now()){
   const old=Object.create(CompanionStore.prototype);Object.assign(old,{data:{version:2,pets:{}},loaded:true,clock:()=>now,save(){},load(){}});

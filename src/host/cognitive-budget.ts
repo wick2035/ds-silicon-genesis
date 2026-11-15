@@ -7,7 +7,7 @@ import type { KernelStore } from '../kernel/types.js';
 import type { PetGate, UnitOfWork } from '../storage/uow.js';
 import type { ModelBudget } from './model-facade.js';
 
-type Category='autonomous'|'diary'|'reflection'|'interactive';
+type Category='autonomous'|'needs'|'diary'|'reflection'|'interactive';
 type Context={petId:string;category:Category;ticket?:object;consumed:boolean};
 const exhausted=Symbol('budget exhausted');
 /** Shared UOW-backed reservation; a call already reserved by Cognition receives
@@ -26,7 +26,7 @@ export class DurableCognitiveBudget implements CognitiveBudget, ModelBudget {
     });
   }
   private chargeDraft(draft:CanonicalEnvelope,category:Category):void {
-    try{if(category==='interactive')spendConversationSpirit(draft.life);else spendSpirit(draft.life,'thought');}catch{throw exhausted;}
+    try{if(category==='interactive'||category==='needs')spendConversationSpirit(draft.life);else spendSpirit(draft.life,'thought');}catch{throw exhausted;}
     const pet=draft.legacy as Record<string,any>, constraints=draft.life.constraints;
     const limit=pet.config?.learning?.dailyModelCalls;
     if(category!=='interactive' && (constraints.paused || !Number.isSafeInteger(limit) || limit<0))throw exhausted;
@@ -40,7 +40,7 @@ export class DurableCognitiveBudget implements CognitiveBudget, ModelBudget {
       if(cap!==undefined && (!Number.isSafeInteger(cap)||cap<0||usage.interactiveCalls>=cap))throw exhausted;
       usage.interactiveCalls++;
     } else {
-      const cap=category==='autonomous'?Math.max(0,limit-2):limit;
+      const cap=category==='autonomous'||category==='needs'?Math.max(0,limit-2):limit;
       if(usage.totalCalls>=cap)throw exhausted;
       usage.totalCalls++;usage.modelCalls++;
       constraints.remainingBudget=Math.max(0,Math.max(0,limit-2)-usage.totalCalls);
@@ -77,7 +77,7 @@ export class DurableCognitiveBudget implements CognitiveBudget, ModelBudget {
   /** Host wraps each non-cognitive entry point with the correct trusted pet
    * and category; callers must not supply this context from model output. */
   runAs<T>(petId:string,category:Category,fn:()=>Promise<T>):Promise<T>{
-    if(!petId || !['autonomous','diary','reflection','interactive'].includes(category))throw new Error('模型预算类别无效');
+    if(!petId || !['autonomous','needs','diary','reflection','interactive'].includes(category))throw new Error('模型预算类别无效');
     return this.context.run({petId,category,consumed:false},fn);
   }
 }
