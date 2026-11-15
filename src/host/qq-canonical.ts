@@ -78,7 +78,9 @@ export class CanonicalQQ {
       for(const kind of ['owner','group'] as const) { const value=codes[kind]; if(!value) continue;
         if(!key(value.code)||!Number.isFinite(value.expiresAt)) throw new Error('QQ 配对码无效');
         if(kind==='owner' ? qq.identity.ownerOpenid : qq.identity.groupOpenid) continue;
-        if(!qq.pairing[kind]) qq.pairing[kind]={digest:hash(value.code),expiresAt:value.expiresAt};
+        const previous=qq.pairing[kind], digest=hash(value.code), now=Date.now();
+        if(!previous || (previous.expiresAt<=now && value.expiresAt>now && previous.digest!==digest))
+          qq.pairing[kind]={digest,expiresAt:value.expiresAt};
       }
       return {value:undefined};
     });

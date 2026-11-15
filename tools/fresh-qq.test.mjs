@@ -74,3 +74,23 @@ test('ordinary messages skip the pairing transaction but still require gateway a
   }
   assert.equal(writes,0);
 });
+
+test('startup accepts a fresh code after expiry without reviving or replacing a live code',async()=>{
+  const ingress={},controller=new AbortController();
+  const state={petId:'main',version:0,legacy:{qq:{identity:{appId:'222',ownerOpenid:'owner',groupEnabled:true,groupMode:'all'},seen:{},outbound:{}}},life:{events:[]}};
+  const canonical=new CanonicalQQ({loadEnvelope:async()=>state},
+    {apply:async(_id,_version,change)=>{change(state);state.version++;}},
+    {signal:controller.signal,run:async(_id,fn)=>fn()},()=>({}),ingress);
+  const expiresAt=Date.now()+60000;
+  await canonical.configurePairing('main',{group:{code:'expired',expiresAt:1}});
+  await canonical.configurePairing('main',{group:{code:'expired',expiresAt}});
+  assert.equal(state.legacy.qq.pairing.group.expiresAt,1);
+  await canonical.configurePairing('main',{group:{code:'fresh',expiresAt}});
+  await canonical.configurePairing('main',{group:{code:'replacement',expiresAt:expiresAt+10000}});
+  const message={messageId:'renewed-group',scene:'group',actorOpenid:'group-owner',groupOpenid:'group',text:'/绑定群 fresh',occurredAt:new Date().toISOString()};
+  assert.equal((await canonical.pair('main',{...message,text:'/绑定群 expired'},ingress)).paired,false);
+  assert.equal((await canonical.pair('main',message,ingress)).paired,true);
+  assert.equal(state.legacy.qq.identity.ownerOpenid,'owner');
+  await canonical.configurePairing('main',{group:{code:'another',expiresAt}});
+  assert.equal(state.legacy.qq.pairing.group,undefined);
+});
