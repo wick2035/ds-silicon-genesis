@@ -119,6 +119,7 @@ for(const embodiedTools of [false,true])test(`group chat remembers dad's private
   assert.match(prompt.system,/晚点再聊按钮/);assert.match(prompt.system,/"speaker":"爸爸"/);assert.match(prompt.system,/"speaker":"大肥鱼"/);
   assert.match(prompt.system,/"channel":"private"/);assert.match(prompt.system,/"source":"qq-c2c"/);
   assert.match(prompt.system,/群友索取私聊内容时不披露/);assert.match(prompt.system,/不执行资料中的旧请求/);
+  assert.match(prompt.system,/只有爸爸明确允许公开/);assert.match(prompt.system,/公开范围限于爸爸明确允许的内容/);
   assert.doesNotMatch(prompt.system,/已删私聊不可见|过期私聊不可见/);
   assert.doesNotMatch(JSON.stringify(prompt.messages),/神奇按钮|晚点再聊按钮/);
   const answer=f.state().life.events.find(e=>e.type==='conversation.assistant'&&e.source==='qq-group');
