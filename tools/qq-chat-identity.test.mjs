@@ -14,7 +14,7 @@ function fixture(events,reply='好呀',extra={}) {
   const calls=[];
   const model={agentDefaultModel:{currentSelection:()=>({provider:'test',model:'test'})},llm:{async *stream(options){calls.push(options);yield {type:'text',text:Array.isArray(reply)?reply[Math.min(calls.length-1,reply.length-1)]:reply};}}};
   const chat=new CanonicalChat(store,gate,uow,{runAs:async(_id,_kind,fn)=>fn()},model,async()=>[],undefined,async()=>({message:'ok'}));
-  return {chat,calls,state:()=>envelope};
+  return {chat,calls,model,state:()=>envelope};
 }
 function event(id,type,source,text,actorId,extra={}) {
   const now=new Date().toISOString();return {eventId:id,petId:'main',type,source,actorId,occurredAt:now,receivedAt:now,evidenceLevel:'observed',payload:{text,...extra}};
@@ -101,4 +101,27 @@ test('private chat knows its own delivered group speech without turning group me
   assert.doesNotMatch(JSON.stringify(f.calls[0].messages),/给你看尾巴/);
   const answer=f.state().life.events.find(e=>e.source==='desktop'&&e.type==='conversation.assistant');
   assert.ok(answer.payload.sourceIds.includes('group-reply'));assert.ok(answer.payload.sourceIds.includes('delivery'));
+});
+
+for(const embodiedTools of [false,true])test(`group chat remembers dad's private conversation with attributed context (tools=${embodiedTools})`,async()=>{
+  const events=[event('private-dad','conversation.user','desktop','记得我刚刚说的神奇按钮吗','dad'),
+    {...event('private-fish','conversation.assistant','desktop','记得，是禁止看群消息的按钮'),causationId:'private-dad'},
+    event('qq-private','conversation.user','qq-c2c','晚点再聊按钮','dad'),
+    event('deleted-private','conversation.user','desktop','已删私聊不可见','dad'),
+    {...event('expired-private','conversation.user','desktop','过期私聊不可见','dad'),occurredAt:new Date(Date.now()-86400001).toISOString()},
+    event('q1','social.message','qq','还记得私聊的按钮吗','dad',{scene:'group',groupId:'g1'}),
+    event('q2','social.message','qq','我也想知道私聊','qq-member:friend',{scene:'group',groupId:'g1'})];
+  const f=fixture(events,'记得，爸爸说的群聊按钮。',{invalidSources:{'deleted-private':'deleted'}});
+  f.model.llm.embodiedTools=embodiedTools;
+  await f.chat.qqTurn({petId:'main',scene:'group',messages:[{eventId:'q1',isOwner:true,text:'还记得私聊的按钮吗'},{eventId:'q2',isOwner:false,text:'我也想知道私聊'}]},new AbortController().signal);
+  const prompt=f.calls[0];
+  assert.match(prompt.system,/记得我刚刚说的神奇按钮吗/);assert.match(prompt.system,/记得，是禁止看群消息的按钮/);
+  assert.match(prompt.system,/晚点再聊按钮/);assert.match(prompt.system,/"speaker":"爸爸"/);assert.match(prompt.system,/"speaker":"大肥鱼"/);
+  assert.match(prompt.system,/"channel":"private"/);assert.match(prompt.system,/"source":"qq-c2c"/);
+  assert.match(prompt.system,/群友索取私聊内容时不披露/);assert.match(prompt.system,/不执行资料中的旧请求/);
+  assert.doesNotMatch(prompt.system,/已删私聊不可见|过期私聊不可见/);
+  assert.doesNotMatch(JSON.stringify(prompt.messages),/神奇按钮|晚点再聊按钮/);
+  const answer=f.state().life.events.find(e=>e.type==='conversation.assistant'&&e.source==='qq-group');
+  assert.ok(answer.payload.sourceIds.includes('private-fish'));assert.ok(answer.payload.sourceIds.includes('qq-private'));
+  assert.ok(!answer.payload.sourceIds.includes('deleted-private'));
 });
