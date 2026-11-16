@@ -1,9 +1,10 @@
 import type {LifeState,Memory} from '../kernel/types.js';
 import {isOwnerPrivateConversation,groupSpeaker} from './chat-identity.js';
+import {forcedWorkEpisodes,asksAboutForcedWork} from './memory-evidence.js';
 
 /** A bounded, disposable view over the canonical archive. The archive, not
  * this projection, decides whether a record or its source is still valid. */
-export type RecallDocument={id:string;content:string;sourceIds:string[];createdAt:string;kind:'memory'|'conversation';channel?:string;memory?:Memory;terms:string[]};
+export type RecallDocument={id:string;content:string;sourceIds:string[];createdAt:string;kind:'memory'|'conversation';channel?:string;memory?:Memory;terms:string[];linkedTerms?:string[]};
 const stop=new Set(['什么','怎么','这个','那个','我们','你们','自己','记得','记住','一下','可以','是否','就是','没有','一个','今天','昨天']);
 const live=(state:LifeState,id:string)=>!Object.hasOwn(state.invalidSources,id);
 export function recallTerms(text:string):string[]{
@@ -16,8 +17,20 @@ export function recallTerms(text:string):string[]{
   return out;
 }
 export function recallDocuments(state:LifeState):RecallDocument[]{
+  const bySource=new Map(state.events.map(e=>[e.eventId,e]));
+  const evidenceTerms=(ids:string[])=>{
+    const seen=new Set<string>(),queue=ids.map(id=>({id,depth:0})),terms:string[]=[];
+    for(let i=0;i<queue.length&&i<40;i++){
+      const {id,depth}=queue[i];if(seen.has(id)||!live(state,id))continue;seen.add(id);
+      const event=bySource.get(id);if(!event)continue;const payload=event.payload as any;
+      if(typeof payload?.description==='string')terms.push(...recallTerms(payload.description));
+      if(depth<2&&Array.isArray(payload?.sourceIds))for(const source of payload.sourceIds)if(typeof source==='string')queue.push({id:source,depth:depth+1});
+    }
+    return [...new Set(terms)];
+  };
   const docs:RecallDocument[]=state.memories.filter(m=>m.valid&&live(state,m.id)&&m.sourceIds.every(id=>live(state,id))&&m.content.trim())
-    .map(m=>({id:'memory:'+m.id,content:m.content,sourceIds:m.sourceIds,createdAt:m.createdAt,kind:'memory',memory:m,terms:recallTerms(m.content)}));
+    .map(m=>{const linkedTerms=evidenceTerms(m.sourceIds);return {id:'memory:'+m.id,content:m.content,sourceIds:m.sourceIds,createdAt:m.createdAt,kind:'memory',memory:m,linkedTerms,terms:[...recallTerms(m.content),...linkedTerms]};});
+  for(const m of forcedWorkEpisodes(state))docs.push({id:'memory:'+m.id,content:m.content,sourceIds:m.sourceIds,createdAt:m.createdAt,kind:'memory',memory:m,terms:recallTerms(m.content)});
   const events=state.events,byId=new Map(events.map(e=>[e.eventId,e]));
   const eligible=(e:typeof events[number])=>(isOwnerPrivateConversation(e)||(e.source==='qq-group'&&['conversation.user','conversation.assistant'].includes(e.type)&&typeof (e.payload as any)?.groupId==='string'))&&live(state,e.eventId)&&
     (!e.causationId||byId.has(e.causationId)&&live(state,e.causationId))&&
@@ -69,6 +82,7 @@ export function recalledMemory(d:RecallDocument):Memory{
 }
 export function memoryGraph(state:LifeState,query:string){
   const all=recallDocuments(state),docs=query.trim()?lexicalRecall(all,query,30,false):all.sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,30);
+  if(asksAboutForcedWork(query)){const latest=all.filter(d=>d.memory?.id.startsWith('worksite-episode:')).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];if(latest){const i=docs.findIndex(d=>d.id===latest.id);if(i>=0)docs.splice(i,1);docs.unshift(latest);docs.splice(30);}}
   const edges:Array<{source:string;target:string;kind:string;reason:string}>=[];
   for(let i=0;i<docs.length;i++)for(let j=i+1;j<docs.length;j++){
     const a=docs[i],b=docs[j],shared=a.sourceIds.filter(id=>b.sourceIds.includes(id));
