@@ -39,6 +39,7 @@ export class MemoryEmbedding {
   private pending?:CanonicalEnvelope;
   private running=false;
   private timer?:NodeJS.Timeout;
+  private pendingSince=0;
   private state:'ready'|'indexing'|'degraded'='degraded';
   private count=0;private total=0;
   constructor(private readonly lease:WriterLease,private readonly store:PostgresKernelStore,config:ImportedModelConfig){
@@ -62,9 +63,13 @@ export class MemoryEmbedding {
     for(const item of items){if(!Number.isInteger(item.index)||item.index<0||item.index>=texts.length||ordered[item.index]||!Array.isArray(item.embedding)||item.embedding.length!==DIMENSIONS||!item.embedding.every(Number.isFinite))throw Error('invalid embedding');ordered[item.index]=item.embedding;}
     if(ordered.some(x=>!x))throw Error('incomplete embeddings');return ordered;
   }
-  schedule(envelope:CanonicalEnvelope,delay=1000){
-    this.pending=envelope;if(this.timer||this.running||this.lease.signal.aborted)return;
-    this.lease.detach(()=>{this.timer=setTimeout(()=>{this.timer=undefined;void this.run();},delay);this.timer.unref();});
+  schedule(envelope:CanonicalEnvelope,delay=5000){
+    if(this.lease.signal.aborted)return;
+    if(!this.pending)this.pendingSince=Date.now();
+    this.pending=envelope;if(this.running)return;
+    if(this.timer)clearTimeout(this.timer);
+    const wait=Math.min(delay,Math.max(0,30000-(Date.now()-this.pendingSince)));
+    this.lease.detach(()=>{this.timer=setTimeout(()=>{this.timer=undefined;void this.run();},wait);this.timer.unref();});
   }
   private async run(){
     if(this.running||!this.pending||this.lease.signal.aborted)return;
@@ -95,7 +100,7 @@ export class MemoryEmbedding {
         await this.lease.query('DELETE FROM silicon_genesis.memory_index_embedding WHERE pet_id=$1 AND NOT(document_id=ANY($2::text[]))',[envelope.petId,ids]);
       });
       this.state='ready';
-    }catch{this.state='degraded';if(!this.pending&&!this.lease.signal.aborted)this.pending=envelope;}
+    }catch{this.state='degraded';if(!this.pending&&!this.lease.signal.aborted){this.pending=envelope;this.pendingSince=Date.now();}}
     finally{this.running=false;if(this.pending)this.schedule(this.pending,this.state==='degraded'?30000:1000);}
   }
   async candidates(petId:string,query:string,docs:RecallDocument[]):Promise<RecallDocument[]>{

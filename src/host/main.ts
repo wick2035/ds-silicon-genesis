@@ -4,6 +4,7 @@ import {createLaborCompletionNotices} from './labor-completion-notices.js';
 import {companionContext,COMPANION_PERSONALITY} from './companion-personality.js';
 import {createInteractionReactions} from './interaction-reactions.js';
 import {createFeedbackLeafPublisher,createImmediateFeedback} from './operation-feedback.js';
+import {createCommitObservers} from './commit-observers.js';
 import {groupChatBlocked} from './qq-group-access.js';
 import {readMemeChoices,withMemeSpeech,type MemeSource} from './meme-speech.js';
 import {createEmbodiedSpeech} from './embodied-speech.js';
@@ -178,9 +179,12 @@ export async function main():Promise<void> {
       return {status:'completed',evidence:{actionId:intent.id,kind:'self.express',confirmed:true,...(meme?{meme}:{})}};
     });
     const reranker=new LocalReranker(root,lease.signal);
+    const commitObservers=createCommitObservers(),dispatchObservers=createCommitObservers();
+    unitOfWork.onCommit(commitObservers.notify);dispatcher.onCommit(dispatchObservers.notify);
+    const observeCommits=(observer:Parameters<typeof commitObservers.add>[0])=>{commitObservers.add(observer);dispatchObservers.add(observer);};
     const memoryIndex=new MemoryIndex(lease,store),embedding=new MemoryEmbedding(lease,store,modelConfig);
     const scheduleMemory=(draft:Parameters<typeof memoryIndex.schedule>[0])=>{memoryIndex.schedule(draft);embedding.schedule(draft);};
-    unitOfWork.onCommit(scheduleMemory);dispatcher.onCommit(scheduleMemory);
+    observeCommits(scheduleMemory);
     const initialIndexState=await store.loadEnvelope(petId);if(initialIndexState)scheduleMemory(initialIndexState);
     const retrieval=new CanonicalMemoryRetrieval(lease,desktopIdle,reranker,memoryIndex,embedding), chat=new CanonicalChat(store,lease,unitOfWork,budget,model,(id,q,snapshot)=>retrieval.search(id,q,12,snapshot),(id,key,input)=>domain.laborAction(id,key,input),(id,input)=>service(id,input),id=>worksiteWake(id),grounding);
     let requestShutdown=()=>{};
@@ -256,15 +260,15 @@ export async function main():Promise<void> {
         configuredPetIds=()=>{const cfg=helpers.readAllConfig(deps.configPaths),ids=new Set<string>([petId]);if(!cfg||typeof cfg!=='object'||!Object.keys(cfg).length)throw Error('宠物配置不可用');for(const conf of Object.values(cfg) as any[]){if(!Array.isArray(conf?.pets))throw Error('宠物配置结构无效');for(const pet of conf.pets){if(typeof pet?.id!=='string'||!pet.id)throw Error('宠物配置标识无效');ids.add(pet.id);}}return ids;};
         publishWhisper=(text:string,image?:string,surface?:string)=>{const cfg=helpers.readAllConfig(deps.configPaths);const voiceTo=cfg.main?.voiceEnabled===true&&(surface==='web'||surface==='desktop')?surface:undefined;deps.state.writePet(petId,'say',{text,companionWhisper:true,...((image??replyMemes.get(text))?{image:image??replyMemes.get(text)}:{}),...(voiceTo?{voiceTo}:{})});};
         const immediateFeedback=createImmediateFeedback(reactionBaseline,createFeedbackLeafPublisher(leaf=>deps.state.writePet(petId,'say',leaf)));
-        unitOfWork.onCommit(immediateFeedback);dispatcher.onCommit(immediateFeedback);
+        observeCommits(immediateFeedback);
         const reactToInteraction=createInteractionReactions(reactionBaseline,(id,event,signal)=>responses(id,'interaction',signal,event),text=>deps.state.writePet(petId,'say',{...careReactionLeaf(text,helpers.readAllConfig(deps.configPaths).main?.voiceEnabled===true),...(replyMemes.has(text)?{image:replyMemes.get(text)}:{})}),lease.signal);
-        unitOfWork.onCommit(reactToInteraction);dispatcher.onCommit(reactToInteraction);
+        observeCommits(reactToInteraction);
         const notifyCompletion=createLaborCompletionNotices(store,petId,(id,event,signal)=>responses(id,'completion',signal,event,{autonomous:true}),
           text=>deps.state.writePet(petId,'say',{...careReactionLeaf(text,helpers.readAllConfig(deps.configPaths).main?.voiceEnabled===true),...(replyMemes.has(text)?{image:replyMemes.get(text)}:{})}),lease.signal);
-        unitOfWork.onCommit(notifyCompletion);dispatcher.onCommit(notifyCompletion);notifyCompletion(reactionBaseline);
+        observeCommits(notifyCompletion);notifyCompletion(reactionBaseline);
         const reactToCare=createCareReactions(reactionBaseline,(id,event,signal)=>responses(id,'care',AbortSignal.any([lease.signal,signal]),event),text=>deps.state.writePet(petId,'say',{...careReactionLeaf(text,helpers.readAllConfig(deps.configPaths).main?.voiceEnabled===true),...(replyMemes.has(text)?{image:replyMemes.get(text)}:{})}));
         waitCareResponse=eventId=>reactToCare.wait(eventId);
-        unitOfWork.onCommit(reactToCare);dispatcher.onCommit(reactToCare);
+        observeCommits(reactToCare);
         const reactToWorksite=createWorksiteReactions(reactionBaseline,(id,event,signal)=>responses(id,'worksite',AbortSignal.any([lease.signal,signal]),event),async(id,event,text,fallback)=>{
           const published=await lease.run(id,async()=>{const current=await store.loadEnvelope(id);if(!current)return false;let valid=false;
             await unitOfWork.apply(id,current.version,draft=>{const transitions=draft.life.events.filter(e=>e.type==='interaction.worksite'&&['enter-forced','enter-voluntary','release','leave-voluntary','force-work','touch','drag'].includes((e.payload as any)?.action));
@@ -275,7 +279,7 @@ export async function main():Promise<void> {
           // These two manually requested reactions speak even if general chat voice is off.
           if(published&&!lease.signal.aborted)deps.state.writePet(id,'say',{...careReactionLeaf(text,false),...(replyMemes.has(text)?{image:replyMemes.get(text)}:{}),worksiteReaction:true});
         });
-        unitOfWork.onCommit(reactToWorksite);dispatcher.onCommit(reactToWorksite);
+        observeCommits(reactToWorksite);
         validateWhisperSurface=(surface?:string)=>{const params=new URLSearchParams({pet:petId,...(surface?{surface}:{})});if(!deps.requirePet(params,()=>helpers.readAllConfig(deps.configPaths),{surface:true}).ok)throw Error('当前显示端不可用');};
         resolveWhisperImage=async(name:string,surface?:string)=>{const key=name.trim();if(!key||key.length>120||/[\/\\:\x00-\x1f]/.test(key)||key==='.'||key==='..')throw Error('表情名称无效');const params=new URLSearchParams({pet:petId,...(surface?{surface}:{})});const who=deps.requirePet(params,()=>helpers.readAllConfig(deps.configPaths),{surface:true});if(!who.ok)throw Error('当前显示端不可用');const memes=who.conf?.memes;if(!memes||!Object.hasOwn(memes,key)||typeof memes[key]!=='string'||!memes[key].trim())throw Error('表情不在当前素材池');for(const dir of deps.memeDirsFor(who.entry)){try{const base=await realpath(dir),file=await realpath(join(dir,key+'.png')),rel=relative(base,file);if(!rel||rel==='..'||rel.startsWith('..'+(process.platform==='win32'?'\\':'/'))||isAbsolute(rel))continue;const info=await stat(file);if(info.isFile())return key;}catch{}}throw Error('表情图片不可用');};
         const sync=(state:any)=>{if(state.petId!==petId)return;const sleeping=projectBody(state).body.sleeping;
@@ -285,9 +289,9 @@ export async function main():Promise<void> {
             if(names)deps.sleep.enter(petId,names);
           } else if(!sleeping && deps.sleep.sleeping(petId))deps.sleep.wake(petId);
         };
-        unitOfWork.onCommit(sync);dispatcher.onCommit(sync);
+        observeCommits(sync);
         const expressed=new Set<string>((reactionBaseline.life.events||[]).filter(e=>e.eventId.startsWith('self-expression:')).map(e=>e.eventId));
-        dispatcher.onCommit(draft=>{for(const e of draft.life.events){if(e.eventId.startsWith('self-expression:') && !expressed.has(e.eventId)){expressed.add(e.eventId);const text=(e.payload as any)?.text;if(typeof text==='string')publishWhisper?.(text,(e.payload as any)?.meme);}}});
+        dispatchObservers.add(draft=>{for(const e of draft.life.events){if(e.eventId.startsWith('self-expression:') && !expressed.has(e.eventId)){expressed.add(e.eventId);const text=(e.payload as any)?.text;if(typeof text==='string')publishWhisper?.(text,(e.payload as any)?.meme);}}});
         void store.loadEnvelope(petId).then(state=>{if(state)sync(state);}).catch(()=>{});
       },route:(original)=>async(url,method,body,signal)=>{
         const pathname=new URL(url,'http://127.0.0.1').pathname;
@@ -335,7 +339,7 @@ export async function main():Promise<void> {
           finally {running=false;}};
         const wake=(state:any)=>{if(state.petId!==petId||lease.signal.aborted)return;const events=state.life.events,actions=state.life.actions;const next=events.length+':'+(events.at(-1)?.eventId||'')+':'+actions.length;
           if(next===signature)return;signature=next;if(running){dirty=true;return;}if(!timer)lease.detach(()=>{timer=setTimeout(()=>void run(),100);timer.unref();});};
-        unitOfWork.onCommit(wake);dispatcher.onCommit(wake);
+        observeCommits(wake);
         lease.signal.addEventListener('abort',()=>{if(timer)clearTimeout(timer);},{once:true});
         const current=await store.loadEnvelope(petId);if(current)wake(current);
       }

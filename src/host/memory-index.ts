@@ -9,10 +9,15 @@ export class MemoryIndex {
   private pending?:CanonicalEnvelope;
   private timer?:NodeJS.Timeout;
   private running=false;
+  private pendingSince=0;
   constructor(private readonly lease:WriterLease,private readonly store:PostgresKernelStore){lease.signal.addEventListener('abort',()=>{if(this.timer)clearTimeout(this.timer);},{once:true});}
-  schedule(envelope:CanonicalEnvelope,delay=1000){
-    this.pending=envelope;if(this.timer||this.running||this.lease.signal.aborted)return;
-    this.lease.detach(()=>{this.timer=setTimeout(()=>{this.timer=undefined;void this.run();},delay);this.timer.unref();});
+  schedule(envelope:CanonicalEnvelope,delay=5000){
+    if(this.lease.signal.aborted)return;
+    if(!this.pending)this.pendingSince=Date.now();
+    this.pending=envelope;if(this.running)return;
+    if(this.timer)clearTimeout(this.timer);
+    const wait=Math.min(delay,Math.max(0,30000-(Date.now()-this.pendingSince)));
+    this.lease.detach(()=>{this.timer=setTimeout(()=>{this.timer=undefined;void this.run();},wait);this.timer.unref();});
   }
   private async run(){
     if(this.running||!this.pending||this.lease.signal.aborted)return;this.running=true;
@@ -39,7 +44,7 @@ export class MemoryIndex {
           WHERE pet_id=$1 AND source_version=$2 GROUP BY term`,[envelope.petId,envelope.version]);
         await this.lease.query(`INSERT INTO silicon_genesis.memory_index_status(pet_id,source_version,document_count) VALUES($1,$2,$3)
           ON CONFLICT(pet_id) DO UPDATE SET source_version=EXCLUDED.source_version,document_count=EXCLUDED.document_count,updated_at=now()`,[envelope.petId,envelope.version,docs.length]);});
-    }catch{failed=true;if(!this.pending&&!this.lease.signal.aborted)this.pending=envelope;/* Retry while chat uses the canonical snapshot. */}
+    }catch{failed=true;if(!this.pending&&!this.lease.signal.aborted){this.pending=envelope;this.pendingSince=Date.now();}/* Retry while chat uses the canonical snapshot. */}
     finally{this.running=false;if(this.pending)this.schedule(this.pending,failed?30000:1000);}
   }
   async candidates(stateVersion:number,petId:string,query:string):Promise<Set<string>|null>{
