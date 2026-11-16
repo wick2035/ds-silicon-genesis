@@ -140,14 +140,14 @@ test('照料回应走桌面可见气泡，并按语音设置决定是否朗读',
   assert.equal(careReactionLeaf('喝到了',false).voiceTo,undefined);
 });
 
-test('照料完成后面板显示她的回应，而不是只显示完成状态',async()=>{
+test('照料完成后面板立即显示真实结果，不等待模型回应',async()=>{
   const gate={signal:new AbortController().signal,run:async(_id,fn)=>fn()};
   const waits=[];
   const adapter=createLegacyRequestAdapter({store:{loadEnvelope:async()=>null},gate,domain:{},humanity:{snapshot:async()=>({lastThought:'备用回应'})},
     resolvePet:()=>({petId:'main',name:'大肥鱼'}),service:async()=>({ok:true,status:'done',actionId:'drink-id',message:'照料已完成'}),
     waitCareResponse:async id=>{waits.push(id);return '咕噜，谢谢爸爸。';}});
   const result=await adapter('http://localhost/humanity/care?pet=main','POST',JSON.stringify({action:'water'}));
-  assert.equal(result.obj.text,'咕噜，谢谢爸爸。');assert.deepEqual(waits,['care-water:drink-id']);
+  assert.equal(result.obj.text,'喝水已完成。');assert.deepEqual(waits,[]);
 });
 
 test('模型返回空内容时不会发布虚构的照料回应',async()=>{
@@ -163,6 +163,14 @@ test('照料回应显示期间不会被普通心情气泡盖掉',async()=>{
   vm.runInNewContext(source,{PetSprite:Sprite});const sprite=new Sprite();
   sprite.showCareReaction('喝到啦，谢谢爸爸。',12000);sprite.showInnerThought('其他心情');
   assert.deepEqual(shown,['喝到啦，谢谢爸爸。']);
+});
+
+test('即时操作反馈在空闲时带动画，正在播放真实身体动作时不打断它',async()=>{
+  const source=await readFile(new URL('../vendor/dsh-pet/runtime/electron-helper/sprite/desktop-body.js',import.meta.url),'utf8');
+  const shown=[];class Sprite{showWhisper(...args){shown.push(args);}playIdle(){}switchTo(){}dispose(){}}
+  vm.runInNewContext(source,{PetSprite:Sprite});const sprite=new Sprite();sprite.animations={events:{whisper:['talk']}};
+  sprite.showCareReaction('到账',8000,true);sprite.bodyExecuting=true;sprite.showCareReaction('已完成',8000,true);
+  assert.equal(shown[0][4],true);assert.equal(shown[1][4],false);
 });
 
 test('喝水请求经过排队、桌面播放和可信回执后才落账',async()=>{
@@ -186,6 +194,7 @@ test('喝水请求经过排队、桌面播放和可信回执后才落账',async(
   const service=createLegacyServiceActions(store,gate,uow,actions,dispatcher);
   const result=await service('main',{key:'drink-request-123',command:'/喝水'});
   assert.equal(result.status,'done');assert.equal(state.life.events.find(e=>e.type==='social.care').payload.action,'water');
+  assert.equal(state.life.events.find(e=>e.type==='action.receipt').payload.feedback,'喝水已完成。');
   assert.ok(describeHumanity(state.humanity,Date.now()+25000).stats.hydration>20);
   channel.close();
 });

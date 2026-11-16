@@ -43,7 +43,7 @@ test('machine ticks and automatic worksite transfers do not trigger manual react
 test('care panel never mistakes an old thought for the new response',async()=>{
   const adapter=createLegacyRequestAdapter({store:{},gate:{signal:new AbortController().signal},domain:{},humanity:{snapshot:async()=>({lastThought:'旧的感受'})},resolvePet:()=>({petId:'main'}),service:async()=>({ok:true,status:'done',actionId:'test'}),waitCareResponse:async()=>undefined});
   const result=await adapter('/humanity/care','POST',JSON.stringify({action:'water'}));
-  assert.match(result.obj.text,/照料已完成.*等她回应/);assert.doesNotMatch(result.obj.text,/旧的感受/);
+  assert.equal(result.obj.text,'喝水已完成。');assert.doesNotMatch(result.obj.text,/旧的感受/);
 });
 test('manual service receipts distinguish failure, uncertainty and real completion',()=>{
   const current=state([{eventId:'request',type:'service.requested',source:'user'}]);

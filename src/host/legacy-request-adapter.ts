@@ -53,8 +53,8 @@ export function createLegacyRequestAdapter({store,gate,domain,humanity,resolvePe
         const commands:Record<string,string>={feed:'/喂',water:'/喝水',pet:'/摸摸',play:'/玩',soothe:'/安慰',accompany:'/陪伴'};
         if(!service)throw Error('照料服务尚未接入');const outcome:any=await service(petId,{key:requestId,command:commands[input.action]});
         if(!outcome.ok)throw Error(outcome.message||'照料未完成');
-        const reply=outcome.status==='done'&&typeof outcome.actionId==='string'?await waitCareResponse?.('care-'+input.action+':'+outcome.actionId):undefined;
-        const state=await humanity.snapshot(petId),text=reply||(outcome.status==='done'?'照料已完成，正在等她回应；稍后可查看桌宠气泡。':outcome.message);
+        const labels:Record<string,string>={feed:'喂饭',water:'喝水',pet:'摸摸',play:'玩耍',soothe:'安慰',accompany:'陪伴'};
+        const state=await humanity.snapshot(petId),text=outcome.status==='done'?`${labels[input.action]}已完成。`:outcome.message;
         return json({ok:true,text,pending:outcome.status==='pending',state});
       }
       if(path==='humanity/care'&&input.action==='explore'){

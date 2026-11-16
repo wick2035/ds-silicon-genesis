@@ -76,12 +76,13 @@ export class OutboxDispatcher {
       const intent={id:row.action_id,type:row.action_type,payload:row.payload},receipt:ExecutionReceipt={status:'cancelled',evidence:{reason:'行动执行器不可用'}};
       this.lifecycle.complete(draft,intent,receipt);draft.version++;
       await client.query('UPDATE silicon_genesis.life_state SET version=$2,payload=$3::jsonb,updated_at=now() WHERE pet_id=$1',[petId,draft.version,JSON.stringify(draft)]);
-      await client.query("UPDATE silicon_genesis.outbox SET state='cancelled',receipt=$2::jsonb,updated_at=now() WHERE action_id=$1",[actionId,JSON.stringify(receipt)]);await client.query('COMMIT');
+      await client.query("UPDATE silicon_genesis.outbox SET state='cancelled',receipt=$2::jsonb,updated_at=now() WHERE action_id=$1",[actionId,JSON.stringify(receipt)]);await client.query('COMMIT');this.notify(draft);
     }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}});
   }
   private readonly active = new Map<string,{controller:AbortController;policy:string}>();
   private readonly listeners=new Set<(draft:CanonicalEnvelope)=>void>();
   onCommit(listener:(draft:CanonicalEnvelope)=>void):()=>void {this.listeners.add(listener);return ()=>this.listeners.delete(listener);}
+  private notify(draft:CanonicalEnvelope):void {for(const listener of this.listeners)try{listener(structuredClone(draft));}catch{/* feedback cannot undo a committed transaction */}}
   constructor(private readonly pool: Pool,
     private readonly executors: ReadonlyMap<string, (petId: string, intent: OutboxIntent, signal: AbortSignal) => Promise<ExecutionReceipt>>,
     private readonly gate: PetGate, private readonly lifecycle: ActionLifecycle,
@@ -124,6 +125,7 @@ export class OutboxDispatcher {
         await client.query('UPDATE silicon_genesis.life_state SET version=$2,payload=$3::jsonb,updated_at=now() WHERE pet_id=$1', [petId,draft.version,JSON.stringify(draft)]);
         await client.query('UPDATE silicon_genesis.outbox SET state=$2,receipt=$3::jsonb,updated_at=now() WHERE action_id=$1', [actionId,receipt.status.toLowerCase(),JSON.stringify(receipt)]);
         await client.query('COMMIT');
+        this.notify(draft);
         return true;
       } catch (error) { await client.query('ROLLBACK'); throw error; }
       finally { client.release(); }
@@ -154,7 +156,7 @@ export class OutboxDispatcher {
         draft.version++;
         await client.query('UPDATE silicon_genesis.life_state SET version=$2,payload=$3::jsonb,updated_at=now() WHERE pet_id=$1', [row.pet_id,draft.version,JSON.stringify(draft)]);
         await client.query("UPDATE silicon_genesis.outbox SET state='unknown',receipt=$2::jsonb,updated_at=now() WHERE action_id=$1", [row.action_id,JSON.stringify(receipt)]);
-        await client.query('COMMIT'); count++;
+        await client.query('COMMIT'); this.notify(draft); count++;
       } catch (error) { await client.query('ROLLBACK'); throw error; }
       finally { client.release(); }
     });
@@ -195,6 +197,7 @@ export class OutboxDispatcher {
         await client.query('UPDATE silicon_genesis.life_state SET version=$2,payload=$3::jsonb,updated_at=now() WHERE pet_id=$1', [petId,draft.version,JSON.stringify(draft)]);
         await client.query("UPDATE silicon_genesis.outbox SET state='cancelled',receipt=$2::jsonb,updated_at=now() WHERE action_id=$1", [actionId,JSON.stringify(receipt)]);
         await client.query('COMMIT');
+        this.notify(draft);
         return receipt;
       }
       draft.version++;
@@ -236,7 +239,7 @@ export class OutboxDispatcher {
         WHERE action_id=$1 AND state='dispatched' RETURNING action_id`, [actionId,receipt.status,JSON.stringify(receipt)]);
       if (result.rowCount !== 1) throw new Error('行动回执冲突，须对账');
       await done.query('COMMIT');
-      for(const listener of this.listeners)try{listener(structuredClone(draft));}catch{/* committed state remains authoritative */}
+      this.notify(draft);
       return receipt;
     } catch (error) { await done.query('ROLLBACK'); throw error; }
     finally { done.release(); }

@@ -19,9 +19,12 @@ function fixture(){
 test('forced entry survives a fresh service instance and only a manual release unlocks it',async()=>{
   const f=fixture();f.get().legacy.worksite={inside:false,forced:false,speech:{text:'上次的回应'}};f.get().legacy.labor.contracts.push({id:'c',status:'working',workPermit:true,batchRemaining:2});await f.service.act('main','enter-forced');
   assert.equal(f.woken(),1);
-  assert.deepEqual((await f.service.snapshot('main')).location,{inside:true,forced:true,requested:false});
+  const location=(await f.service.snapshot('main')).location;
+  assert.equal(location.inside,true);assert.equal(location.forced,true);assert.equal(location.requested,false);
+  assert.match(location.speech.text,/操作反馈.*拖进搬砖网页/);
   await assert.rejects(f.service.act('main','leave-voluntary'),/等爸爸/);
-  await f.service.act('main','touch');await f.service.act('main','drag');
+  await f.service.act('main','touch');assert.match(f.get().legacy.worksite.speech.text,/碰了碰/);
+  await f.service.act('main','drag');assert.match(f.get().legacy.worksite.speech.text,/拖动/);
   assert.equal(f.get().life.events.filter(e=>e.type==='interaction.worksite').length,3);
   const recovered=createWorksite(f.store,{run:async(_id,fn)=>fn()},{apply:async()=>{throw Error('unexpected write');}},()=>null,()=>{});
   assert.equal((await recovered.snapshot('main')).location.forced,true);

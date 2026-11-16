@@ -1,4 +1,5 @@
 import {riceAvailability} from './rice-inventory.js';
+import {recentOperationFeedback} from './operation-feedback.js';
 import type {LifeState} from '../kernel/types.js';
 import {companionContext,riceMotivation} from './companion-personality.js';
 import {laborHistory} from './labor-management.js';
@@ -19,6 +20,7 @@ export function conversationContext(state:LifeState, envelope:CanonicalEnvelope,
   const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
   const recentMoney=Array.isArray(pet.events)?pet.events.filter((e:any)=>['wallet','wallet-spend'].includes(e.kind)).slice(-6).map((e:any)=>e.text):[];
   return {
+    operationUpdates:recentOperationFeedback({...envelope,life:envelope.life??state}),
     companion:companionContext({...envelope,life:envelope.life??state},Date.now(),excludeEventIds),
     food:{...riceMotivation(envelope.humanity??{},config),balance:wallet.balance??null,frozen:wallet.frozen===true,price:config.costs?.feed??null,
       ...riceAvailability({...envelope,life:envelope.life??state}),eating:pet.services?.eating??null,recentChanges:recentMoney},

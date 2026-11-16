@@ -72,6 +72,7 @@ export function createWorksite(store:Reader,gate:PetGate,uow:UnitOfWork,view:(id
         }
         if(action==='force-work'&&command?.source==='labor'&&['queued','running'].includes(command.status))command.forcedLabor=true;
         const at=new Date().toISOString(),eventId='worksite:'+randomUUID();
+        if(['enter-forced','force-work','touch','drag'].includes(action))site.speech={eventId,action,text:'【操作反馈】'+text,at:Date.parse(at)};
         (pet.events||=[]).push({id:eventId,kind:'interaction',text,ts:Date.parse(at)});
         draft.life.events.push({eventId,petId:id,type:'interaction.worksite',source:action.includes('voluntary')?'scheduler':'user',...(action.includes('voluntary')?{}:{actorId:'dad'}),occurredAt:at,receivedAt:at,evidenceLevel:'observed',payload:{action,description:text}});
         // A forced batch is a deliberate event she should remember; the memory

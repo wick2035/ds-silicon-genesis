@@ -11,6 +11,7 @@ import {rebuildOutcomeDevelopment} from '../kernel/outcome-development.js';
 import {validateManualService} from './manual-service-validation.js';
 import { validateQQReply } from './qq-canonical.js';
 import {projectActionBody} from './body-projection.js';
+import {actionFeedback} from './operation-feedback.js';
 import { validateProposal } from '../kernel/index.js';
 import { projectOutcome } from './outcome-projector.js';
 import type { ActionReceipt, LifeAction, LifeEvent, LifeState } from '../kernel/types.js';
@@ -152,6 +153,8 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
       occurredAt:now, receivedAt:now, causationId:receiptId,
       payload:{actionId:action.id, status:outcome,...(action.actionType==='body.activity'?{activity:action.parameters.activity,...(action.parameters.target?{target:action.parameters.target}:{}),...(receipt.evidence.reason?{interruption:receipt.evidence.reason}:{})}:{})}, evidenceLevel:outcome === 'UNKNOWN' ? 'inferred' : 'observed'};
     projectOutcome(draft, intent, receipt, now, eventId);
+    const feedback=actionFeedback(draft,action,outcome);
+    Object.assign(event.payload as object,{actionType:action.actionType,...(feedback?{feedback}:{})});
     updateQQ(draft, intent, outcome, receipt.evidence);
     settleExploration(draft, intent, outcome);
     advancePlan(draft, action.id, outcome);
@@ -197,9 +200,10 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
     settleExploration(draft, intent, confirmed.status);
     advancePlan(draft, action.id, confirmed.status);
     draft.life.receipts.push(structuredClone(confirmed));
+    const feedback=actionFeedback(draft,action,confirmed.status);
     draft.life.events.push({eventId, petId:draft.petId, type:'action.reconciled', source:confirmed.source,
       occurredAt:confirmed.occurredAt, receivedAt, causationId:confirmed.receiptId,
-      payload:{actionId:action.id, status:confirmed.status, previousReceiptId:unknownId},
+      payload:{actionId:action.id, actionType:action.actionType, status:confirmed.status, previousReceiptId:unknownId,...(feedback?{feedback}:{})},
       evidenceLevel:confirmed.evidenceLevel});
     learnOutcome(draft,action,confirmed.status,eventId);
     rebuildOutcomeDevelopment(draft.life as LifeState);

@@ -3,6 +3,7 @@ import {blocksNewLabor} from './labor-pending.js';
 import {createLaborCompletionNotices} from './labor-completion-notices.js';
 import {companionContext,COMPANION_PERSONALITY} from './companion-personality.js';
 import {createInteractionReactions} from './interaction-reactions.js';
+import {createFeedbackLeafPublisher,createImmediateFeedback} from './operation-feedback.js';
 import {groupChatBlocked} from './qq-group-access.js';
 import {readMemeChoices,withMemeSpeech,type MemeSource} from './meme-speech.js';
 import {createEmbodiedSpeech} from './embodied-speech.js';
@@ -254,6 +255,8 @@ export async function main():Promise<void> {
         memeSource=async(id,mode)=>{const who=deps.requirePet(new URLSearchParams({pet:id}),()=>helpers.readAllConfig(deps.configPaths));return who.ok?readMemeChoices(who.conf,deps.memeDirsFor(who.entry),mode):[];};
         configuredPetIds=()=>{const cfg=helpers.readAllConfig(deps.configPaths),ids=new Set<string>([petId]);if(!cfg||typeof cfg!=='object'||!Object.keys(cfg).length)throw Error('宠物配置不可用');for(const conf of Object.values(cfg) as any[]){if(!Array.isArray(conf?.pets))throw Error('宠物配置结构无效');for(const pet of conf.pets){if(typeof pet?.id!=='string'||!pet.id)throw Error('宠物配置标识无效');ids.add(pet.id);}}return ids;};
         publishWhisper=(text:string,image?:string,surface?:string)=>{const cfg=helpers.readAllConfig(deps.configPaths);const voiceTo=cfg.main?.voiceEnabled===true&&(surface==='web'||surface==='desktop')?surface:undefined;deps.state.writePet(petId,'say',{text,companionWhisper:true,...((image??replyMemes.get(text))?{image:image??replyMemes.get(text)}:{}),...(voiceTo?{voiceTo}:{})});};
+        const immediateFeedback=createImmediateFeedback(reactionBaseline,createFeedbackLeafPublisher(leaf=>deps.state.writePet(petId,'say',leaf)));
+        unitOfWork.onCommit(immediateFeedback);dispatcher.onCommit(immediateFeedback);
         const reactToInteraction=createInteractionReactions(reactionBaseline,(id,event,signal)=>responses(id,'interaction',signal,event),text=>deps.state.writePet(petId,'say',{...careReactionLeaf(text,helpers.readAllConfig(deps.configPaths).main?.voiceEnabled===true),...(replyMemes.has(text)?{image:replyMemes.get(text)}:{})}),lease.signal);
         unitOfWork.onCommit(reactToInteraction);dispatcher.onCommit(reactToInteraction);
         const notifyCompletion=createLaborCompletionNotices(store,petId,(id,event,signal)=>responses(id,'completion',signal,event,{autonomous:true}),
