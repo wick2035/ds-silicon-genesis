@@ -15,7 +15,7 @@ export function createCompanionManagement(adapter:Adapter, domain:LegacyDomain, 
     async read(_id:string,signal:AbortSignal) {
       const [body,companion]=await Promise.all([call('state','GET',undefined,signal),call('companion/state','GET',undefined,signal)]);
       const p=companion.state||{};
-      return {body:{stats:body.state?.stats,adjustmentRevision:body.state?.adjustmentRevision},config:p.config,abilities:p.abilities,wishes:p.wishes,diaries:p.diaries,persona:p.growth?.persona,diaryRevisionGuard:true};
+      return {body:{stats:body.state?.stats,adjustmentRevision:body.state?.adjustmentRevision},config:p.config,learning:p.learning,abilities:p.abilities,wishes:p.wishes,diaries:p.diaries,persona:p.growth?.persona,diaryRevisionGuard:true};
     },
     async write(id:string,input:Obj,signal:AbortSignal) {
       if(typeof input.requestId!=='string'||!/^[A-Za-z0-9-]{16,80}$/.test(input.requestId))throw Error('操作标识无效');

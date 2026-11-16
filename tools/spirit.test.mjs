@@ -58,11 +58,11 @@ function fixture(){
  const uow={apply:async(_id,v,fn)=>{assert.equal(v,d.version);const n=structuredClone(d);fn(n);n.version++;Object.assign(d,n);return structuredClone(d);}};
  return {d,gate,store,uow,projection:()=>({body,emotions})};
 }
-test('真实模型预算预扣精神，失败不退款，复用认知票据不会双扣',async()=>{
+test('认知票据只预检，实际请求扣一次精神与额度',async()=>{
  const f=fixture(),budget=new DurableCognitiveBudget(f.store,f.uow,f.gate),before=f.d.life.spirit.value;
- const ticket=await budget.reserve('main');assert.ok(ticket);
+ const ticket=await budget.reserve('main');assert.ok(ticket);assert.equal(f.d.life.spirit.value,before);
+ await budget.withReserved('main',ticket,async()=>{const release=await budget.reserve('provider','model',f.gate.signal);await release('completed');});
  const after=f.d.life.spirit.value;assert.ok(before-after>=.5);
- await budget.withReserved('main',ticket,()=>budget.reserve('provider','model',f.gate.signal));assert.equal(f.d.life.spirit.value,after);
  await assert.rejects(budget.runAs('main','interactive',async()=>{await budget.reserve('provider','model',f.gate.signal);throw Error('model unavailable');}));
  assert.ok(f.d.life.spirit.value<after);const used=f.d.life.spirit.value;
  f.d.life.spirit.value=0;assert.equal(await budget.reserve('main'),null);assert.equal(f.d.life.spirit.value,0);

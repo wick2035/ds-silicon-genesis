@@ -330,7 +330,7 @@ export async function main():Promise<void> {
         await prepareQQTakeover({...shared,legacyHome:targetHome,stopHook:{stopAndVerify:async()=>await verifyOldQQAbsent(root)?'absent':'unknown'}});
       if(takeover.status==='ready') {
         qq=takeover.gateway;qq.setGroupBlocked(await canonical.groupBlocked(petId));executors.set('qq.send',takeover.executor);await qq.start();
-        groupConversation=createGroupProactive({canonical,authority:ingressAuthority,dispatch:id=>dispatcher.dispatch(id),generate:(snapshot,signal)=>budget.runAs(petId,'autonomous',()=>generateGroupOpener(snapshot,model!.llm,model!.agentDefaultModel.currentSelection(),signal,persona))});
+        groupConversation=createGroupProactive({canonical,authority:ingressAuthority,dispatch:id=>dispatcher.dispatch(id),generate:(snapshot,signal)=>budget.runAs(petId,'autonomous',()=>generateGroupOpener(snapshot,model!.llm,model!.agentDefaultModel.currentSelection(),signal,persona),'QQ群主动表达')});
         await canonical.enableRelay(petId);
         let signature='',running=false,dirty=false,timer:ReturnType<typeof setTimeout>|undefined;
         const run=async()=>{timer=undefined;if(running){dirty=true;return;}running=true;

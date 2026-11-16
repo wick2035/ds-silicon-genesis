@@ -11,7 +11,7 @@ export interface ImportedModelConfig {
 type Provider = ImportedModelConfig['providers'][string];
 type Message = {role:'user'|'assistant'; content:string};
 type StreamOptions = {provider:string; model:string; system?:string; messages:unknown[]; signal?:AbortSignal; maxTokens?:number; temperature?:number; reasoningEffort?:'low'; tools?:unknown[]};
-export interface ModelBudget { reserve(provider:string, model:string, signal:AbortSignal): Promise<() => void | Promise<void>> }
+export interface ModelBudget { reserve(provider:string, model:string, signal:AbortSignal): Promise<(outcome?:'completed'|'failed'|'not-sent') => void | Promise<void>> }
 export interface ModelFacadeOptions { leaseSignal:AbortSignal; budget:ModelBudget; resolveImage?:ImageResolver; timeoutMs?:number; persist?:(config:ImportedModelConfig)=>Promise<void> }
 const quiet = {debug() {}, info() {}, warn() {}, error() {}};
 const limit = 32768;
@@ -60,18 +60,29 @@ export function createModelFacade(config: ImportedModelConfig, options: ModelFac
       // SDK may supply headers or inherit ambient config; reconstruct only the
       // configured credential and reject redirects and unexpected endpoints.
       const base=p.baseURL.replace(/\/+$/,''), expected=new URL(base+(p.api==='openai-completions'?'/chat/completions':'/v1/messages')).href;
+      let release: ((outcome?:'completed'|'failed'|'not-sent') => void | Promise<void>) | undefined;
+      let sent=false, completed=false;
       const transport: typeof fetch=async (url, init) => {
         const target=String(url), alt=p.api==='anthropic-messages'?new URL(base+'/messages').href:expected;
         if (target!==expected && target!==alt) throw new Error('模型端点不匹配');
         const headers=new Headers({'content-type':'application/json','accept':'application/json'});
         if(p.api==='openai-completions') headers.set('authorization',`Bearer ${p.apiKey}`);
         else {headers.set('x-api-key',p.apiKey);headers.set('anthropic-version','2023-06-01');}
-        return fetch(target,{method:'POST',headers,body:init?.body,signal:controller.signal,redirect:'error'});
-      };
-      let chars=0,events=0,toolEvents=0; const toolIds=new Map<number,string>(); let release: (() => void | Promise<void>) | undefined;
-      try {
         release=await budget.reserve(o.provider,o.model,controller.signal);
-        if(typeof release!=='function' || controller.signal.aborted) throw new Error('budget');
+        if(controller.signal.aborted){await release('not-sent');release=undefined;throw new Error('cancelled');}
+        sent=true;
+        try{return await fetch(target,{method:'POST',headers,body:init?.body,signal:controller.signal,redirect:'error'});}
+        catch(error){
+          // These connection failures prove no HTTP request reached the service.
+          // Resets/timeouts after dispatch remain charged because delivery is unknown.
+          let cause:any=error;let notSent=false;
+          for(let i=0;i<5 && cause;i++,cause=cause.cause)if(['ENOTFOUND','EAI_AGAIN','ECONNREFUSED','UND_ERR_CONNECT_TIMEOUT'].includes(cause.code)){notSent=true;break;}
+          if(notSent && release){await release('not-sent');release=undefined;sent=false;}
+          throw error;
+        }
+      };
+      let chars=0,events=0,toolEvents=0; const toolIds=new Map<number,string>();
+      try {
         const messages=await convertMessages(o.messages,p.api,controller.signal,resolveImage);
         const tools = o.tools?.map((t:any)=>{if(!t || typeof t.name!=='string' || !t.name || !t.inputSchema || typeof t.inputSchema!=='object') throw new Error('tools'); return p.api==='openai-completions'?{type:'function',function:{name:t.name,description:t.description,parameters:t.inputSchema}}:{name:t.name,description:t.description,input_schema:t.inputSchema};});
         const shared={apiKey:p.apiKey,baseURL:base,maxRetries:0,timeout:timeoutMs,fetch:transport,logger:quiet,logLevel:'off' as const};
@@ -114,12 +125,13 @@ export function createModelFacade(config: ImportedModelConfig, options: ModelFac
           }
         }
         if(!chars && !toolEvents) throw new Error('empty');
+        completed=true;
       } catch (error) {
         const status=typeof error==='object' && error!==null && 'status' in error ? Number(error.status) : 0;
         const message=controller.signal.aborted?'模型请求已取消或超时':error instanceof ModelResultError?error.message:status===401||status===403?'模型服务认证失败，请检查 API 密钥和访问权限':status===404?'模型或接口不存在，请检查模型名称和服务地址':status===429?'模型服务额度不足或请求过于频繁':status>=500?'模型服务暂时不可用，请稍后重试':'模型请求未能完整完成，请检查服务配置';
         throw new Error(message);
       }
-      finally {clearTimeout(timer);if(firstByteTimer)clearTimeout(firstByteTimer);leaseSignal.removeEventListener('abort',abort);o.signal?.removeEventListener('abort',abort);controller.abort();active.delete(controller);if(release) await release();}
+      finally {clearTimeout(timer);if(firstByteTimer)clearTimeout(firstByteTimer);leaseSignal.removeEventListener('abort',abort);o.signal?.removeEventListener('abort',abort);controller.abort();active.delete(controller);if(release) await release(!sent?'not-sent':completed?'completed':'failed');}
     }
   };
   const getSettings=()=>{const p=providers[selection.provider];return {protocol:p.api==='anthropic-messages'?'anthropic':'openai-compatible',baseUrl:p.baseURL,model:selection.model,hasKey:!!p.apiKey,...settings};};
