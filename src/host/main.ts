@@ -42,6 +42,10 @@ import {createModelFacade} from './model-facade.js';
 import {createGroupProactive,generateGroupOpener} from './qq-group-proactive.js';
 import {createCognitiveModel} from './cognitive-model.js';
 import {CanonicalMemoryRetrieval} from './memory-retrieval.js';
+import {LocalReranker} from './local-reranker.js';
+import {MemoryEmbedding} from './memory-embedding.js';
+import {memoryGraph} from './memory-associations.js';
+import {MemoryIndex} from './memory-index.js';
 import {createPublicWeb,createBiliReader,createExplorationExecutor} from './network-services.js';
 import {createLifeApi,createLifeManagement} from './life-api.js';
 import {createCompanionManagement} from './companion-management.js';
@@ -172,7 +176,12 @@ export async function main():Promise<void> {
       const meme=pool.find(m=>m.name===requested)?.name;
       return {status:'completed',evidence:{actionId:intent.id,kind:'self.express',confirmed:true,...(meme?{meme}:{})}};
     });
-    const retrieval=new CanonicalMemoryRetrieval(lease,desktopIdle), chat=new CanonicalChat(store,lease,unitOfWork,budget,model,(id,q,snapshot)=>retrieval.search(id,q,12,snapshot),(id,key,input)=>domain.laborAction(id,key,input),(id,input)=>service(id,input),id=>worksiteWake(id),grounding);
+    const reranker=new LocalReranker(root,lease.signal);
+    const memoryIndex=new MemoryIndex(lease,store),embedding=new MemoryEmbedding(lease,store,modelConfig);
+    const scheduleMemory=(draft:Parameters<typeof memoryIndex.schedule>[0])=>{memoryIndex.schedule(draft);embedding.schedule(draft);};
+    unitOfWork.onCommit(scheduleMemory);dispatcher.onCommit(scheduleMemory);
+    const initialIndexState=await store.loadEnvelope(petId);if(initialIndexState)scheduleMemory(initialIndexState);
+    const retrieval=new CanonicalMemoryRetrieval(lease,desktopIdle,reranker,memoryIndex,embedding), chat=new CanonicalChat(store,lease,unitOfWork,budget,model,(id,q,snapshot)=>retrieval.search(id,q,12,snapshot),(id,key,input)=>domain.laborAction(id,key,input),(id,input)=>service(id,input),id=>worksiteWake(id),grounding);
     let requestShutdown=()=>{};
     const decideLaborOffer=async(id:string,requestId:string,contractId:string)=>{
       const state=await lease.run(id,()=>store.loadEnvelope(id));
@@ -198,7 +207,7 @@ export async function main():Promise<void> {
       }},
       groupChatBlocked:async id=>{const state=await store.loadEnvelope(id);return !state||groupChatBlocked(state);},
       manage:createLifeManagement(store,lease,unitOfWork,projectBody,id=>dispatcher.interrupt(id),blocked=>qq?.setGroupBlocked(blocked)),
-      searchMemories:(id,q)=>retrieval.search(id,q),links:{play:`/dsh-pet-7340/humanity?pet=${encodeURIComponent(petId)}`}});
+      searchMemories:async(id,q)=>retrieval.search(id,q,12,await kernel.getState(id)),memoryGraph:async(id,q)=>({...memoryGraph(await kernel.getState(id),q),reranker:reranker.status(),embedding:embedding.status()}),links:{play:`/dsh-pet-7340/humanity?pet=${encodeURIComponent(petId)}`}});
     const chatApi=createChatHttp(chat,()=>true,()=>petId);
     const meteredBalance=()=>budget.runAs(petId,'interactive',async()=>{const release=await budget.reserve('balance','balance',lease.signal);try{return await model!.queryBalance();}finally{await release();}});
     const api=async(request:Request)=>{const url=new URL(request.url);if(url.pathname==='/dsh-pet-7340/attachment'){const raw=url.searchParams.get('id')||'',id=raw.startsWith('sha256:')?'image:'+raw.slice(7):raw;try{const image=await attachments.resolve({petId,id},request.signal);return new Response(image.data as BodyInit,{headers:{'content-type':image.mediaType,'cache-control':'no-store','x-content-type-options':'nosniff'}});}catch{return new Response('附件不存在',{status:404});}}return await chatApi(request) ?? await lifeApi(request);};

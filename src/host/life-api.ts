@@ -12,6 +12,7 @@ export interface LifeApiHost {
   /** Uses the same per-pet gate and UOW as the dispatcher. */
   manage?(petId: string, command: ManagementCommand): Promise<void>;
   searchMemories?(petId:string, query:string): Promise<unknown[]>;
+  memoryGraph?(petId:string, query:string): Promise<unknown>;
   links?: {chat?:string;play?:string};
   shutdown?:()=>void;
   openWorksite?:(petId:string)=>Promise<void>;
@@ -106,7 +107,7 @@ export function createLifeApi(host:LifeApiHost) {
     const url=new URL(request.url);if(!url.pathname.startsWith('/api/life/'))return undefined;
     if(!await host.authorize(request))return response(403,{ok:false,error:'没有访问权限'});
     const endpoint=url.pathname.slice('/api/life/'.length);
-    if(!['snapshot','goals','timeline','relationships','growth','settings','manage','memory-search','shutdown','attachment','finance','companion','model','worksite'].includes(endpoint))return response(404,{ok:false,error:'没有这个接口'});
+    if(!['snapshot','goals','timeline','relationships','growth','settings','manage','memory-search','memory-graph','shutdown','attachment','finance','companion','model','worksite'].includes(endpoint))return response(404,{ok:false,error:'没有这个接口'});
     if(request.method!=='GET' && !(request.method==='POST' && ['manage','shutdown','attachment','finance','companion','model','worksite'].includes(endpoint)) || request.method==='GET' && ['manage','shutdown','attachment','worksite'].includes(endpoint))return response(405,{ok:false,error:'请求方法不受支持'});
     try {
       if(endpoint==='shutdown') {if(!host.shutdown)return response(503,{ok:false,error:'关闭入口不可用'});setTimeout(host.shutdown,100);return response(200,{ok:true,value:{closing:true}});}
@@ -143,6 +144,7 @@ export function createLifeApi(host:LifeApiHost) {
         await host.manage(id,c as ManagementCommand);
       }
       if(endpoint==='memory-search'){if(!host.searchMemories)return response(503,{ok:false,error:'记忆检索不可用'});const query=url.searchParams.get('q')||'';if(query.length>500)return response(400,{ok:false,error:'搜索内容过长'});return response(200,{ok:true,value:await host.searchMemories(id,query)});}
+      if(endpoint==='memory-graph'){if(!host.memoryGraph)return response(503,{ok:false,error:'记忆星图不可用'});const query=url.searchParams.get('q')||'';if(query.length>500)return response(400,{ok:false,error:'搜索内容过长'});return response(200,{ok:true,value:await host.memoryGraph(id,query)});}
       const state=await host.getState(id), sources=Object.fromEntries(state.events.filter(e=>!Object.hasOwn(state.invalidSources,e.eventId)).slice(-500).map(e=>{const payload=e.payload&&typeof e.payload==='object'?e.payload as Record<string,unknown>:{};const text=[payload.text,payload.summary,payload.message,payload.description].find(x=>typeof x==='string'&&x.trim());return [e.eventId,{text:text||e.type,at:e.occurredAt}];})), views:Record<string,unknown>={
         snapshot:{version:state.version,sources,identity:state.identity,spirit:state.spirit,body:state.body,emotions:state.emotions,activeGoals:state.goals.filter(g=>g.status==='active'),actions:state.actions.filter(a=>!['COMPLETED','FAILED','CANCELLED'].includes(a.status)),runtime:{paused:state.constraints.paused,remainingBudget:state.constraints.remainingBudget,budgetDay:state.constraints.budgetDay,interactiveRemaining:state.constraints.interactiveRemaining,permissions:state.constraints.permissions},links:host.links},
         goals:{version:state.version,items:state.goals,sources},timeline:state.events,relationships:state.relationships,

@@ -30,7 +30,7 @@ replaceOnce('const limit = pathname === "/standalone-ai/settings" ? MAX_SETTINGS
 replaceOnce("    const wallet = globalThis[Symbol.for('dsh.pet.companion.v1')]?.store?.read(id)?.wallet;\n    const walletPainChanged = wallet?.balance === 0 && next.stats.pain !== 100;\n    if (wallet?.balance === 0) next.stats.pain = 100;",'    const walletPainChanged = false;');
 replaceOnce('function getHumanityStore() {\n  if (!humanStore)', 'function getHumanityStore() {\n  if (globalThis[Symbol.for("silicon.genesis.enabled")]) throw new Error("旧身心存储已禁用");\n  if (!humanStore)');
 replaceOnce('function observeHumanity(id, leaf, data) {\n  const allow', 'function observeHumanity(id, leaf, data) {\n  if (globalThis[Symbol.for("silicon.genesis.enabled")]) return true;\n  const allow');
-replaceOnce('"/standalone-ai/icon.png"\n\t].includes(path)', '"/standalone-ai/icon.png",\n        "/life/", "/life/style.css", "/life/bridge.js", "/life/app.js", "/life/finance.js", "/life/companion.js", "/life/model.js", "/assets/main-character.png"\n\t].includes(path)');
+replaceOnce('"/standalone-ai/icon.png"\n\t].includes(path)', '"/standalone-ai/icon.png",\n        "/life/", "/life/style.css", "/life/bridge.js", "/life/app.js", "/life/finance.js", "/life/companion.js", "/life/model.js", "/life/memory-graph.js", "/assets/main-character.png"\n\t].includes(path)');
 replaceOnce('const siteUrl = ctx.connection.authenticatedUrl(origin);',`let siliconEpoch = "";
     const siteUrl = ctx.connection.authenticatedUrl(origin);`);
 replaceOnce('env: helperSpawnEnv(process.pid, this.options.env),','env: helperSpawnEnv(process.pid, {...this.options.env,...this.options.onStart?.()}),');

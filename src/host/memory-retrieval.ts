@@ -1,18 +1,34 @@
 import type { Memory, LifeState } from '../kernel/types.js';
 import type { Queryable } from '../storage/postgres.js';
 import {speechSources} from '../kernel/speech-provenance.js';
+import {lexicalRecall,recallDocuments,recalledMemory} from './memory-associations.js';
+import type {LocalReranker} from './local-reranker.js';
+import type {MemoryIndex} from './memory-index.js';
+import type {MemoryEmbedding} from './memory-embedding.js';
 
 /** Uses the canonical envelope only; the query is parameterized and bounded.
  * PostgreSQL simple FTS plus literal matching covers both segmented terms and
  * Chinese text which PostgreSQL may treat as a single token. */
 export class CanonicalMemoryRetrieval {
-  constructor(private readonly db:Queryable,private readonly idle?:{snapshot():{seconds:number}|undefined}) {}
+  constructor(private readonly db:Queryable,private readonly idle?:{snapshot():{seconds:number}|undefined},private readonly reranker?:LocalReranker,private readonly index?:MemoryIndex,private readonly embedding?:MemoryEmbedding) {}
   async search(petId:string, query:string, limit=12, snapshot?:LifeState):Promise<Memory[]> {
     if(!petId||typeof query!=='string'||query.length>500||!Number.isInteger(limit)||limit<1||limit>30)throw new Error('记忆查询无效');
     const terms=[...new Set((query.toLowerCase().match(/[a-z0-9_]{2,}|[\p{Script=Han}]{2,}/gu)||[]).flatMap(t=>/[\p{Script=Han}]/u.test(t)&&t.length>2?Array.from({length:t.length-1},(_,i)=>t.slice(i,i+2)):[t]))].slice(0,12);
     if(snapshot){
-      const live=snapshot.memories.filter(m=>m.valid&&m.sourceIds.every(id=>!Object.hasOwn(snapshot.invalidSources,id)));
-      return live.map(m=>({m,score:terms.filter(t=>m.content.toLowerCase().includes(t)).length})).filter(x=>!terms.length||x.score>0).sort((a,b)=>b.score-a.score||b.m.createdAt.localeCompare(a.m.createdAt)).slice(0,limit).map(x=>x.m);
+      const docs=recallDocuments(snapshot),ids=await this.index?.candidates(snapshot.version,petId,query);
+      let pool=ids?docs.filter(d=>ids.has(d.id)):docs;
+      if(ids){const seeds=lexicalRecall(pool,query,3),expanded=[...new Set(seeds.flatMap(d=>d.terms))].slice(0,40).join(' '),neighbors=await this.index?.candidates(snapshot.version,petId,expanded);if(neighbors)pool=docs.filter(d=>ids.has(d.id)||neighbors.has(d.id));}
+      const lexical=lexicalRecall(pool,query,24),semantic=await this.embedding?.candidates(petId,query,docs)||[];
+      const candidates:typeof docs=[];
+      for(let i=0;i<Math.max(lexical.length,semantic.length);i++)for(const d of [semantic[i],lexical[i]]){
+        if(d&&!candidates.some(x=>x.id===d.id||x.sourceIds.some(id=>d.sourceIds.includes(id))))candidates.push(d);
+        if(candidates.length>=24)break;
+      }
+      candidates.splice(24);
+      const scores=await this.reranker?.score(query,candidates.map(d=>d.content));
+      const threshold=scores?.length?Math.max(.005,Math.max(...scores)*.05):.005;
+      const ranked=scores?.length===candidates.length?candidates.map((d,i)=>({d,score:scores[i]})).filter(x=>x.score>=threshold).sort((a,b)=>b.score-a.score).map(x=>x.d):lexical;
+      return ranked.slice(0,limit).map(recalledMemory);
     }
     const result=await this.db.query(`WITH state AS MATERIALIZED (SELECT payload->'life'->'memories' AS memories, payload->'life'->'invalidSources' AS invalid FROM silicon_genesis.life_state WHERE pet_id=$1),
       terms AS MATERIALIZED (SELECT t, plainto_tsquery('simple',t) AS q FROM unnest($2::text[]) t),
