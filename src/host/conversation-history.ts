@@ -13,7 +13,9 @@ export function privateConversationHistory(state:RecordState, excludeIds:string[
     (!(e.payload as any)?.sourceIds||((e.payload as any).sourceIds as string[]).every(live))&&
     (e.type!=='conversation.user'||!e.actorId||e.actorId==='dad')&&
     typeof (e.payload as any)?.text==='string'&&(e.payload as any).text.trim()&&!(e.payload as any).silent);
-  const answered=new Set(events.filter(e=>e.type==='conversation.assistant').map(e=>e.causationId));
+  // Removing an incorrect reply must not erase the user's already-answered
+  // message from context. Genuinely unfinished requests remain excluded.
+  const answered=new Set(state.events.filter(e=>isOwnerPrivateConversation(e)&&e.type==='conversation.assistant'&&e.causationId&&live(e.causationId)).map(e=>e.causationId));
   return events.filter(e=>e.type!=='conversation.user'||!e.eventId.startsWith('chat-user:')||answered.has(e.eventId))
     .sort((a,b)=>Date.parse(a.occurredAt)-Date.parse(b.occurredAt)).slice(-limit)
     .map(e=>({eventId:e.eventId,at:e.occurredAt,role:e.type==='conversation.user'?'user' as const:'assistant' as const,

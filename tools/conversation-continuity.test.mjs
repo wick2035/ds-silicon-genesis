@@ -46,6 +46,11 @@ test('shared private history preserves chat and interaction speech in time order
   assert.deepEqual(history.map(e=>e.role),['user','assistant','assistant']);
 });
 
+test('removing an incorrect answer preserves the user message but excludes unfinished requests',()=>{
+  const events=[event('chat-user:question','conversation.user','饭钱到了吗',0),event('chat-assistant:wrong','conversation.assistant','没有收到',1,{causationId:'chat-user:question'}),event('chat-user:pending','conversation.user','还在处理',2)];
+  assert.deepEqual(privateConversationHistory({events,invalidSources:{'chat-assistant:wrong':'removed'}}).map(e=>e.eventId),['chat-user:question']);
+});
+
 test('interaction response sees earlier chat and its own last reaction, timestamps old money memory and reads fresh balance after waiting',async()=>{
   const f=fixture();
   f.state.life.events.push(event('topup','wallet','充值到230',-300));
