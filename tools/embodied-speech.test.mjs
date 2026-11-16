@@ -44,6 +44,21 @@ test('prepared chat snapshots retain personality and current hunger in model inp
  assert.equal(await collect(f.speech.wrap(model).stream({...f.options,embodiedSnapshot:structuredClone(f.get())})),'还饿，想吃白饭。');
 });
 
+test('time and real care remain visible across tool rounds when optional context exceeds budget',async()=>{
+ const f=fixture(),s=f.get(),at=new Date(Date.now()-90000).toISOString();
+ s.life.events.push({eventId:'feed',type:'social.care',actorId:'dad',occurredAt:at,payload:{action:'feed'}});
+ s.life.goals=Array.from({length:6},(_,i)=>({id:String(i),status:'active',sourceIds:[],title:'旧经历'.repeat(1000)}));
+ let rounds=0;
+ const model={async *stream(o){assert.match(o.system,/当前时间与睡眠时间：/);const timeline=JSON.parse(o.system.split('近期行为时间线：')[1].split('\n')[0]);assert.equal(JSON.parse(timeline.events[0].detail).action,'feed');if(++rounds===1)yield call('sense','sense_self',{});else yield {type:'text',text:'刚才爸爸喂过我。'};}};
+ assert.equal(await collect(f.speech.wrap(model).stream({...f.options,embodiedSnapshot:structuredClone(s)})),'刚才爸爸喂过我。');assert.equal(rounds,2);
+});
+
+test('group speech does not receive the private time projection',async()=>{
+ const f=fixture();
+ const model={async *stream(o){assert.doesNotMatch(o.system,/当前时间与睡眠时间：|近期行为时间线：/);yield {type:'text',text:'大家好。'};}};
+ assert.equal(await collect(f.speech.wrap(model).stream({...f.options,embodied:{...f.options.embodied,privateTime:false}})),'大家好。');
+});
+
 test('completed unpaid work remains explicit outside the worksite and after tool refresh',async()=>{
  const f=fixture(),s=f.get();
  s.legacy.labor={contracts:[{id:'finished',status:'unpaid',done:50,trips:50,wage:1,paid:0,finished:Date.now()}]};
