@@ -3,7 +3,7 @@ import type {LifeState} from './types.js';
 export interface Spirit {
   value:number; updatedAt:number; awakeSince:number; lastSleepHours:number;
   mode:'awake'|'sleep'|'nap'; sleepStartedAt?:number; sleepStartValue?:number;
-  lastSweetAt?:number;
+  lastSweetAt?:number; sleepRecoveryAt?:number; sleepRecoveryValue?:number;
   config:{sleepHours:number; awakeHours:number; hourlyDrain:number; napPerHour:number; sweetGain:number; sweetCooldownHours:number};
 }
 type Life=Pick<LifeState,'spirit'>;
@@ -25,8 +25,9 @@ export function advanceSpirit(life:Life,now=Date.now()):Spirit {
   const s=ensureSpirit(life,now);
   if(now<=s.updatedAt)return s;
   if(s.mode==='sleep') {
-    const elapsed=(now-s.sleepStartedAt!)/HOUR;
-    s.value=elapsed>=s.config.sleepHours?100:Math.min(99.999999,s.sleepStartValue!+(100-s.sleepStartValue!)*sleepRecovery(elapsed,s.config.sleepHours));
+    const start=s.sleepRecoveryAt??s.sleepStartedAt!, base=s.sleepRecoveryValue??s.sleepStartValue!;
+    const elapsed=(now-start)/HOUR;
+    s.value=base>=100||elapsed>=s.config.sleepHours?100:Math.min(99.999999,base+(100-base)*sleepRecovery(elapsed,s.config.sleepHours));
   } else if(s.mode==='nap') {
     // A nap lasts at most twenty minutes and never clears sleep debt.
     const end=s.sleepStartedAt!+HOUR/3;
@@ -45,6 +46,7 @@ export function setSpiritRest(life:Life,mode:Spirit['mode'],now=Date.now()):void
   const s=advanceSpirit(life,now);if(s.mode===mode)return;
   if(s.mode==='sleep' && mode==='awake') {s.lastSleepHours=Math.max(0,(now-s.sleepStartedAt!)/HOUR);s.awakeSince=now;}
   s.mode=mode;
+  delete s.sleepRecoveryAt;delete s.sleepRecoveryValue;
   if(mode!=='awake'){s.sleepStartedAt=now;s.sleepStartValue=s.value;}
   else {delete s.sleepStartedAt;delete s.sleepStartValue;}
 }

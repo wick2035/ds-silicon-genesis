@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { advanceSpirit } from '../kernel/spirit.js';
 import type { LifeState } from '../kernel/types.js';
 import { invalidateDependents } from '../kernel/index.js';
 import type { CanonicalEnvelope, BodyProjection } from '../storage/postgres.js';
@@ -22,6 +23,7 @@ export interface LifeApiHost {
   attachments?:{put:(petId:string,requestId:string,input:{mediaType:string;data:Uint8Array})=>Promise<unknown>};
 }
 export type ManagementCommand =
+  | {kind:'spirit'; value:number; requestId:string; reason:string; version:number}
   | {kind:'pause'; paused:boolean; reason:string; version:number}
   | {kind:'group-chat'; blocked:boolean; reason:string; version:number}
   | {kind:'goal'; id:string; status:'active'|'paused'|'abandoned'; expectedStatus:string; reason:string; version:number}
@@ -43,6 +45,21 @@ export function createLifeManagement(reader: Reader, gate: PetGate, uow: UnitOfW
     if (!current || gate.signal.aborted) throw new Error('状态已变化，请刷新后重试');
     await uow.apply(petId,current.version,draft=>{
       const life=draft.life, now=new Date().toISOString(), eventId=`management:${randomUUID()}`;
+      if(command.kind==='spirit') {
+        const legacy=draft.legacy as Record<string,any>, receipts=legacy.spiritAdjustments??={};
+        const prior=receipts[command.requestId];
+        if(prior!==undefined){if(prior!==command.value)throw Error('调整标识冲突');return {};}
+        const spirit=advanceSpirit(life), before=spirit.value;
+        if(Math.abs(before-command.value)<0.005){receipts[command.requestId]=command.value;return {};}
+        spirit.value=command.value;
+        if(spirit.mode==='sleep'){spirit.sleepRecoveryAt=spirit.updatedAt;spirit.sleepRecoveryValue=command.value;}
+        const text=command.value>before?'爸爸给我吃了一个金色 token，我的精神突然变好了。':'发生了一些变故，我的精神变差了。';
+        const id='experience:'+command.requestId;
+        life.events.push({eventId:id,petId,type:'spirit.experience',source:'environment',occurredAt:now,receivedAt:now,evidenceLevel:'observed',payload:{text}});
+        life.memories.push({id:'memory:'+id,kind:'autobiographical',content:text,sourceIds:[id],evidenceLevel:'observed',valid:true,createdAt:now});
+        receipts[command.requestId]=command.value;
+        return {};
+      }
       if(command.kind==='pause') life.constraints.paused=command.paused;
       else if(command.kind==='group-chat'){
         const legacy=draft.legacy as Record<string,any>;legacy.config??={};
@@ -139,7 +156,7 @@ export function createLifeApi(host:LifeApiHost) {
         const raw=await request.text();if(raw.length>8192)return response(413,{ok:false,error:'请求过大'});
         let c:any;try{c=JSON.parse(raw);}catch{return response(400,{ok:false,error:'请求格式无效'});}
         if(!c || typeof c!=='object' || Array.isArray(c) || !Number.isSafeInteger(c.version) || c.version<0 || !validText(c.reason) ||
-          !(c.kind==='pause' && typeof c.paused==='boolean' || c.kind==='group-chat' && typeof c.blocked==='boolean' || c.kind==='goal' && validText(c.id,512) && validText(c.expectedStatus,30) && ['active','paused','abandoned'].includes(c.status) ||
+          !(c.kind==='spirit' && typeof c.value==='number' && Number.isFinite(c.value) && c.value>=0 && c.value<=100 && typeof c.requestId==='string' && /^[A-Za-z0-9:-]{8,140}$/.test(c.requestId) || c.kind==='pause' && typeof c.paused==='boolean' || c.kind==='group-chat' && typeof c.blocked==='boolean' || c.kind==='goal' && validText(c.id,512) && validText(c.expectedStatus,30) && ['active','paused','abandoned'].includes(c.status) ||
             c.kind==='revoke' && validText(c.permission,200) || c.kind==='memory' && validText(c.id,512) && typeof c.expectedContent==='string' && c.expectedContent.length<=5000 && ['delete','correct'].includes(c.action) && (c.action!=='correct'||validText(c.content,5000))))return response(400,{ok:false,error:'操作内容或原因无效'});
         await host.manage(id,c as ManagementCommand);
       }
