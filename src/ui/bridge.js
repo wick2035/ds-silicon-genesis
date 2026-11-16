@@ -24,6 +24,7 @@ async function request(route, options = {}) {
   if(token) headers.set('x-dsh-pet-token',token);
   return (await fetchResult(`/api/life/${route}`,{...options,headers})).value;
 }
+let initialSnapshot;
 window.lifeApi = Object.freeze({
   chat: async (text, requestId, attachments = [], onPartial, onUsage, onMeme) => {
     const token=sessionStorage.getItem('life-token'),headers={'content-type':'application/json','accept':'text/event-stream'};if(token)headers['x-dsh-pet-token']=token;
@@ -45,7 +46,7 @@ window.lifeApi = Object.freeze({
   uploadImage: file => request('attachment', {method:'POST',headers:{'content-type':file.type,'x-request-id':crypto.randomUUID()},body:file}),
   shutdown: () => request('shutdown', {method:'POST'}),
   openWorksite: () => request('worksite', {method:'POST'}),
-  getSnapshot: () => request('snapshot'),
+  getSnapshot: () => {if(initialSnapshot){const snapshot=initialSnapshot;initialSnapshot=undefined;return Promise.resolve(snapshot);}return request('snapshot');},
   getGoals: () => request('goals'),
   getTimeline: () => request('timeline'),
   getRelationships: () => request('relationships'),
@@ -66,7 +67,7 @@ window.lifeApi = Object.freeze({
 // Module requests cannot attach the token header themselves.
 void (async()=>{
   try {
-    await window.lifeApi.getSnapshot();
+    initialSnapshot=await window.lifeApi.getSnapshot();
     await import('./app.js');
   } catch(error) {
     document.querySelector('#connection').textContent='连接不可用';
