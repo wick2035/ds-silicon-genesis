@@ -31,6 +31,16 @@ function conflicts(envelope:CanonicalEnvelope,type:string,parameters:Record<stri
   });
 }
 
+/** Facts that must not change between a model decision and its publication or action. */
+function decisionFacts(envelope:CanonicalEnvelope):string {
+  const pet=envelope.legacy as any;
+  const events=envelope.life.events.filter(e=>!Object.hasOwn(envelope.life.invalidSources,e.eventId) &&
+    ['interaction.operation','interaction.worksite','body.adjusted','body.meal','social.care','labor.changed','labor.completed','action.receipt','action.reconciled'].includes(e.type) &&
+    !(e.type.startsWith('action.') && envelope.life.actions.find(a=>a.id===(e.payload as any)?.actionId)?.actionType==='qq.send'));
+  return JSON.stringify({wallet:pet.wallet,inventory:pet.services?.inventory,sleeping:envelope.humanity.sleeping,
+    restingUntil:envelope.humanity.restingUntil,worksite:worksiteFacts(envelope),events:events.slice(-16).map(e=>e.eventId)});
+}
+
 /** One tool-aware turn for every utterance. Text preceding a tool call is a
  * draft, not a published claim. Real receipts return to the same model. */
 export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<CanonicalEnvelope|null>},gate:PetGate,uow:UnitOfWork,actions:ActionCoordinator,dispatcher:OutboxDispatcher,
@@ -44,7 +54,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
       近期真实经历:events.map(e=>({id:e.eventId,at:e.occurredAt,actor:e.actorId??'未确认',type:e.type,detail:e.payload})),
       自我认识:selfModelContext(envelope.life,query),当前目标:envelope.life.goals.filter(g=>g.status==='active').slice(-6),精神:envelope.life.spirit,可用能力:envelope.life.constraints.capabilities.filter(c=>c.enabled)}};
   }
-  async function execute(speech:Speech,type:string,parameters:Record<string,unknown>,key:string,signal:AbortSignal){
+  async function execute(speech:Speech,type:string,parameters:Record<string,unknown>,key:string,signal:AbortSignal,expectedFacts:string){
     if(!speech.allowActions||signal.aborted||gate.signal.aborted)throw Error('当前发言不能执行行动');
     if(type==='work.begin')return beginWork(speech.petId,speech.sourceIds,key);
     if(type==='work.leave'){const current=await reader.loadEnvelope(speech.petId);if(!current||current.life.constraints.paused)throw Error('自主活动已暂停');return leaveWork(speech.petId);}
@@ -53,6 +63,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
     const id='speech-action:'+createHash('sha256').update(key).digest('hex');
     await gate.run(speech.petId,async()=>{
       let current=await reader.loadEnvelope(speech.petId);if(!current||signal.aborted)throw Error('行动已取消');
+      if(decisionFacts(current)!==expectedFacts)throw Error('状态已变化，请先根据最新实况重新判断，不要重复旧决定');
       const prior=current.life.actions.find(a=>a.id===id);
       if(prior){if(prior.actionType!==type||JSON.stringify(prior.parameters)!==JSON.stringify(parameters))throw Error('行动标识冲突');return;}
       if(type==='service.eat-rice')validateRiceMeal(current,parameters.itemId);
@@ -77,7 +88,10 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
     const signal=AbortSignal.any([options.signal??gate.signal,gate.signal,AbortSignal.timeout(90000)]);
     const lastUser=options.messages.findLast((m:any)=>m.role==='user')?.content;
     const query=typeof lastUser==='string'?lastUser:Array.isArray(lastUser)?lastUser.filter((b:any)=>b.type==='text').map((b:any)=>b.text).join(' '):'';
-    const initial=await sense(speech.petId,speech.contextExcludeIds??speech.sourceIds,query,options.embodiedSnapshot),messages=[...options.messages];
+    // The prepared snapshot may predate a queued operation or the model budget.
+    // Wait for the turn to be committed and read the actual current state.
+    await options.beforeActions;
+    const initial=await sense(speech.petId,speech.contextExcludeIds??speech.sourceIds,query),messages=[...options.messages];
     const allowed=initial.envelope.life.constraints.capabilities.filter(c=>c.enabled&&(!c.requiresPermission||initial.envelope.life.constraints.permissions.includes(c.requiresPermission))).map(c=>c.name).filter(n=>executable.has(n)&&n!=='labor.step'&&!['care.feed','care.pet','care.soothe','care.accompany'].includes(n));
     if(!initial.envelope.life.constraints.capabilities.some(c=>c.name==='care.water')&&initial.envelope.life.constraints.capabilities.some(c=>c.name==='care.feed'&&c.enabled))allowed.push('care.water');
     const tools=[{name:'sense_self',description:'感知此刻身体、需求、钱包、近期真实互动与行动结果。',inputSchema:empty},
@@ -97,21 +111,28 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
     const system=options.system+'\n'+personality+'\n每次开口前，结合自己的感受、目标、刚才爸爸的操作和真实结果，判断此刻需不需要工具；可以只说话或安静，不必为了使用工具而行动。需要吃饭、喝水、睡觉、走动、学习或搬砖时调用工具，不能用台词冒充行动。失败后自己决定换办法、休息或向爸爸商量；条件未变不要重复失败的动作。感受和判断属于你，操作归因只依据真实来源，不知道是谁造成的就不要认定。通过真实结果理解自己喜欢什么、身体能做什么，不宣称凭空获得意识。每次工具返回后，由你继续决定调用下一项工具还是回答；例如买饭成功只代表饭已入库，你可以根据新库存中 status=available 的 id 再决定吃饭；unconfirmed 是旧碗结果未明，不选择它，吃饭必须等待自己的实际回执。无需让爸爸再发一条消息推动下一步，也不强制你购买后一定吃。工具后的回复针对结果自然地说，未知结果不能说完成。需要工具时先调用，工具调用之前不要输出面向对方的回答。';
     const liveWorkFor=(envelope:CanonicalEnvelope)=>'\n当前工作账本（优先于旧发言和进出记录）：'+JSON.stringify(worksiteFacts(envelope))+'。taskCompleted=true 表示整份工作已经搬完；unpaid 仅表示等待结薪，不能说没搬完。completedTripsThisVisit=0 或 inside=false 只说明本次进场或此刻位置，不会抹掉 completedTotal。remainingPay 是尚欠工钱，不等于还要搬的趟数。';
     let liveSystem=system+'\n此刻实况：'+promptData(context,2400)+liveWorkFor(initial.envelope)+'\n当前身体与食物（优先于旧对话和历史摘要）：'+JSON.stringify(liveFoodFor(initial.envelope));
-    const seen=new Set<string>();let uncertainBody=false;
+    const seen=new Set<string>();let uncertainBody=false,staleRetries=0;
     for(let round=0;round<5;round++){
       if(signal.aborted)throw Error('发言已取消');
+      const decision=await sense(speech.petId,speech.contextExcludeIds??speech.sourceIds,query);
+      const signature=decisionFacts(decision.envelope);
+      liveSystem=system+'\n此刻实况：'+promptData(decision.context,2400)+liveWorkFor(decision.envelope)+'\n当前身体与食物（优先于旧对话和历史摘要）：'+JSON.stringify(liveFoodFor(decision.envelope));
       let text='';const calls=new Map<number,{id:string;name:string;arguments:string}>();
       for await(const part of model.stream({...options,embodied:undefined,embodiedSnapshot:undefined,signal,system:liveSystem,messages,tools:round<4?tools:undefined})){
         if(part.type==='usage')yield part;
-        if(part.type==='text'){text+=part.text??'';if(options.streamText===true&&!calls.size)yield part;}
+        if(part.type==='text')text+=part.text??'';
         if(part.type==='tool-call-delta'){
-          if(options.streamText===true&&!calls.size&&text)yield {type:'text-reset'};
           const c=calls.get(part.index)??{id:'',name:'',arguments:''};
           if(part.id)c.id=part.id;if(part.name)c.name=part.name;c.arguments+=part.argumentsDelta??'';
           if(c.arguments.length>8000||(!calls.has(part.index)&&calls.size>=4))throw Error('工具调用过长');calls.set(part.index,c);
         }
       }
-      if(!calls.size){if(signal.aborted)throw Error('发言已取消');if(!text.trim())throw Error('没有收到完整回复');if(options.streamText!==true)yield {type:'text',text};return;}
+      if(!calls.size){
+        if(signal.aborted)throw Error('发言已取消');if(!text.trim())throw Error('没有收到完整回复');
+        const current=await reader.loadEnvelope(speech.petId);if(!current)throw Error('生命状态不可用');
+        if(decisionFacts(current)!==signature){if(++staleRetries>2)throw Error('状态持续变化，请重试');round--;continue;}
+        yield {type:'text',text};return;
+      }
       if(round===4)throw Error('工具调用超过本轮限制');
       messages.push({role:'assistant',content:[...(text?[{type:'text',text}]:[]),...Array.from(calls.values(),c=>({type:'tool-call',...c}))]});
       let index=0;
@@ -121,16 +142,18 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
           await options.beforeActions;
           if(!c.id||!c.name)throw Error('工具调用无效');
           const p=JSON.parse(c.arguments||'{}');actionType=p.actionType;const fingerprint=c.name+JSON.stringify(p);
+          const current=await reader.loadEnvelope(speech.petId);if(!current)throw Error('生命状态不可用');
+          if(c.name!=='sense_self'&&decisionFacts(current)!==signature)throw Error('状态已变化，请先根据最新实况重新判断，不要重复旧决定');
           if(seen.has(fingerprint))throw Error('本轮已尝试过相同行动，先依据现有结果决定');seen.add(fingerprint);
           if(c.name==='sense_self')result=(await sense(speech.petId,speech.contextExcludeIds??speech.sourceIds,query)).context;
           else if(c.name==='act'){
             const physical=initial.envelope.life.constraints.capabilities.some(cap=>cap.name===p.actionType&&cap.physical)||p.actionType==='care.water'||p.actionType==='service.eat-rice';
             if(uncertainBody&&physical)throw Error('本轮身体动作的结果未确认，先等确认');
-            result=await execute(speech,p.actionType,p.parameters,`${speech.requestId}:${round}:${index}`,signal);
+            result=await execute(speech,p.actionType,p.parameters,`${speech.requestId}:${round}:${index}`,signal,signature);
             if(physical&&(result as any)?.status==='UNKNOWN')uncertainBody=true;
           }
-          else if(c.name==='begin_work')result=await execute(speech,'work.begin',{},`${speech.requestId}:${round}:${index}`,signal);
-          else if(c.name==='leave_worksite')result=await execute(speech,'work.leave',{},`${speech.requestId}:${round}:${index}`,signal);
+          else if(c.name==='begin_work')result=await execute(speech,'work.begin',{},`${speech.requestId}:${round}:${index}`,signal,signature);
+          else if(c.name==='leave_worksite')result=await execute(speech,'work.leave',{},`${speech.requestId}:${round}:${index}`,signal,signature);
           else throw Error('工具不存在');
         }catch(error){isError=true;result={status:'failed',reason:error instanceof Error?error.message:'行动失败'};}
         const current=await reader.loadEnvelope(speech.petId);

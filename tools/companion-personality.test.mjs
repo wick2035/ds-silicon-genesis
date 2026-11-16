@@ -161,6 +161,7 @@ test('手动加钱、扣钱、冻结和解冻有准确即时回应，同一操�
     react(structuredClone(f.get()));await new Promise(setImmediate);await Promise.all(pending);await new Promise(setImmediate);
   };
   await write('wallet-add-wage','add',{amount:500});assert.equal(f.get().legacy.wallet.balance,10500);assert.equal(published.length,1);
+  assert.equal(requests[0].embodied.allowActions,false);
   assert.match(requests[0].messages[0].content,/10000.*10500/);assert.match(requests[0].messages[0].content,/这次工钱/);assert.match(requests[0].system,/普通添钱不能擅自算工资/);
   await domain.wallet('main','wallet-add-wage',{action:'add',amount:500,expectedBalance:10000,expectedFrozen:false});react(structuredClone(f.get()));await new Promise(setImmediate);assert.equal(published.length,1);assert.equal(f.get().legacy.wallet.balance,10500);
   await write('wallet-subtract','subtract',{amount:100});assert.match(requests.at(-1).messages[0].content,/减少了 100 token/);

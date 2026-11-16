@@ -119,12 +119,24 @@ test('等待动作回执期间触碰可取得状态锁，失败后续写仍串�
 });
 
 
-test('streaming speech delivers first words before model completion and returns tool results in the same turn',async()=>{
+test('speech waits for a complete validated reply and returns tool results in the same turn',async()=>{
   const f=fixture();let finish;const barrier=new Promise(resolve=>{finish=resolve});let rounds=0;
   const model={async *stream(o){rounds++;if(rounds===1){yield call('c1','act',{actionType:'service.eat-rice',parameters:{itemId:'rice-1'}});}else{assert.equal(JSON.parse(o.messages.at(-1).content).result.status,'COMPLETED');yield {type:'text',text:'饭吃到了'};await barrier;yield {type:'text',text:'，热乎乎的。'};}}};
   const stream=f.speech.wrap(model).stream({...f.options,streamText:true})[Symbol.asyncIterator]();
-  assert.deepEqual((await stream.next()).value,{type:'text',text:'饭吃到了'});assert.equal(f.dispatches(),1);
-  finish();assert.equal((await stream.next()).value.text,'，热乎乎的。');assert.equal((await stream.next()).done,true);assert.equal(rounds,2);
+  const next=stream.next();await new Promise(setImmediate);assert.equal(f.dispatches(),1);
+  finish();assert.equal((await next).value.text,'饭吃到了，热乎乎的。');assert.equal((await stream.next()).done,true);assert.equal(rounds,2);
+});
+
+test('a wallet change while generating discards the stale reply and uses the new balance',async()=>{
+  const f=fixture();let rounds=0;
+  const model={async *stream(o){rounds++;if(rounds===1){f.get().legacy.wallet.balance=600;yield {type:'text',text:'还只有100。'};}else{assert.match(o.system,/"饭钱":600/);yield {type:'text',text:'饭钱到账啦。'};}}};
+  assert.equal(await collect(f.speech.wrap(model).stream({...f.options,embodiedSnapshot:structuredClone(f.get()),streamText:true})),'饭钱到账啦。');assert.equal(rounds,2);
+});
+
+test('a stale action decision is rejected before dispatch and refreshed facts return to the model',async()=>{
+  const f=fixture();let rounds=0;
+  const model={async *stream(o){if(++rounds===1){f.get().legacy.wallet.balance=600;yield call('eat','act',{actionType:'service.eat-rice',parameters:{itemId:'rice-1'}});}else{assert.match(JSON.parse(o.messages.at(-1).content).result.reason,/状态已变化/);assert.match(o.system,/"饭钱":600/);yield {type:'text',text:'先看看新情况。'};}}};
+  assert.equal(await collect(f.speech.wrap(model).stream(f.options)),'先看看新情况。');assert.equal(f.dispatches(),0);
 });
 
 
