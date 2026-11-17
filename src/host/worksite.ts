@@ -45,6 +45,7 @@ export function createWorksite(store:Reader,gate:PetGate,uow:UnitOfWork,view:(id
         }else if(action==='resume-work'){
           if(!site.inside)throw Error('她不在工地里');
           if(hasForcedWork(draft))throw Error('强制干活正在进行');
+          if(site.workState!=='stopped')return {}; // Repeated resume must not reset the 15-trip counter.
           site.workState='running';site.sessionId=randomUUID();site.completedInSession=0;site.reviewedThrough=0;delete site.stopReason;
           text='恢复普通工作；有任务时会继续搬砖。';
         }else if(action==='force-work'){

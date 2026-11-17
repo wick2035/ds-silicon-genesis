@@ -82,3 +82,8 @@ test('爸爸明确选择重新搬，未知回执不变且不会虚构进度',asy
  assert.equal((await f.site.snapshot('main')).waitingForReceipt,true);await f.site.act('main','retry-unconfirmed');
  assert.equal(f.get().life.actions.at(-1).status,'UNKNOWN');assert.equal(f.get().legacy.labor.contracts[0].done,0);assert.equal(blocksNewLabor(f.get()),false);assert.equal((await f.site.snapshot('main')).waitingForReceipt,false);
 });
+
+test('已经在持续工作时重复恢复不会重新计算 15 趟',async()=>{
+ const f=fixture();await f.site.act('main','enter-forced');const s=f.get().legacy.worksite;s.completedInSession=7;const session=s.sessionId;
+ await f.site.act('main','resume-work');assert.equal(f.get().legacy.worksite.completedInSession,7);assert.equal(f.get().legacy.worksite.sessionId,session);
+});
