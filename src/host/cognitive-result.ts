@@ -1,5 +1,5 @@
 import {advanceSpirit} from '../kernel/spirit.js';
-import {applyGoalProposal} from '../kernel/goal-lifecycle.js';
+import {applyGoalProposal,mergeDuplicateGoals,resolveGoalId} from '../kernel/goal-lifecycle.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { strategyScore, validateProposal } from '../kernel/index.js';
 import type { LifeState, CognitivePlan, DevelopmentRecord } from '../kernel/types.js';
@@ -51,7 +51,8 @@ export class CognitiveResultCoordinator {
           if(candidate.completion){const url=candidate.completion.url;const proof=candidate.sourceIds.some(id=>{const e=life.events.find(event=>event.eventId===id);const payload=e?.payload as any;const text=typeof payload?.text==='string'?payload.text:'';const parts=text.trim().split(url);return (e?.source==='user'||e?.source==='desktop'&&e.actorId==='dad') && parts.length===2 && /^(?:请|帮我|请帮我)?\s*(?:读取|阅读|打开|查看|读一下|read)\s*$/i.test(parts[0]) && /^[\s。！!]*$/.test(parts[1]);});if(!proof)throw Error('单步阅读目标缺少明确用户来源');completion=candidate.completion;}
           life.goals.push({id,title:candidate.title,kind:'self-directed',priority:0,urgency:0,status:'active',sourceIds:[...candidate.sourceIds],...(completion?{completion}:{})});
         }
-        state.goals=life.goals;state.events=life.events;
+        mergeDuplicateGoals({...life,petId},new Date().toISOString());
+        state.goals=life.goals;state.events=life.events;state.memories=life.memories;
         for(const update of candidates.goalUpdates)applyGoalProposal(state,update,new Date().toISOString());
         const verified=(ids:string[])=>new Set(ids).size>=2 && ids.every(id=>life.events.some(e=>e.eventId===id&&['observed','verified'].includes(e.evidenceLevel)));
         const model=life.selfModel;
@@ -63,6 +64,7 @@ export class CognitiveResultCoordinator {
           if(!model[category].some(x=>x.id===item.id))model[category].push(item);
         }
         for(const step of candidates.plan) {
+          if(step.goalId)step.goalId=resolveGoalId(state,step.goalId);
           validateActionParameters(step.actionType,step.parameters);
           if(!this.dispatcher.hasExecutor(step.actionType))throw Error('计划执行器不可用');
           if(!step.requiredCapabilities.includes(step.actionType) || !step.requiredCapabilities.every(name=>life.constraints.capabilities.some(cap=>cap.name===name && cap.enabled && (!cap.requiresPermission||life.constraints.permissions.includes(cap.requiresPermission))))) throw new Error('计划能力或权限已变化');
@@ -80,6 +82,7 @@ export class CognitiveResultCoordinator {
         if(result.proposal){
           const learned=strategyScore(state,result.proposal.actionType,'execution');
           const proposal={...result.proposal,priority:Math.max(0,Math.min(100,result.proposal.priority+(learned.samples ? Math.round((learned.score-.5)*20) : 0))),expectedStateVersion:draft.version};
+          if(proposal.goalId)proposal.goalId=resolveGoalId(state,proposal.goalId);
           if(proposal.petId!==petId)throw new Error('行动身份不匹配');
           validateActionParameters(proposal.actionType,proposal.parameters);
           if(!this.dispatcher.hasExecutor(proposal.actionType))throw Error('行动执行器不可用');
@@ -92,6 +95,7 @@ export class CognitiveResultCoordinator {
           if(step){step.status='in_progress';step.actionId=proposal.id;}
           const now=new Date().toISOString();life.actions.push({...structuredClone(proposal),status:'PROPOSED',createdAt:now,updatedAt:now});
         }
+        mergeDuplicateGoals({...life,petId},new Date().toISOString());
         return {};
       });
       if(signal.aborted||this.gate.signal.aborted)throw new Error('认知已停止');

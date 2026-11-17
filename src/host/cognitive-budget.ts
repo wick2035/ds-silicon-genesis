@@ -50,6 +50,14 @@ export class DurableCognitiveBudget implements CognitiveBudget, ModelBudget {
     } else {
       const cap=category==='autonomous'||category==='needs'?Math.max(0,limit-2):limit;
       if(usage.totalCalls>=cap)throw exhausted;
+      // Keep food decisions from consuming every autonomous thought when
+      // there are ongoing goals. Already-used autonomous calls count toward
+      // the reserve, and the overall daily limit remains unchanged.
+      if(category==='needs' && draft.life.goals.some(g=>g.status==='active'&&g.sourceIds.every(id=>!Object.hasOwn(draft.life.invalidSources,id)))){
+        const autonomous=(Array.isArray(usage.callDetails)?usage.callDetails:[]).filter((entry:any)=>entry.category==='autonomous').length;
+        const reserve=Math.max(0,Math.min(Math.ceil(cap*.2),Math.max(0,cap-1))-autonomous);
+        if(usage.totalCalls>=cap-reserve)throw exhausted;
+      }
       usage.totalCalls++;usage.modelCalls++;
       (usage.callDetails??=[]).push({id,at:new Date().toISOString(),category,purpose,provider,model,status:'started'});
     }

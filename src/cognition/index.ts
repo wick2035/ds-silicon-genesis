@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import {speechIdentity,speechSources} from '../kernel/speech-provenance.js';
 import { rankGoals, validateProposal, workspace } from '../kernel/index.js';
+import {isKnowledgeGoal} from '../kernel/goal-lifecycle.js';
 import type { ActionProposal, CognitiveWorkspace, LifeState, Memory } from '../kernel/types.js';
 
 const Draft = z.object({
@@ -12,7 +13,7 @@ const Draft = z.object({
 }).strict();
 const Candidate = z.object({ title: z.string().min(1).max(200), description: z.string().min(1).max(2000), sourceIds: z.array(z.string().min(1).max(200)).min(1).max(50) }).strict();
 const GoalCandidate=Candidate.extend({completion:z.object({type:z.literal('read-url'),url:z.string().url().max(2000)}).strict().optional()});
-const GoalUpdate=z.object({goalId:z.string().min(1).max(200),kind:z.enum(['progress','reprioritize','complete']),evidenceId:z.string().min(1).max(200),priority:z.number().finite().min(0).max(100).optional()}).strict();
+const GoalUpdate=z.object({goalId:z.string().min(1).max(200),kind:z.enum(['progress','reprioritize','complete','understood']),evidenceId:z.string().min(1).max(200),priority:z.number().finite().min(0).max(100).optional(),understanding:z.string().trim().min(20).max(1000).optional()}).strict().refine(x=>x.kind!=='understood'||!!x.understanding);
 const Step = z.object({ actionType: z.string().min(1).max(100), parameters: z.record(z.string(),z.json()), goalId:z.string().min(1).max(200).optional(), description: z.string().min(1).max(1000), requiredCapabilities: z.array(z.string().min(1).max(100)).min(1).max(20), sourceIds: z.array(z.string().min(1).max(200)).min(1).max(50) }).strict();
 const Thought=z.object({salience:z.number().finite().min(0).max(1).default(.5),text:z.string().min(1).max(500),feeling:z.string().max(200),desire:z.string().max(300),sourceIds:z.array(z.string().min(1).max(200)).min(1).max(20)}).strict();
 const Output = z.object({ thought:Thought.nullable().default(null), action: Draft.nullable(), goals: z.array(GoalCandidate).max(5), goalUpdates:z.array(GoalUpdate).max(5).default([]), plan: z.array(Step).max(10), interests: z.array(Candidate).max(5), selfModel: z.array(Candidate).max(5) }).strict();
@@ -86,6 +87,9 @@ export class Cognition {
       const { action, ...candidates } = result.parsed;
       const sourceValid = (id: string) => state.events.some(e => e.eventId === id && !Object.prototype.hasOwnProperty.call(state.invalidSources, id));
       if(candidates.goalUpdates.some(x=>!sourceValid(x.evidenceId)))return {status:'degraded',reason:'invalid_goal_evidence'};
+      // Understanding must cite a memory actually provided to this model call.
+      const readSources=new Set(snapshot.relevantMemories.flatMap(m=>m.sourceIds));
+      if(candidates.goalUpdates.some(x=>x.kind==='understood'&&(!readSources.has(x.evidenceId)||!snapshot.activeGoals.some(g=>g.id===x.goalId&&isKnowledgeGoal(g)))))return {status:'degraded',reason:'unread_goal_explanation'};
       if ([...candidates.goals, ...candidates.plan, ...candidates.interests, ...candidates.selfModel].some(item => !item.sourceIds.every(sourceValid))) return { status: 'degraded', reason: 'invalid_candidate_source' };
       if (candidates.plan.some(step => !step.requiredCapabilities.includes(step.actionType) || !step.requiredCapabilities.every(name => state.constraints.capabilities.some(cap => cap.name === name && cap.enabled && (!cap.requiresPermission || state.constraints.permissions.includes(cap.requiresPermission)))))) return { status: 'degraded', reason: 'unavailable_plan_capability' };
       const proposal: ActionProposal | null = action ? { ...action, id: randomUUID(), petId: state.petId, expectedStateVersion: state.version } : null;

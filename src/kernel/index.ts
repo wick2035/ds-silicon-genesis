@@ -1,4 +1,4 @@
-import {applyGoalProposal} from './goal-lifecycle.js';
+import {applyGoalProposal,mergeDuplicateGoals} from './goal-lifecycle.js';
 import {rebuildOutcomeDevelopment} from './outcome-development.js';
 import type { ActionProposal, ActionReceipt, ActionStatus, Belief, CognitiveWorkspace, KernelStore, LifeEvent, LifeState, Memory, Relationship, StrategyObservation, Goal, DevelopmentRecord } from './types.js';
 export * from './types.js';
@@ -213,7 +213,7 @@ export class LifeKernel {
       if (previous) { assert(same(previous, goal), 'Goal ID reused'); return false; }
       assert(activeSource(state, goal.id) && goal.sourceIds.every(id => activeSource(state, id) && state.events.some(e => e.eventId === id)), 'Goal requires valid events');
       if (goal.parentId) assert(state.goals.some(g => g.id === goal.parentId && g.status === 'active') && goal.parentId !== goal.id, 'Parent goal is not active');
-      state.goals.push(copy(goal)); return true;
+      state.goals.push(copy(goal)); mergeDuplicateGoals(state,new Date().toISOString()); return true;
     });
   }
   async changeGoal(petId: string, goalId: string, status: Goal['status'], expectedVersion: number, evidenceId?: string): Promise<LifeState> {

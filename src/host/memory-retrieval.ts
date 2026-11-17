@@ -58,9 +58,12 @@ export class CanonicalMemoryRetrieval {
   async forCognition(state:LifeState):Promise<Memory[]> {
     const conversations=state.events.filter(e=>e.type==='conversation.user'&&!Object.hasOwn(state.invalidSources,e.eventId)).slice(-3);
     const query=[...conversations.reverse().map(e=>{const p=e.payload as Record<string,unknown>;return typeof p?.text==='string'?p.text:'';}),...state.goals.filter(g=>g.status==='active').map(g=>g.title)].join(' ').slice(0,500);
-    const matches=await this.search(state.petId,query,12), recent=state.memories.filter(m=>m.valid&&m.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id))).slice(-6);
+    // Long recent conversations must not consume all search terms before an
+    // older active question can retrieve its explanation.
+    const goalQueries=[...new Set(state.goals.filter(g=>g.status==='active').map(g=>g.title.trim()).filter(Boolean))].slice(0,3);
+    const [goalMatches,matches]=await Promise.all([Promise.all(goalQueries.map(q=>this.search(state.petId,q.slice(0,500),3))),this.search(state.petId,query,12)]), recent=state.memories.filter(m=>m.valid&&m.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id))).slice(-6);
     const felt=state.memories.filter(m=>m.valid&&m.feeling&&m.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id))).sort((a,b)=>(b.salience??0)-(a.salience??0)||Date.parse(b.createdAt)-Date.parse(a.createdAt)).slice(0,4);
-    const unique=new Map([...matches,...recent,...felt].map(m=>[m.id,m]));let remaining=9000;
+    const unique=new Map([...goalMatches.flat(),...matches,...recent,...felt].map(m=>[m.id,m]));let remaining=9000;
     return [...unique.values()].map(m=>({...m,speakers:speechSources(m.sourceIds,state)})).filter(m=>{const size=JSON.stringify(m).length;if(size>remaining)return false;remaining-=size;return true;});
   }
 }

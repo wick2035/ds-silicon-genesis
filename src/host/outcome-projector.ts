@@ -1,4 +1,5 @@
 import {sweetPrice} from './spirit-activity.js';
+import {mergeDuplicateGoals} from '../kernel/goal-lifecycle.js';
 import {setSpiritRest,advanceSpirit} from '../kernel/spirit.js';
 import {settleSimulatedSpending} from './simulated-spending.js';
 import { rebuildRelationships } from '../kernel/index.js';
@@ -174,6 +175,7 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
         const goalId = `follow-up:${intent.id}`;
         assert(!draft.life.goals.some(goal => goal.id === goalId), '探索目标已存在');
         draft.life.goals.push({id:goalId,title:question,kind:'explore',priority:30,urgency:10,status:'active',sourceIds:[sourceId]});
+        mergeDuplicateGoals({...draft.life,petId:draft.petId},occurredAt);
       }
     }
   }
