@@ -5,10 +5,18 @@ export function hasLaborResources(draft:CanonicalEnvelope):boolean {
   const stats=(draft.humanity as any).stats;
   return [stats.stamina,stats.energy,stats.satiety,draft.life.spirit?.value??80].some(n=>Number.isFinite(n)&&n>0);
 }
-export function canChooseLabor(draft:CanonicalEnvelope):boolean {
+export function laborBlockReason(draft:CanonicalEnvelope):string|undefined {
   const human=draft.humanity as any,cap=draft.life.constraints.capabilities.find(c=>c.name==='labor.step'&&c.enabled);
-  return !draft.life.constraints.paused&&!!cap&&(!cap.requiresPermission||draft.life.constraints.permissions.includes(cap.requiresPermission))&&human.helperReady===true&&human.restrained===false&&!human.sleeping&&hasLaborResources(draft);
+  if(draft.life.constraints.paused)return '自主活动已暂停';
+  if(!cap)return '搬砖能力未启用';
+  if(cap.requiresPermission&&!draft.life.constraints.permissions.includes(cap.requiresPermission))return '搬砖权限未授予';
+  if(human.helperReady!==true)return '桌宠连接尚未确认';
+  if(human.restrained!==false)return '身体正被抓住，松开后才能工作';
+  if(human.sleeping)return '身体正在睡觉';
+  if(!hasLaborResources(draft))return '体力、精力、饱腹和精神均已耗尽';
 }
+export function canChooseLabor(draft:CanonicalEnvelope):boolean {return laborBlockReason(draft)===undefined;}
+
 
 /** A committed manual command can override voluntary rest, never receipt truth. */
 const validForced=(draft:CanonicalEnvelope,c:any)=>c.status==='working'&&c.forced&&c.done<c.trips&&c.forcedSource&&
@@ -22,6 +30,6 @@ export function isForcedLabor(draft:CanonicalEnvelope,action:{actionType:string;
 export function forcedLaborState(draft:CanonicalEnvelope,state:LifeState,action:ActionProposal):LifeState {
   const forced=isForcedLabor(draft,action);
   if(action.actionType!=='labor.step')return state;
-  if(!forced&&!canChooseLabor(draft))throw Error('现在身体或权限不允许搬砖：需要清醒、松开且资源未全部耗尽');
+  if(!forced){const reason=laborBlockReason(draft);if(reason)throw Error(reason);}
   return {...state,body:{...state.body,sleeping:forced?state.body.sleeping:false},constraints:{...state.constraints,paused:forced?false:state.constraints.paused,capabilities:state.constraints.capabilities.map(c=>c.name==='labor.step'?{...c,bodyLimits:{allowSleeping:true,allowRestrained:true,allowInjured:true,minStamina:-101,maxPain:101}}:c)}};
 }

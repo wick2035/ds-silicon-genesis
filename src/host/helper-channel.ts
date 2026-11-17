@@ -8,7 +8,7 @@ import type {createDesktopCommandChannel} from './desktop-command-channel.js';
  * to HTTP handlers. Observations travel on the spawned child's stdout bridge. */
 export function createHelperChannel(humanity:CanonicalHumanityAdapter, desktop:TrustedDesktopBridge,
   petIds:readonly string[], observerAuthority:object, sourceCapability:object,
-  commands:ReturnType<typeof createDesktopCommandChannel>, observeSpace?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, tokens?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, disturb?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, semantic?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, worksite?:(petId:string,action:string)=>Promise<unknown>, idle?:{update(seconds:number,observedAt:number):void;clear():void}) {
+  commands:ReturnType<typeof createDesktopCommandChannel>, observeSpace?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, tokens?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, disturb?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, semantic?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, worksite?:(petId:string,action:string)=>Promise<unknown>, idle?:{update(seconds:number,observedAt:number):void;clear():void}, wakeWorksite?:(petId:string)=>void) {
   const allowed=new Set(petIds), observers=new Map<string,HelperObserver>();
   const epochs=new Map<string,string>();
   const openRequests=new Map<string,{id:string;promise:Promise<void>;resolve:()=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>();
@@ -95,6 +95,7 @@ export function createHelperChannel(humanity:CanonicalHumanityAdapter, desktop:T
       if(epochs.get(event.petId)!==event.epoch)throw Error('桌宠窗口观察代次不匹配');
       if(!observer)throw Error('桌宠尚未建立观察通道');
       await observer.observe(event,sourceCapability);
+      if(!event.restrained)wakeWorksite?.(event.petId);
     }
   };
 }

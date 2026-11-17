@@ -9,7 +9,7 @@ import {CanonicalActionLifecycle} from '../dist/host/action-lifecycle.js';
 import {projectBody} from '../dist/host/body-projection.js';
 import {projectOutcome} from '../dist/host/outcome-projector.js';
 import {ensureSpirit,setSpiritRest} from '../dist/kernel/spirit.js';
-import {hasForcedWork,canChooseLabor} from '../dist/host/forced-labor.js';
+import {hasForcedWork,canChooseLabor,laborBlockReason} from '../dist/host/forced-labor.js';
 import {createFinanceManagement} from '../dist/host/finance-management.js';
 
 function fixture(){
@@ -113,4 +113,23 @@ test('自主搬砖只在四项资源全部耗尽时受资源门槛拦截，暂�
   for(const key of ['stamina','energy','satiety']){s.humanity.stats[key]=.1;assert.equal(canChooseLabor(s),true);s.humanity.stats[key]=0;}
   s.life.spirit.value=.1;assert.equal(canChooseLabor(s),true);s.life.constraints.paused=true;assert.equal(canChooseLabor(s),false);
   s.life.constraints.paused=false;s.life.constraints.capabilities[0].enabled=false;assert.equal(canChooseLabor(s),false);
+});
+
+
+test('工作受阻时准确说明原因，不把连接、抓取和权限混为一谈',()=>{
+  const f=fixture(),s=f.get();s.life.constraints.paused=false;
+  s.humanity.helperReady=false;assert.match(laborBlockReason(s),/连接/);
+  s.humanity.helperReady=true;s.humanity.restrained=true;assert.match(laborBlockReason(s),/抓住/);
+  s.humanity.restrained=false;s.life.constraints.capabilities[0].enabled=false;assert.match(laborBlockReason(s),/能力/);
+});
+
+
+test('排队期间工作命令改变或超时，派发前取消旧步骤',()=>{
+  const f=fixture(),s=f.get();s.legacy.worksite={inside:true,forced:false};
+  s.legacy.labor.contracts.push({id:'job',status:'working',done:0,trips:2,workPermit:true});
+  const action={id:'step',petId:'main',actionType:'labor.step',status:'PENDING',parameters:{contractId:'job',commandId:'old'},sourceIds:[],requiredCapabilities:['labor.step']};
+  s.life.actions.push(action);s.legacy.world={command:{id:'new',surface:'web',status:'queued',expires:Date.now()+60000,labor:{id:'job'}}};
+  const intent={id:'step',type:'labor.step',payload:{petId:'main',actionId:'step',actionType:'labor.step',parameters:action.parameters}};
+  const lifecycle=new CanonicalActionLifecycle(projectBody);assert.match(lifecycle.prepare(s,intent).reason,/步骤已变化/);
+  s.legacy.world.command.id='old';s.legacy.world.command.expires=Date.now()-1;assert.match(lifecycle.prepare(s,intent).reason,/步骤已变化/);
 });

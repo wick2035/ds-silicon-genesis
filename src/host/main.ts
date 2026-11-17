@@ -1,4 +1,4 @@
-import {canChooseLabor} from './forced-labor.js';
+import {laborBlockReason} from './forced-labor.js';
 import {blocksNewLabor} from './labor-pending.js';
 import {createLaborCompletionNotices} from './labor-completion-notices.js';
 import {companionContext,COMPANION_PERSONALITY} from './companion-personality.js';
@@ -105,7 +105,7 @@ export async function main():Promise<void> {
     await lease.run(petId,async()=>{const state=await store.loadEnvelope(petId),command=(state?.legacy as any)?.world?.command;
       if(state && command && ['queued','running'].includes(command.status))await unitOfWork.apply(petId,state.version,draft=>{
         const legacy=draft.legacy as any,old=legacy.world?.command;
-        if(old && ['queued','running'].includes(old.status)){(legacy.world.commandHistory||=[]).push({...structuredClone(old),status:'interrupted',interruptedReason:'host-restarted'});legacy.world.commandHistory=legacy.world.commandHistory.slice(-50);old.status='interrupted';old.interruptedReason='host-restarted';}
+        if(old && ['queued','running'].includes(old.status)){const pending=draft.life.actions.some(a=>a.actionType==='labor.step'&&a.status==='PENDING'&&a.parameters.commandId===old.id);if(pending&&old.status==='queued'){old.expires=Date.now()+90000;}else{(legacy.world.commandHistory||=[]).push({...structuredClone(old),status:'interrupted',interruptedReason:'host-restarted'});legacy.world.commandHistory=legacy.world.commandHistory.slice(-50);old.status='interrupted';old.interruptedReason='host-restarted';}}
         return {};
       });});
     // Register the executable capability for existing archives without a schema migration.
@@ -135,7 +135,7 @@ export async function main():Promise<void> {
       },
       async(id,requestId,detail)=>{const d=detail as any;if(!d||typeof d.id!=='string'||typeof d.key!=='string'||![d.fromX,d.toX].every((n:unknown)=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=1))throw Error('搬砖拖动观察无效');await domain.laborAction(id,requestId,{action:'disturb',id:d.id,key:d.key,surface:'desktop',fromX:d.fromX,toX:d.toX},observerAuthority);const state=await store.loadEnvelope(id);if(!state)throw Error('状态不可用');return projectLegacySnapshot(state).labor;},
       (id,requestId,detail)=>{if(!semanticResponse)throw Error('互动服务尚未就绪');return semanticResponse(id,requestId,detail);},
-      (id,action)=>action==='snapshot'?worksite.snapshot(id):worksite.act(id,action as Parameters<typeof worksite.act>[1]),desktopIdle);
+      (id,action)=>action==='snapshot'?worksite.snapshot(id):worksite.act(id,action as Parameters<typeof worksite.act>[1]),desktopIdle,id=>worksiteWake(id));
     bili=createBiliReader(root);
     const executors=new Map(createDomainExecutors(commandChannel.bridge));
     executors.set('learning.observe',createExplorationExecutor(createPublicWeb(),bili));
@@ -153,7 +153,7 @@ export async function main():Promise<void> {
       await lease.run(id,async()=>{const current=await store.loadEnvelope(id);if(!current)throw Error('生命状态不可用');
         await unitOfWork.apply(id,current.version,draft=>{
           const p=draft.legacy as any;
-          if(!canChooseLabor(draft))throw Error('现在身体或权限不允许搬砖');
+          const reason=laborBlockReason(draft);if(reason)throw Error(reason);
           if(sources.some(source=>Object.hasOwn(draft.life.invalidSources,source)||!draft.life.events.some(e=>e.eventId===source)))throw Error('决定来源不可用');
           const contract=p.labor?.contracts?.find((c:any)=>['working','paused','queued'].includes(c.status)&&c.done<c.trips);if(!contract)throw Error('当前没有搬砖任务');if(contract.status==='paused')throw Error('当前任务已暂停');
           if(blocksNewLabor(draft))throw Error('已有工作正在等待实际结果');

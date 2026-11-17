@@ -177,3 +177,11 @@ test('malformed tool arguments return an error to the same model instead of endi
   const f=fixture();let rounds=0;const model={async *stream(o){if(++rounds===1)yield {type:'tool-call-delta',index:1,id:'bad',name:'act',argumentsDelta:'{'};else{assert.equal(o.messages.at(-1).isError,true);yield {type:'text',text:'我再想想。'};}}};
   assert.equal(await collect(f.speech.wrap(model).stream(f.options)),'我再想想。');assert.equal(f.dispatches(),0);
 });
+
+
+test('工作请求失败后工具返回当前工地位置',async()=>{
+  const f=fixture();f.get().legacy.worksite={inside:true,forced:true};
+  const speech=createEmbodiedSpeech({loadEnvelope:async()=>structuredClone(f.get())},{signal:f.options.signal,run:async(_id,fn)=>fn()},{},{},{},async()=>{throw Error('身体正被抓住，松开后才能工作');},async()=>{});
+  let rounds=0;const model={async *stream(o){if(++rounds===1)yield call('work','begin_work',{});else{const result=JSON.parse(o.messages.at(-1).content);assert.equal(result.工地现状.inside,true);assert.match(result.result.reason,/抓住/);assert.match(o.system,/工作申请失败或未取得动作回执不等于没有进场/);yield {type:'text',text:'我已经在工地，等松开后再搬。'};}}};
+  assert.match(await collect(speech.wrap(model).stream(f.options)),/已经在工地/);
+});

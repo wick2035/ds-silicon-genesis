@@ -106,7 +106,11 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
       const proposal={...action, expectedStateVersion:draft.version};
       if((draft.legacy as Record<string,any>).worksite?.inside && (action.actionType.startsWith('care.') || ['service.eat-rice','body.sleep','body.wake','token.pickup','body.activity'].includes(action.actionType)))throw Error('她在网页工地里，请先接她回桌面');
       if(action.actionType==='body.activity' && ((draft.legacy as Record<string,any>).space?.mode!=='outside' || (draft.legacy as Record<string,any>).labor?.contracts?.some((c:any)=>c.status==='working')))throw Error('当前桌面空间或工作状态不允许走动');
-      if(action.actionType==='labor.step' && (!(draft.legacy as Record<string,any>).worksite?.inside || (draft.legacy as Record<string,any>).world?.command?.surface!=='web'))throw Error('她不在网页工地里');
+      if(action.actionType==='labor.step'){
+        const pet=draft.legacy as Record<string,any>,command=pet.world?.command,contract=pet.labor?.contracts?.find((c:any)=>c.id===action.parameters.contractId);
+        if(!pet.worksite?.inside || command?.surface!=='web')throw Error('她不在网页工地里');
+        if(command.id!==action.parameters.commandId || command.labor?.id!==contract?.id || command.status!=='queued' || !Number.isFinite(command.expires) || command.expires<=this.clock().valueOf() || contract?.status!=='working' || !contract.workPermit || contract.done>=contract.trips)throw Error('搬砖任务或步骤已变化');
+      }
       if(action.actionType.startsWith('care.') && action.actionType!=='care.water' && !(draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])throw Error('照料须由用户手动发起');
 
       if(action.actionType==='qq.send')validateQQReply(draft,state,proposal);

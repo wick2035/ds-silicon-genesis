@@ -51,7 +51,7 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     const forceState=await reader.loadEnvelope(petId),forced=!!forceState&&hasForcedWork(forceState);
     if(signal.aborted || !forced&&(!allowAutonomous || human.restrained) || human.helperReady!==true)return;
     const resting=await reader.loadEnvelope(petId);
-    if(!resting)return;if(hasActiveConversation(resting)&&!forced)return;const spirit=advanceSpirit(resting.life);
+    if(!resting)return;if(hasActiveConversation(resting)&&!forced&&!resting.life.actions.some(a=>a.actionType==='labor.step'&&a.status==='PENDING'))return;const spirit=advanceSpirit(resting.life);
     if(human.sleeping&&!forced){if(spirit.mode==='sleep' && spirit.value>=100 || spirit.mode==='nap' && Date.now()-spirit.sleepStartedAt!>=1200000)await service(petId,{key:'auto-wake:'+spirit.sleepStartedAt,command:'/醒来'},'autonomous');return;}
     if(!needsManaged && spirit.value<=2 && !(resting.legacy as any).worksite?.inside && !(resting.legacy as any).labor?.contracts?.some((c:any)=>c.status==='working'&&c.workPermit)){await service(petId,{key:'auto-sleep:'+Math.floor(Date.now()/3600000),command:'/休息'},'autonomous');return;}
     if(Number.isFinite(human.restingUntil) && human.restingUntil>Date.now()&&!forced&&!(resting.legacy as any).labor?.contracts?.some((c:any)=>c.status==='working'&&c.workPermit))return;
@@ -83,6 +83,12 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     // fabricated trip. Actual progress only comes from the helper receipt.
     await gate.run(petId,async()=>{
       let current=await reader.loadEnvelope(petId);if(!current||signal.aborted||current.life.constraints.paused&&!hasForcedWork(current))return;
+      const pendingLabor=current.life.actions.find(a=>a.actionType==='labor.step'&&a.status==='PENDING');
+      if(pendingLabor){
+        const receipt=await dispatcher.dispatch(pendingLabor.id);
+        if(receipt.status==='completed'&&!signal.aborted){const timer=setTimeout(()=>{if(!signal.aborted)void run(petId,signal,{allowAutonomous}).catch(()=>{});},0);timer.unref?.();}
+        return;
+      }
       if(blocksNewLabor(current) || current.life.actions.some(a=>a.actionType==='service.eat-rice' && ['PENDING','DISPATCHED'].includes(a.status)))return;
       let pet=current.legacy as Record<string,any>, contract=pet.labor?.contracts?.find((c:any)=>['working','paused','queued'].includes(c.status) && c.done<c.trips);
       if(!contract || contract.status!=='working' || !Number.isFinite(contract.done) || contract.done>=contract.trips)return;

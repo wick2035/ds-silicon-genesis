@@ -79,3 +79,13 @@ test('已中断的旧派发步骤保留未知事实且不永久锁住新搬运',
   assert.equal(blocksNewLabor(state),true);state.legacy.world.command.status='interrupted';assert.equal(blocksNewLabor(state),false);
   assert.equal(state.life.actions[0].status,'DISPATCHED');assert.equal(state.legacy.labor.contracts[0].done,18);
 });
+
+
+test('已排队的搬砖步骤会继续派发，而不是被自身永久阻塞',async()=>{
+  const f=fixture(''),s=f.get(),controller=new AbortController();
+  s.legacy.labor.contracts[0].status='working';s.legacy.labor.contracts[0].workPermit=true;
+  s.legacy.world={command:{id:'waiting',source:'labor',status:'queued',surface:'web',labor:{id:'work'}}};
+  s.life.actions.push({id:'waiting-step',actionType:'labor.step',status:'PENDING',parameters:{commandId:'waiting',contractId:'work'}});
+  const dispatched=[];const life=createDeterministicLife({get:async()=>structuredClone(f.get().humanity)},f.store,async()=>{},f.gate,f.uow,{}, {dispatch:async id=>{dispatched.push(id);return {status:'cancelled'};}},async()=>{});
+  await life.run('main',controller.signal,{allowAutonomous:true});assert.deepEqual(dispatched,['waiting-step']);
+});

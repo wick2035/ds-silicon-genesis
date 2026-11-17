@@ -79,7 +79,7 @@ export class OutboxDispatcher {
       await client.query("UPDATE silicon_genesis.outbox SET state='cancelled',receipt=$2::jsonb,updated_at=now() WHERE action_id=$1",[actionId,JSON.stringify(receipt)]);await client.query('COMMIT');this.notify(draft);
     }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}});
   }
-  private readonly active = new Map<string,{controller:AbortController;policy:string}>();
+  private readonly active = new Map<string,{controller:AbortController;policy:string;done:Promise<void>;finish:()=>void}>();
   private readonly listeners=new Set<(draft:CanonicalEnvelope)=>void>();
   onCommit(listener:(draft:CanonicalEnvelope)=>void):()=>void {this.listeners.add(listener);return ()=>this.listeners.delete(listener);}
   private notify(draft:CanonicalEnvelope):void {for(const listener of this.listeners)try{listener(structuredClone(draft));}catch{/* feedback cannot undo a committed transaction */}}
@@ -175,7 +175,11 @@ export class OutboxDispatcher {
   }
 
   private async dispatchOwned(petId: string, actionId: string): Promise<ExecutionReceipt> {
-    if(this.active.has(petId))throw new Error('已有行动正在执行，请等待真实结果');
+    while(this.active.has(petId)) {
+      const running=this.active.get(petId)!;
+      await (this.gate.waitOutside ? this.gate.waitOutside(()=>running.done) : running.done);
+      if(this.gate.signal.aborted)throw new Error('写入租约已失去');
+    }
     const client = await this.pool.connect();
     let intent: OutboxIntent, policy='noninterruptible';
     try {
@@ -210,7 +214,8 @@ export class OutboxDispatcher {
     const controller=new AbortController();
     const cancel=()=>controller.abort(this.gate.signal.reason);
     this.gate.signal.addEventListener('abort',cancel,{once:true});
-    this.active.set(petId,{controller,policy});
+    let finish!:()=>void;const done=new Promise<void>(resolve=>{finish=resolve;});
+    this.active.set(petId,{controller,policy,done,finish});
     try {
       if (this.gate.signal.aborted) throw new Error('写入租约不可用');
       const execute=()=>this.executors.get(intent.type)!(petId, intent, controller.signal);
@@ -221,27 +226,27 @@ export class OutboxDispatcher {
       if (!receipt || !['completed','failed','cancelled','unknown'].includes(receipt.status) || !receipt.evidence || typeof receipt.evidence !== 'object') throw new Error('执行回执无效');
     } catch {
       receipt = {status:'unknown', evidence:{reason:'执行结果无法确认，须先对账'}};
-    } finally {this.gate.signal.removeEventListener('abort',cancel);this.active.delete(petId);}
+    } finally {this.gate.signal.removeEventListener('abort',cancel);const running=this.active.get(petId);this.active.delete(petId);running?.finish();}
     // Once the ownership lease is lost, do not perform any more writes from
     // this process; the next owner will reconcile the durable dispatched row.
     if (this.gate.signal.aborted) throw new Error('写入租约已失去，行动结果须由新实例对账');
-    const done = await this.pool.connect();
+    const doneClient = await this.pool.connect();
     try {
-      await done.query('BEGIN');
-      const state = await done.query('SELECT version::text,payload FROM silicon_genesis.life_state WHERE pet_id=$1 FOR UPDATE', [petId]);
+      await doneClient.query('BEGIN');
+      const state = await doneClient.query('SELECT version::text,payload FROM silicon_genesis.life_state WHERE pet_id=$1 FOR UPDATE', [petId]);
       if (state.rows.length !== 1) throw new Error('生命状态不存在');
       const draft = structuredClone(state.rows[0].payload) as CanonicalEnvelope;
       if (draft.petId !== petId || draft.version !== Number(state.rows[0].version)) throw new Error('生命状态信封不一致');
       this.lifecycle.complete(draft, intent, receipt);
       draft.version++;
-      await done.query('UPDATE silicon_genesis.life_state SET version=$2,payload=$3::jsonb,updated_at=now() WHERE pet_id=$1', [petId,draft.version,JSON.stringify(draft)]);
-      const result = await done.query(`UPDATE silicon_genesis.outbox SET state=$2,receipt=$3::jsonb,updated_at=now()
+      await doneClient.query('UPDATE silicon_genesis.life_state SET version=$2,payload=$3::jsonb,updated_at=now() WHERE pet_id=$1', [petId,draft.version,JSON.stringify(draft)]);
+      const result = await doneClient.query(`UPDATE silicon_genesis.outbox SET state=$2,receipt=$3::jsonb,updated_at=now()
         WHERE action_id=$1 AND state='dispatched' RETURNING action_id`, [actionId,receipt.status,JSON.stringify(receipt)]);
       if (result.rowCount !== 1) throw new Error('行动回执冲突，须对账');
-      await done.query('COMMIT');
+      await doneClient.query('COMMIT');
       this.notify(draft);
       return receipt;
-    } catch (error) { await done.query('ROLLBACK'); throw error; }
-    finally { done.release(); }
+    } catch (error) { await doneClient.query('ROLLBACK'); throw error; }
+    finally { doneClient.release(); }
   }
 }

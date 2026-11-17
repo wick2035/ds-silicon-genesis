@@ -111,7 +111,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
     // Live body and actionable inventory are required inputs, never optional history.
     const liveFoodFor=(envelope:CanonicalEnvelope)=>{const pet=envelope.legacy as any;return {身体:envelope.humanity.stats,睡眠:{sleeping:envelope.humanity.sleeping,restingUntil:envelope.humanity.restingUntil},food:{...riceMotivation(envelope.humanity as any,pet.config??{}),price:pet.config?.costs?.feed,frozen:pet.wallet?.frozen===true},饭钱:pet.wallet?.balance,库存:riceInventory(envelope),食物可用性:riceAvailability(envelope)};};
     const system=options.system+'\n'+personality+'\n每次开口前，结合自己的感受、目标、刚才爸爸的操作和真实结果，判断此刻需不需要工具；可以只说话或安静，不必为了使用工具而行动。需要吃饭、喝水、睡觉、走动、学习或搬砖时调用工具，不能用台词冒充行动。失败后自己决定换办法、休息或向爸爸商量；条件未变不要重复失败的动作。感受和判断属于你，操作归因只依据真实来源，不知道是谁造成的就不要认定。通过真实结果理解自己喜欢什么、身体能做什么，不宣称凭空获得意识。每次工具返回后，由你继续决定调用下一项工具还是回答；例如买饭成功只代表饭已入库，你可以根据新库存中 status=available 的 id 再决定吃饭；unconfirmed 是旧碗结果未明，不选择它，吃饭必须等待自己的实际回执。无需让爸爸再发一条消息推动下一步，也不强制你购买后一定吃。工具后的回复针对结果自然地说，未知结果不能说完成。需要工具时先调用，工具调用之前不要输出面向对方的回答。';
-    const liveWorkFor=(envelope:CanonicalEnvelope)=>'\n当前工作账本（优先于旧发言和进出记录）：'+JSON.stringify(worksiteFacts(envelope))+'。taskCompleted=true 表示整份工作已经搬完；unpaid 仅表示等待结薪，不能说没搬完。completedTripsThisVisit=0 或 inside=false 只说明本次进场或此刻位置，不会抹掉 completedTotal。remainingPay 是尚欠工钱，不等于还要搬的趟数。';
+    const liveWorkFor=(envelope:CanonicalEnvelope)=>'\n当前工作账本（优先于旧发言和进出记录）：'+JSON.stringify(worksiteFacts(envelope))+'。taskCompleted=true 表示整份工作已经搬完；unpaid 仅表示等待结薪，不能说没搬完。completedTripsThisVisit=0 或 inside=false 只说明本次进场或此刻位置，不会抹掉 completedTotal。remainingPay 是尚欠工钱，不等于还要搬的趟数。inside 表示现在是否已经在工地；工作申请失败或未取得动作回执不等于没有进场。';
     const updatesFor=(envelope:CanonicalEnvelope)=>'\n已经实时发生的操作与结果（按发生时间排列，结果仅在确认后出现）：'+JSON.stringify(recentOperationFeedback(envelope));
     const timeFor=(envelope:CanonicalEnvelope)=>{
       if(speech.privateTime===false)return '';
@@ -166,7 +166,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
           else throw Error('工具不存在');
         }catch(error){isError=true;result={status:'failed',reason:error instanceof Error?error.message:'行动失败'};}
         const current=await reader.loadEnvelope(speech.petId);
-        messages.push({role:'tool',toolCallId:c.id,isError,content:promptData({result,身体:current?.humanity?.stats,...(c.name==='act'&&['service.buy-rice','service.eat-rice'].includes(actionType??'')?{food:current?riceMotivation(current.humanity as any,(current.legacy as any).config??{}):null,饭钱:(current?.legacy as any)?.wallet?.balance,库存:current?riceInventory(current):[],食物可用性:current?riceAvailability(current):null}:{})},5000)});index++;
+        messages.push({role:'tool',toolCallId:c.id,isError,content:promptData({result,身体:current?.humanity?.stats,...(['begin_work','leave_worksite'].includes(c.name)&&current?{工地现状:worksiteFacts(current)}:{}),...(c.name==='act'&&['service.buy-rice','service.eat-rice'].includes(actionType??'')?{food:current?riceMotivation(current.humanity as any,(current.legacy as any).config??{}):null,饭钱:(current?.legacy as any)?.wallet?.balance,库存:current?riceInventory(current):[],食物可用性:current?riceAvailability(current):null}:{})},5000)});index++;
       }
       // A purchase or meal changes current facts within the same model turn.
       const refreshed=await sense(speech.petId,speech.contextExcludeIds??speech.sourceIds,query);
