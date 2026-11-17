@@ -43,6 +43,16 @@ test('每趟真实回执后连续执行，按顺序衔接任务，完成后留�
  const f=fixture();f.get().legacy.labor.contracts.push(job('one',2),job('two',2));await f.site.act('main','enter-forced');
  await runTrips(f,16);const s=f.get();assert.deepEqual(s.legacy.labor.contracts.map(c=>c.done),[2,2]);assert.equal(s.legacy.worksite.completedInSession,4);assert.equal(s.legacy.worksite.inside,true);assert.equal(s.legacy.worksite.forced,true);
 });
+test('聊天期间不启动下一工作步骤，结束后继续且不改变进度和工资',async()=>{
+ const f=fixture();f.get().legacy.labor.contracts.push(job('one',1));await f.site.act('main','enter-forced');
+ f.get().legacy.chatTurns={group:{status:'running',wakeRequested:false,at:Date.now()}};
+ const before=structuredClone(f.get().legacy.labor.contracts[0]);
+ const life=createDeterministicLife({get:async()=>structuredClone(f.get().humanity)},f.store,async()=>{},f.gate,f.uow,{}, {},async()=>{});
+ await life.run('main',new AbortController().signal,{allowAutonomous:true});
+ assert.equal(f.get().life.actions.length,0);assert.deepEqual(f.get().legacy.labor.contracts[0],before);
+ f.get().legacy.chatTurns.group.status='completed';await runTrips(f,4);
+ assert.equal(f.get().legacy.labor.contracts[0].done,1);assert.equal(f.get().legacy.labor.contracts[0].wage,50);
+});
 test('停工不覆盖强制工作，恢复普通工作并使旧决定失效',async()=>{
  const f=fixture();f.get().legacy.labor.contracts.push(job('one',2));await f.site.act('main','enter-forced');const expected={sessionId:f.get().legacy.worksite.sessionId,contractId:'one'};
  await f.site.act('main','stop-work');await f.site.act('main','resume-work');await assert.rejects(f.site.act('main','stop-work',expected),/已变化/);

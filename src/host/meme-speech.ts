@@ -8,14 +8,21 @@ const validName=(name:string)=>!!name&&name.length<=120&&!/[\/\\:\x00-\x1f]/u.te
 /** Use the same merged configuration and directory chain as the image route. */
 export async function readMemeChoices(conf:any,dirs:string[],mode:'chat'|'whisper'):Promise<Meme[]> {
   if(conf?.[mode==='chat'?'chatImageEnabled':'whisperImageEnabled']!==true||!conf.memes||typeof conf.memes!=='object'||Array.isArray(conf.memes))return [];
-  const choices:Meme[]=[];
-  for(const [name,desc] of Object.entries(conf.memes)){
-    if(!validName(name)||typeof desc!=='string'||!desc.trim())continue;
+  // Independent images can be checked together; Promise.all retains the
+  // configured order used by chatImageLimit and by the model's choice list.
+  const check=async ([name,desc]:[string,unknown]):Promise<Meme|undefined>=>{
+    if(!validName(name)||typeof desc!=='string'||!desc.trim())return;
     for(const dir of dirs){try{
       const base=await realpath(dir),file=await realpath(join(dir,name+'.png')),rel=relative(base,file);
       if(!rel||rel==='..'||rel.startsWith('..'+sep)||isAbsolute(rel)||!(await stat(file)).isFile())continue;
-      choices.push({name,desc:desc.trim().slice(0,300)});break;
+      return {name,desc:desc.trim().slice(0,300)};
     }catch{/* Missing optional images do not prevent speech. */}}
+    return;
+  };
+  const choices:Meme[]=[],entries=Object.entries(conf.memes);
+  for(let offset=0;offset<entries.length;offset+=8){
+    const checked=await Promise.all(entries.slice(offset,offset+8).map(check));
+    choices.push(...checked.filter((item):item is Meme=>!!item));
   }
   const limit=Number(conf.chatImageLimit);
   return mode==='chat'&&Number.isInteger(limit)&&limit>0?choices.slice(0,limit):choices;

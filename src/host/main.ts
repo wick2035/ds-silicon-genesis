@@ -1,4 +1,5 @@
 import {createWorksiteReviews} from './worksite-reviews.js';
+import {createWorksiteChatWait} from './worksite-chat-coordination.js';
 import {createLaborCompletionNotices} from './labor-completion-notices.js';
 import {companionContext,COMPANION_PERSONALITY} from './companion-personality.js';
 import {createInteractionReactions} from './interaction-reactions.js';
@@ -174,7 +175,9 @@ export async function main():Promise<void> {
     const worksiteReviews=createWorksiteReviews(store,lease,unitOfWork,budget,model,(id,expected)=>worksite.act(id,'stop-work',expected));
     observeCommits(worksiteReviews.observe);
     const initialIndexState=await store.loadEnvelope(petId);if(initialIndexState){scheduleMemory(initialIndexState);worksiteReviews.observe(initialIndexState);}
-    const retrieval=new CanonicalMemoryRetrieval(lease,desktopIdle,reranker,memoryIndex,embedding), chat=new CanonicalChat(store,lease,unitOfWork,budget,model,(id,q,snapshot)=>retrieval.search(id,q,12,snapshot),(id,key,input)=>domain.laborAction(id,key,input),(id,input)=>service(id,input),id=>worksiteWake(id),grounding);
+    const waitForWorksiteStep=createWorksiteChatWait(store,[unitOfWork,dispatcher]);
+    const resumeWorkAfterChat=(id:string)=>{void store.loadEnvelope(id).then(current=>{const pet=current?.legacy as any;if(pet?.worksite?.inside&&(pet.worksite.workState!=='stopped'||pet.worksite.forced===true)&&pet.labor?.contracts?.some((c:any)=>['working','queued'].includes(c.status)&&c.done<c.trips))worksiteWake(id);}).catch(()=>{});};
+    const retrieval=new CanonicalMemoryRetrieval(lease,desktopIdle,reranker,memoryIndex,embedding), chat=new CanonicalChat(store,lease,unitOfWork,budget,model,(id,q,snapshot)=>retrieval.search(id,q,12,snapshot),(id,key,input)=>domain.laborAction(id,key,input),(id,input)=>service(id,input),id=>worksiteWake(id),grounding,waitForWorksiteStep,resumeWorkAfterChat);
     let requestShutdown=()=>{};
     let companionManagement:ReturnType<typeof createCompanionManagement>;
     const lifeApi=createLifeApi({authorize:()=>true,petId:()=>petId,getState:id=>kernel.getState(id),shutdown:()=>requestShutdown(),openWorksite:id=>helper.requestWorksiteOpen(id),attachments,finance:createFinanceManagement(store,lease,domain),

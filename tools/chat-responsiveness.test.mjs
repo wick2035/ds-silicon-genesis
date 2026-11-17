@@ -34,3 +34,21 @@ test('dad private message wakes a sleeping companion before generating a reply a
  assert.equal(await chat.turn({requestId:'wake-test',petId:'main',channel:'desktop',actorId:'dad',text:'吃到了吗'},gate.signal),'嗯，爸爸，我醒啦。');
  assert.deepEqual(calls,['/醒来']);assert.equal(hasActiveConversation(state),false);assert.ok(state.life.spirit.value<1);
 });
+
+test('chat overlaps recall with the current work step and resumes work after success or failure',async()=>{
+ for(const fail of [false,true]){
+  const old=Object.create(CompanionStore.prototype);Object.assign(old,{data:{version:2,pets:{}},loaded:true,clock:Date.now,save(){},load(){}});
+  let state={petId:'main',version:0,legacy:old.read('main'),humanity:{},life:{actions:[],events:[],invalidSources:{},relationships:[],constraints:{permissions:[]},memories:[],commitments:[],legacyContext:{personaDescription:'test'},body:{},emotions:{}}};
+  const gate={signal:new AbortController().signal,run:async(_id,fn)=>fn()},reader={loadEnvelope:async()=>structuredClone(state),load:async()=>structuredClone(state.life)};
+  const uow={apply:async(_id,version,fn)=>{assert.equal(version,state.version);const d=structuredClone(state);fn(d);d.version++;state=d;}};
+  let release,recallStarted=false,modelStarted=false,resumed=0;
+  const barrier=new Promise(resolve=>{release=resolve;});
+  const model={agentDefaultModel:{currentSelection:()=>({provider:'test',model:'test'})},llm:{async *stream(){modelStarted=true;if(fail)throw Error('model failed');yield {type:'text',text:'爸爸好。'};}}};
+  const chat=new CanonicalChat(reader,gate,uow,{runAs:async(_id,_kind,fn)=>fn()},model,async()=>{recallStarted=true;return [];},undefined,undefined,undefined,undefined,async()=>barrier,()=>{resumed++;assert.equal(Object.values(state.legacy.chatTurns).at(-1).status,fail?'failed':'completed');});
+  const turn=chat.turn({requestId:'wait-'+fail,petId:'main',channel:'desktop',actorId:'dad',text:'你好'},gate.signal);
+  for(let i=0;i<30&&!recallStarted;i++)await new Promise(setImmediate);
+  assert.equal(recallStarted,true);assert.equal(modelStarted,false);release();
+  if(fail)await assert.rejects(turn,/model failed/);else assert.equal(await turn,'爸爸好。');
+  assert.equal(resumed,1);
+ }
+});

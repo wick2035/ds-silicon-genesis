@@ -1,5 +1,5 @@
 import {availableRice} from './rice-inventory.js';
-import {hasActiveConversation} from './active-conversation.js';
+import {hasActiveConversation,hasRunningChat} from './active-conversation.js';
 import {riceMotivation} from './companion-personality.js';
 import {hasForcedWork,canChooseLabor,hasLaborResources} from './forced-labor.js';
 import {advanceSpirit} from '../kernel/spirit.js';
@@ -95,6 +95,9 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
         await uow.apply(petId,current.version,draft=>{const s=(draft.legacy as Record<string,any>).worksite;s.workState='stopped';s.stopReason='exhausted';s.sessionId=randomUUID();return {};});return;
       }
       if(site?.inside && site.workState==='stopped' && !hasForcedWork(current))return;
+      // Finish an already dispatched step, but don't start another while a
+      // chat is generating. The chat completion callback wakes work again.
+      if(site?.inside&&hasRunningChat(current))return;
       const pendingLabor=current.life.actions.find(a=>a.actionType==='labor.step'&&a.status==='PENDING');
       if(pendingLabor){
         const receipt=await dispatcher.dispatch(pendingLabor.id);

@@ -8,17 +8,34 @@ import {WriterLease} from '../dist/host/writer-lease.js';
 function fixture(resultStatus='COMPLETED'){
   const now=Date.now(),human=createHumanity(now);human.helperReady=true;human.restrained=false;
   let state={petId:'main',version:0,humanity:human,legacy:{services:{inventory:[{id:'rice-1',name:'白饭',status:'available'}]},wallet:{balance:100},config:{costs:{feed:20}}},life:{events:[{eventId:'user-1',type:'conversation.user',payload:{text:'先吃饭吧'}}],invalidSources:{},actions:[],receipts:[],goals:[],constraints:{paused:false,permissions:[],capabilities:[{name:'service.eat-rice',enabled:true},{name:'care.feed',enabled:true}]}}};
-  const gate={signal:new AbortController().signal,run:async(_id,fn)=>fn()},reader={loadEnvelope:async()=>structuredClone(state)};
+  let reads=0;const gate={signal:new AbortController().signal,run:async(_id,fn)=>fn()},reader={loadEnvelope:async()=>{reads++;return structuredClone(state);}};
   const uow={apply:async(_id,version,fn)=>{assert.equal(version,state.version);fn(state);state.version++;}};
   const actions={queue:async(_id,id)=>{state.life.actions.find(a=>a.id===id).status='PENDING';}};
   let dispatches=0;
   const dispatcher={dispatch:async id=>{dispatches++;const a=state.life.actions.find(a=>a.id===id);a.status=resultStatus;state.life.receipts.push({actionId:id,status:resultStatus});}};
   const speech=createEmbodiedSpeech(reader,gate,uow,actions,dispatcher,async()=>({status:'PENDING'}),async()=>({status:'done'}));
   const options={embodied:{petId:'main',requestId:'speech-test',sourceIds:['user-1'],allowActions:true},system:'角色',messages:[{role:'user',content:'先吃饭'}],signal:gate.signal};
-  return {speech,options,dispatcher,get:()=>state,dispatches:()=>dispatches};
+  return {speech,options,dispatcher,get:()=>state,dispatches:()=>dispatches,reads:()=>reads};
 }
 const call=(id,name,input)=>({type:'tool-call-delta',index:1,id,name,argumentsDelta:JSON.stringify(input)});
 async function collect(stream){let text='';for await(const p of stream)if(p.type==='text')text+=p.text;return text;}
+
+test('ordinary speech reads the committed state once before generating and checks it again before publishing',async()=>{
+  const f=fixture(),model={async *stream(){assert.equal(f.reads(),1);yield {type:'text',text:'爸爸，我在听。'};}};
+  assert.equal(await collect(f.speech.wrap(model).stream(f.options)),'爸爸，我在听。');
+  assert.equal(f.reads(),2);
+});
+
+test('model operation feedback retains time and meaning without internal event IDs',async()=>{
+  const f=fixture(),at=new Date().toISOString();
+  f.get().life.events.push({eventId:'private-operation-id',type:'interaction.operation',source:'user',occurredAt:at,payload:{description:'爸爸增加了饭钱'}});
+  const model={async *stream(o){
+    const feedback=JSON.parse(o.system.split('已经实时发生的操作与结果（按发生时间排列，结果仅在确认后出现）：')[1].split('\n')[0]);
+    assert.equal(feedback[0].at,at);assert.equal(feedback[0].text,'爸爸增加了饭钱');assert.equal(feedback[0].eventId,undefined);
+    yield {type:'text',text:'收到啦。'};
+  }};
+  assert.equal(await collect(f.speech.wrap(model).stream(f.options)),'收到啦。');
+});
 
 test('after eating, continuation replaces pre-action system facts with current inventory and body',async()=>{
   const f=fixture();f.get().humanity.stats.satiety=13;f.get().legacy.wallet.balance=30;

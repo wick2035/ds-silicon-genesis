@@ -87,6 +87,27 @@ test('ordinary chat includes interaction reactions as its own prior speech',asyn
   assert.equal(calls,1);
 });
 
+test('group context keeps speech attribution and delivery while source IDs remain in the stored turn',async()=>{
+  const f=fixture(),at=new Date().toISOString();
+  f.state.life.events.push(
+    {eventId:'group-internal-q',type:'social.message',source:'qq',actorId:'qq-member:friend',occurredAt:at,payload:{scene:'group',groupId:'g',text:'喜欢面条'}},
+    {eventId:'group-internal-u',type:'conversation.user',source:'qq-group',actorId:'qq-member:friend',occurredAt:at,causationId:'group-internal-q',payload:{groupId:'g',text:'喜欢面条',sourceIds:['group-internal-q']}},
+    {eventId:'group-internal-a',type:'conversation.assistant',source:'qq-group',occurredAt:at,causationId:'group-internal-u',payload:{groupId:'g',text:'本鱼爱白饭'}},
+    {eventId:'group-internal-receipt',type:'action.receipt',source:'outbox',occurredAt:at,causationId:'receipt',payload:{actionId:'send'}});
+  f.state.life.actions.push({id:'send',actionType:'qq.send',sourceIds:['group-internal-q'],parameters:{scene:'group',content:'本鱼爱白饭'},status:'COMPLETED',receiptId:'receipt'});
+  f.state.life.receipts.push({receiptId:'receipt',actionId:'send',status:'COMPLETED',details:{kind:'qq.send',messageId:'delivered'}});
+  const model={agentDefaultModel:{currentSelection:()=>({provider:'test',model:'test'})},llm:{embodiedTools:true,async *stream(o){
+    const context=JSON.parse(o.system.split('自己最近的群聊经历：')[1].split('\n')[0]);
+    assert.equal(context[0].delivery,'已确认发送');assert.equal(context[0].heard[0].actorId,'qq-member:friend');assert.equal(context[0].heard[0].text,'喜欢面条');
+    assert.equal(context[0].text,'本鱼爱白饭');assert.equal(context[0].sourceIds,undefined);
+    yield {type:'text',text:'嗯，爸爸。'};
+  }}};
+  const chat=new CanonicalChat(f.reader,f.gate,f.uow,{runAs:async(_id,_kind,fn)=>fn()},model,async()=>[]);
+  await chat.turn({petId:'main',requestId:'group-evidence',channel:'desktop',actorId:'dad',text:'你好'},f.gate.signal);
+  const saved=f.state.life.events.find(e=>e.type==='conversation.assistant'&&e.payload?.text==='嗯，爸爸。');
+  assert.ok(saved.payload.sourceIds.includes('group-internal-q'));assert.ok(saved.payload.sourceIds.includes('group-internal-receipt'));
+});
+
 test('historical memories retain source event time rather than summary creation time',()=>{
   const {state}=fixture();const memory={content:'我吃过饭',sourceIds:['meal'],evidenceLevel:'observed'};
   assert.equal(historicalMemory(memory,state.life).sources[0].at,'2026-11-15T09:07:31.000Z');
