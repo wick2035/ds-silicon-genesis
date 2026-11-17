@@ -51,11 +51,11 @@ export class MemoryEmbedding {
     lease.signal.addEventListener('abort',()=>{if(this.timer)clearTimeout(this.timer);},{once:true});
   }
   status(){return {state:this.state,indexed:this.count,total:this.total};}
-  private async embed(texts:string[],kind:'query'|'document',timeout:number):Promise<number[][]>{
+  private async embed(texts:string[],kind:'query'|'document',timeout:number,signal?:AbortSignal):Promise<number[][]>{
     if(!this.provider||!texts.length||texts.length>20)throw Error('embedding unavailable');
     const response=await fetch(this.provider.url,{method:'POST',redirect:'error',headers:{authorization:`Bearer ${this.provider.key}`,'content-type':'application/json'},
       body:JSON.stringify({model:MODEL,input:{texts},parameters:{dimension:DIMENSIONS,text_type:kind,...(kind==='query'?{instruct:'Retrieve relevant past conversations and memories that help respond to this conversation.'}:{})}}),
-      signal:AbortSignal.any([this.lease.signal,AbortSignal.timeout(timeout)])});
+      signal:AbortSignal.any([this.lease.signal,AbortSignal.timeout(timeout),...(signal?[signal]:[])])});
     if(!response.ok)throw Error('embedding request failed');
     const body:any=await response.json(),items=body?.output?.embeddings;
     if(!Array.isArray(items)||items.length!==texts.length)throw Error('invalid embeddings');
@@ -103,15 +103,16 @@ export class MemoryEmbedding {
     }catch{this.state='degraded';if(!this.pending&&!this.lease.signal.aborted){this.pending=envelope;this.pendingSince=Date.now();}}
     finally{this.running=false;if(this.pending)this.schedule(this.pending,this.state==='degraded'?30000:1000);}
   }
-  async candidates(petId:string,query:string,docs:RecallDocument[]):Promise<RecallDocument[]>{
+  async candidates(petId:string,query:string,docs:RecallDocument[],signal?:AbortSignal):Promise<RecallDocument[]>{
     if(!this.provider||!docs.length)return [];
     try{
-      const [vector]=await this.embed([query],'query',4000),buckets=queryBuckets(vector);
+      const [vector]=await this.embed([query],'query',4000,signal),buckets=queryBuckets(vector);
+      if(signal?.aborted)return [];
       const rows=await this.lease.query(`SELECT document_id,content_hash,embedding FROM silicon_genesis.memory_index_embedding WHERE pet_id=$1 AND model=$2 AND buckets && $3::text[]
         ORDER BY (SELECT count(*) FROM unnest(buckets) b WHERE b=ANY($3::text[])) DESC,document_id LIMIT 1000`,[petId,MODEL,buckets]);
       const live=new Map(docs.map(d=>[d.id,d]));
       return rows.rows.map(row=>{const doc=live.get(String(row.document_id));return {doc,score:doc&&contentHash(doc.content)===row.content_hash?cosine(vector,row.embedding):-1};})
         .filter((x):x is {doc:RecallDocument;score:number}=>!!x.doc&&x.score>=.25).sort((a,b)=>b.score-a.score).slice(0,24).map(x=>x.doc);
-    }catch{this.state='degraded';return [];}
+    }catch{if(!signal?.aborted)this.state='degraded';return [];}
   }
 }

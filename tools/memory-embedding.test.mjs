@@ -38,3 +38,18 @@ test('低相关重排结果不会被当成可用记忆',async()=>{
   const retrieval=new CanonicalMemoryRetrieval({},undefined,{score:async()=>[.0001]},undefined,{candidates:async(_p,_q,docs)=>docs});
   assert.deepEqual(await retrieval.search('main','火星火山',8,state),[]);
 });
+
+test('聊天并行启动语义检索，索引过慢时按时回退到有效的本地记忆',async()=>{
+  const state=createInitialState('main','2026-01-01T00:00:00Z');
+  state.memories.push({id:'a',kind:'semantic',content:'爸爸喜欢茉莉花茶',valid:true,sourceIds:[],evidenceLevel:'reported',createdAt:'2026-01-01T00:00:00Z'});
+  let semanticStarted=false,aborted=false;
+  const index={candidates:()=>new Promise(()=>{})};
+  const embedding={candidates:async(_p,_q,_docs,signal)=>{semanticStarted=true;signal.addEventListener('abort',()=>{aborted=true;});return new Promise(()=>{});}};
+  const retrieval=new CanonicalMemoryRetrieval({},undefined,undefined,index,embedding);
+  // Keep the event loop alive while AbortSignal's unreferenced timer runs.
+  const keepAlive=setTimeout(()=>{},1000);
+  try {
+    const result=await retrieval.search('main','茉莉花茶',8,state,{timeBudgetMs:30});
+    assert.equal(semanticStarted,true);assert.equal(aborted,true);assert.equal(result[0].id,'a');
+  } finally {clearTimeout(keepAlive);}
+});
