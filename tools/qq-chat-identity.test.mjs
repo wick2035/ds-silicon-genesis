@@ -122,3 +122,17 @@ for(const embodiedTools of [false,true])test(`group chat does not receive privat
   assert.ok(!answer.payload.sourceIds.includes('private-fish'));assert.ok(!answer.payload.sourceIds.includes('qq-private'));
   assert.ok(!answer.payload.sourceIds.includes('deleted-private'));
 });
+
+test('private and group prompts include source-backed names after the original exchange is old',async()=>{
+ const friend='qq-member:abcdef123456';
+ const events=[event('known-name','conversation.user','desktop',`${friend} 就是小金鲸啊`,'dad'),
+   event('group-name','social.message','qq','你好',friend,{scene:'group',groupId:'g1',nickname:'小鲸'}),
+   event('group-now','social.message','qq','还记得我吗',friend,{scene:'group',groupId:'g1',nickname:'蓝鲸'})];
+ const privateChat=fixture(events);
+ await privateChat.chat.turn({requestId:'ask-name',petId:'main',channel:'desktop',actorId:'dad',text:'我之前说的群友叫什么'},new AbortController().signal);
+ assert.match(privateChat.calls[0].system,/小金鲸/);assert.match(privateChat.calls[0].system,/蓝鲸/);
+ const groupChat=fixture(events);
+ await groupChat.chat.qqTurn({petId:'main',scene:'group',messages:[{eventId:'group-now',isOwner:false,text:'还记得我吗'}]},new AbortController().signal);
+ assert.match(groupChat.calls[0].system,/小金鲸/);assert.match(groupChat.calls[0].system,/蓝鲸/);
+ assert.ok(groupChat.state().life.events.find(e=>e.type==='conversation.assistant').payload.sourceIds.includes('known-name'));
+});

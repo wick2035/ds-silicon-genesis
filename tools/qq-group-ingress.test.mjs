@@ -40,7 +40,7 @@ for(const prefix of ['', '<@!bot-id> ', '<@bot-id>\n', '<@!222> ', '<@!opaque-gr
     assert.equal(status.connection.lastGroupEventType,eventType);
     assert.equal(status.pairing.paired,true);
     assert.ok(status.recentInbound.some(item=>item.containsConfiguredGroupCode===true&&item.commandOffset>=0));
-    assert.doesNotMatch(raw,/private-|bot-id|222|绑定群/);
+    assert.doesNotMatch(raw,/private-|bot-id|(?<![\w])222(?![\w])|绑定群/);
   });
 }
 
@@ -64,4 +64,15 @@ test('rejected timestamps and gateway failures remain diagnosable without conten
   assert.equal(status.inbound.result,'invalid-or-stale-timestamp');
   assert.equal(status.connection.state,'gateway-permission-4014');
   assert.doesNotMatch(raw,/private-/);
+});
+
+test('gateway persists available group nickname without changing actor identity',async t=>{
+ const f=await fixture(t);
+ f.state.life.invalidSources={};f.state.life.relationships=[];
+ await f.gateway.receive(f.message('/绑定群 private-code'),'group','GROUP_MESSAGE_CREATE');
+ await f.gateway.receive({...f.message('你好'),id:'msg1',author:{member_openid:'someone',nickname:'小鲸'}},'group','GROUP_MESSAGE_CREATE');
+ await f.gateway.receive({...f.message('改名啦'),id:'msg2',author:{member_openid:'someone',nickname:'蓝鲸'}},'group','GROUP_MESSAGE_CREATE');
+ const messages=f.state.life.events.filter(e=>e.type==='social.message');
+ assert.deepEqual(messages.map(e=>e.payload.nickname),['小鲸','蓝鲸']);
+ assert.equal(messages[0].actorId,messages[1].actorId);
 });

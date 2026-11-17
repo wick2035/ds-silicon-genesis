@@ -106,7 +106,7 @@ export class CanonicalQQGateway extends QQPetBridge {
       const mention=/^<@!?([^>]+)>\s*/u.exec(text);
       if(mention && [this.botId,this.#options.config.appId].includes(mention[1]))text=text.slice(mention[0].length).trim();
     }
-    const input:QQIncoming={messageId:message.id,scene,actorOpenid:actor,...(scene==='group'?{groupOpenid:message.group_openid,mentioned:eventType==='GROUP_AT_MESSAGE_CREATE'}:{}),text,occurredAt:message.timestamp};
+    const input:QQIncoming={messageId:message.id,scene,actorOpenid:actor,...(scene==='group'?{groupOpenid:message.group_openid,mentioned:eventType==='GROUP_AT_MESSAGE_CREATE'}:{}),text,occurredAt:message.timestamp,...(scene==='group' && typeof message.author?.nickname==='string'?{nickname:message.author.nickname}:{})};
     this.#diagnostic('inbound',{scene,eventType,characters:text.length,
       hasBindingWord:text.includes('绑定群'),commandOffset:text.indexOf('/绑定群'),
       startsWithAt:text.startsWith('@'),startsWithStructuredMention:text.startsWith('<@'),
