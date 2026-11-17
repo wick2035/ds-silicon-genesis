@@ -39,17 +39,17 @@ test('低相关重排结果不会被当成可用记忆',async()=>{
   assert.deepEqual(await retrieval.search('main','火星火山',8,state),[]);
 });
 
-test('聊天并行启动语义检索，索引过慢时按时回退到有效的本地记忆',async()=>{
+test('并行启动语义检索，并等待语义候选和重排结果',async()=>{
   const state=createInitialState('main','2026-01-01T00:00:00Z');
   state.memories.push({id:'a',kind:'semantic',content:'爸爸喜欢茉莉花茶',valid:true,sourceIds:[],evidenceLevel:'reported',createdAt:'2026-01-01T00:00:00Z'});
-  let semanticStarted=false,aborted=false;
-  const index={candidates:()=>new Promise(()=>{})};
-  const embedding={candidates:async(_p,_q,_docs,signal)=>{semanticStarted=true;signal.addEventListener('abort',()=>{aborted=true;});return new Promise(()=>{});}};
-  const retrieval=new CanonicalMemoryRetrieval({},undefined,undefined,index,embedding);
-  // Keep the event loop alive while AbortSignal's unreferenced timer runs.
-  const keepAlive=setTimeout(()=>{},1000);
-  try {
-    const result=await retrieval.search('main','茉莉花茶',8,state,{timeBudgetMs:30});
-    assert.equal(semanticStarted,true);assert.equal(aborted,true);assert.equal(result[0].id,'a');
-  } finally {clearTimeout(keepAlive);}
+  let releaseIndex,releaseSemantic,releaseRank,semanticStarted=false,rankStarted=false,finished=false;
+  const index={candidates:()=>new Promise(resolve=>{releaseIndex=()=>resolve(null);})};
+  const embedding={candidates:async(_p,_q,docs)=>{semanticStarted=true;await new Promise(resolve=>{releaseSemantic=resolve;});return docs;}};
+  const reranker={score:async(_q,docs)=>{rankStarted=true;await new Promise(resolve=>{releaseRank=resolve;});return docs.map(()=>.9);}};
+  const retrieval=new CanonicalMemoryRetrieval({},undefined,reranker,index,embedding);
+  const result=retrieval.search('main','常喝的饮品',8,state).then(value=>{finished=true;return value;});
+  assert.equal(semanticStarted,true);releaseIndex();await new Promise(setImmediate);
+  assert.equal(finished,false);releaseSemantic();await new Promise(setImmediate);
+  assert.equal(rankStarted,true);assert.equal(finished,false);releaseRank();
+  assert.equal((await result)[0].id,'a');
 });

@@ -7,43 +7,34 @@ import type {MemoryIndex} from './memory-index.js';
 import type {MemoryEmbedding} from './memory-embedding.js';
 import {asksAboutForcedWork} from './memory-evidence.js';
 
-// Interactive chat has a bounded preparation window. Slow optional indexes
-// fall back to the authoritative snapshot rather than delaying the reply.
-async function within<T>(promise:Promise<T>,signal:AbortSignal|undefined,fallback:T):Promise<T> {
-  if(!signal)return promise;
-  if(signal.aborted)return fallback;
-  return new Promise(resolve=>{
-    const abort=()=>resolve(fallback);
-    signal.addEventListener('abort',abort,{once:true});
-    promise.then(value=>{signal.removeEventListener('abort',abort);resolve(value);},()=>{signal.removeEventListener('abort',abort);resolve(fallback);});
-  });
-}
-
 /** Uses the canonical envelope only; the query is parameterized and bounded.
  * PostgreSQL simple FTS plus literal matching covers both segmented terms and
  * Chinese text which PostgreSQL may treat as a single token. */
 export class CanonicalMemoryRetrieval {
   constructor(private readonly db:Queryable,private readonly idle?:{snapshot():{seconds:number}|undefined},private readonly reranker?:LocalReranker,private readonly index?:MemoryIndex,private readonly embedding?:MemoryEmbedding) {}
-  async search(petId:string, query:string, limit=12, snapshot?:LifeState, options?:{timeBudgetMs:number}):Promise<Memory[]> {
+  async search(petId:string, query:string, limit=12, snapshot?:LifeState):Promise<Memory[]> {
     if(!petId||typeof query!=='string'||query.length>500||!Number.isInteger(limit)||limit<1||limit>30)throw new Error('记忆查询无效');
     const terms=[...new Set((query.toLowerCase().match(/[a-z0-9_]{2,}|[\p{Script=Han}]{2,}/gu)||[]).flatMap(t=>/[\p{Script=Han}]/u.test(t)&&t.length>2?Array.from({length:t.length-1},(_,i)=>t.slice(i,i+2)):[t]))].slice(0,12);
     if(snapshot){
-      const docs=recallDocuments(snapshot),deadline=options?AbortSignal.timeout(options.timeBudgetMs):undefined;
+      const docs=recallDocuments(snapshot);
       // Semantic lookup is independent of the lexical index; overlap their I/O.
-      const semanticPromise=(this.embedding?.candidates(petId,query,docs,deadline)??Promise.resolve([])).catch(()=>[]);
-      const ids=await within(this.index?.candidates(snapshot.version,petId,query)??Promise.resolve(null),deadline,null);
+      const semanticPromise=this.embedding?.candidates(petId,query,docs)??Promise.resolve([]);
+      // Attach a handler immediately while the lexical index is still running;
+      // awaiting the original promise below still propagates unexpected errors.
+      void semanticPromise.catch(()=>{});
+      const ids=await this.index?.candidates(snapshot.version,petId,query);
       const queryTerms=new Set(recallTerms(query));
       const linked=(d:typeof docs[number])=>d.linkedTerms?.some(t=>queryTerms.has(t))===true;
       let pool=ids?docs.filter(d=>ids.has(d.id)||linked(d)):docs;
-      if(ids&&!deadline?.aborted){const seeds=lexicalRecall(pool,query,3),expanded=[...new Set(seeds.flatMap(d=>d.terms))].slice(0,40).join(' '),neighbors=await within(this.index?.candidates(snapshot.version,petId,expanded)??Promise.resolve(null),deadline,null);if(neighbors)pool=docs.filter(d=>ids.has(d.id)||neighbors.has(d.id)||linked(d));}
-      const lexical=lexicalRecall(pool,query,24),semantic=await within(semanticPromise,deadline,[]);
+      if(ids){const seeds=lexicalRecall(pool,query,3),expanded=[...new Set(seeds.flatMap(d=>d.terms))].slice(0,40).join(' '),neighbors=await this.index?.candidates(snapshot.version,petId,expanded);if(neighbors)pool=docs.filter(d=>ids.has(d.id)||neighbors.has(d.id)||linked(d));}
+      const lexical=lexicalRecall(pool,query,24),semantic=await semanticPromise;
       const candidates:typeof docs=[];
       for(let i=0;i<Math.max(lexical.length,semantic.length);i++)for(const d of [semantic[i],lexical[i]]){
         if(d&&!candidates.some(x=>x.id===d.id||x.sourceIds.some(id=>d.sourceIds.includes(id))))candidates.push(d);
         if(candidates.length>=24)break;
       }
       candidates.splice(24);
-      const scores=deadline?.aborted?null:await within(this.reranker?.score(query,candidates.map(d=>d.content))??Promise.resolve(null),deadline,null);
+      const scores=await this.reranker?.score(query,candidates.map(d=>d.content));
       const threshold=scores?.length?Math.max(.005,Math.max(...scores)*.05):.005;
       const ranked=scores?.length===candidates.length?candidates.map((d,i)=>({d,score:scores[i]})).filter(x=>x.score>=threshold).sort((a,b)=>b.score-a.score).map(x=>x.d):lexical;
       // The current snapshot is authoritative even if the disposable index is
