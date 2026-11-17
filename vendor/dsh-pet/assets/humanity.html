@@ -77,22 +77,7 @@
         </section>
         <section id="labor-book" hidden class="companion-view">
           <div class="labor-heading"><h2>搬砖</h2><span id="labor-balance">正在看饭钱…</span></div>
-          <p class="labor-intro">在聊天里商量搬砖；这里记录进度和工钱。</p>
-          <button id="labor-open-chat" class="quiet" type="button">回到聊天</button><div id="labor-chat-hint" class="labor-chat-hint"><p>也可以在聊天里跟她说：</p><blockquote>大肥鱼，把砖从左边搬到右边，搬三趟，给你五百 token。</blockquote><p>她会自己接话、讲价。约定、进度和欠薪会记在这里。</p><p id="labor-draft" role="status"></p></div><details class="labor-manual" open><summary>安排一份活</summary><form id="labor-offer" class="labor-offer"><div class="labor-fields">
-            <label class="field">搬几趟砖<input type="number" name="trips" min="1" max="50" step="1" value="3" required></label>
-            <label class="field">总工钱 · 模拟 token<input type="number" name="wage" min="1" max="1000000" step="1" value="500" required></label>
-          </div><button class="primary" type="submit">跟她商量这份活</button></form></details>
-          <section id="labor-contract" class="labor-agreement" hidden>
-            <span id="labor-status" class="labor-status"></span><h3 id="labor-terms"></h3>
-            <div class="labor-price"><span>说好的总工钱</span><strong id="labor-wage"></strong></div>
-            <progress id="labor-progress" value="0" max="3" aria-label="已完成搬砖趟数"></progress><p id="labor-count"></p>
-            <div id="labor-stage" class="labor-stage" hidden aria-label="大肥鱼搬砖工地"><div class="labor-piles"></div><video muted playsinline class="labor-worker" aria-label="大肥鱼的身体动作"></video></div>
-            <div class="labor-controls"><button id="labor-counter" class="quiet" type="button" hidden></button><button id="labor-confirm" class="primary" type="button">说好了，开工</button><button id="labor-edit" class="quiet" type="button">调整条件</button><button id="labor-decline" class="quiet" type="button">这次先不做</button><button id="labor-pause" class="quiet" type="button" hidden>歇一会儿</button><button id="labor-nudge" class="quiet" type="button">催她一下</button></div>
-            <p id="labor-note"></p><p class="labor-status" id="labor-behavior"></p>
-            <p id="labor-payment-note" class="setting-note">实际给多少由你决定：可以不给、少给或多给。少给的差额她还会讨，多给的也会入账。</p><form id="labor-pay" class="inline-form" hidden><label class="field grow">这次你决定给多少 · token<input id="labor-amount" type="number" min="0" max="1000000" step="1" required></label><button class="primary" type="submit">手动付工钱</button></form>
-          </section>
-          <p id="labor-feedback" role="status" aria-live="polite"></p>
-          <details id="labor-history-wrap" hidden><summary>挣到的每一碗饭</summary><ul id="labor-history"></ul></details>
+          <p class="labor-intro">搬砖任务、排队进度和工钱请在生命空间的「饭钱」页面查看与管理。</p>
         </section>
         <section id="growing" hidden class="companion-view">
           <div class="section-title"><h2>陪她慢慢长大</h2><span>改动会被她察觉</span></div>

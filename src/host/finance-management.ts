@@ -7,12 +7,13 @@ const money=(value:unknown,max:number):value is number=>typeof value==='number' 
 const costNames=['chat','whisper','feed','diary','explore'] as const;
 
 /** All writes go through the existing per-pet transaction and operation receipt. */
-export function createFinanceManagement(store:Reader,gate:PetGate,domain:LegacyDomain,decideOffer?:(id:string,requestId:string,contractId:string)=>Promise<unknown>) {
+export function createFinanceManagement(store:Reader,gate:PetGate,domain:LegacyDomain) {
   return {
     read:(id:string)=>gate.run(id,async()=>{
       const envelope=await store.loadEnvelope(id);if(!envelope)throw Error('饭钱状态不可用');
       const p=envelope.legacy as Record<string,any>, labor=p.labor||{},contracts=Array.isArray(labor.contracts)?labor.contracts:[];
-      return {wallet:p.wallet,costs:p.config?.costs,labor:{current:contracts.find((c:any)=>['offered','working','paused','unpaid'].includes(c.status))||null,history:contracts.filter((c:any)=>(['paid','declined','cancelled'].includes(c.status)||c.status==='unpaid'&&c!==contracts.find((x:any)=>['offered','working','paused','unpaid'].includes(x.status)))).slice(-12).reverse(),execution:labor.execution||null},
+      const pending=contracts.filter((c:any)=>['offered','working','paused','queued'].includes(c.status) && c.done<c.trips);
+      return {wallet:p.wallet,costs:p.config?.costs,labor:{current:pending[0]||null,queue:pending.slice(1),history:contracts.filter((c:any)=>['paid','declined','cancelled','unpaid'].includes(c.status)).slice().reverse(),execution:labor.execution||null},
         events:(Array.isArray(p.events)?p.events:[]).filter((e:any)=>['wallet','wallet-spend','labor'].includes(e.kind)).slice(-30).reverse().map((e:any)=>({id:e.id,text:e.text,ts:e.ts}))};
     }),
     write:async(id:string,input:Record<string,unknown>)=>{
@@ -35,7 +36,7 @@ export function createFinanceManagement(store:Reader,gate:PetGate,domain:LegacyD
       }
       if(input.kind==='labor') {
         const action=input.action;
-        if(!['offer','confirm','decline','pause','resume','counter','nudge','pay','adjust','cancel','settle-cancelled'].includes(String(action)))throw Error('工作操作无效');
+        if(!['offer','pause','resume','adjust','cancel','settle-cancelled'].includes(String(action)))throw Error('工作操作无效');
         if(action==='offer'||action==='adjust') {
           if(!Number.isInteger(input.trips)||Number(input.trips)<1||Number(input.trips)>500||!Number.isInteger(input.wage)||Number(input.wage)<1||Number(input.wage)>1_000_000)throw Error('趟数须为 1–500，工钱须为 1–1000000 的整数');
           if(action==='adjust'&&(typeof input.id!=='string'||!input.id||input.id.length>140))throw Error('工作约定无效');
@@ -43,11 +44,6 @@ export function createFinanceManagement(store:Reader,gate:PetGate,domain:LegacyD
         }
         if(typeof input.id!=='string'||!input.id||input.id.length>140)throw Error('工作约定无效');
         if(['pay','settle-cancelled'].includes(String(action)) && (!Number.isInteger(input.amount)||Number(input.amount)<0||Number(input.amount)>1_000_000))throw Error('工钱须为 0–1000000 的整数');
-        if(action==='nudge' && decideOffer) {
-          const state=await gate.run(id,()=>store.loadEnvelope(id));
-          const contract=(state?.legacy as any)?.labor?.contracts?.find((c:any)=>c.id===input.id&&c.status==='offered');
-          if(contract)return decideOffer(id,requestId,input.id);
-        }
         return domain.laborAction(id,requestId,{action,id:input.id,...(['pay','settle-cancelled'].includes(String(action))?{amount:input.amount,key:requestId}:{})});
       }
       throw Error('不支持的饭钱操作');

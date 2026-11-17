@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {CompanionStore} from '../vendor/pet-plugins/behavior/core.mjs';
 import {CanonicalChat} from '../dist/host/chat-service.js';
 
-test('工作意图提取与回复生成并行，回复和确认提案一起提交',async()=>{
+test('工作话题只生成普通回复，不提取提案或额外调用模型',async()=>{
   const old=Object.create(CompanionStore.prototype);old.data={version:2,pets:{}};old.loaded=true;old.clock=Date.now;old.save=()=>{};old.load=()=>{};
   let envelope={petId:'main',version:0,legacy:old.read('main'),humanity:{},life:{actions:[],events:[],invalidSources:{},relationships:[],constraints:{permissions:[]},memories:[],commitments:[],legacyContext:{personaDescription:'test'},body:{},emotions:{}}};
   const gate={signal:new AbortController().signal,run:async(_id,fn)=>fn()};
@@ -13,10 +13,10 @@ test('工作意图提取与回复生成并行，回复和确认提案一起提�
   const model={agentDefaultModel:{currentSelection:()=>({provider:'test',model:'test'})},llm:{async *stream(options){const extractor=options.system.startsWith('仅将用户的工作');started.push(extractor?'extract':'reply');await barrier;yield {type:'text',text:extractor?'{"action":"offer","trips":2,"wage":80}':options.system.includes('尚未执行的工作条件')?'好呀，两趟八十，对吗？':'好呀'};}}};
   const chat=new CanonicalChat(store,gate,uow,{runAs:async(_id,_kind,fn)=>fn()},model,async()=>[],async()=>{});
   const turn=chat.turn({requestId:'work-test',petId:'main',channel:'desktop',actorId:'dad',text:'搬砖两趟，工资80'},new AbortController().signal);
-  for(let i=0;i<50&&started.length<2;i++)await new Promise(resolve=>setImmediate(resolve));
-  assert.deepEqual(started.sort(),['extract','reply']);release();
-  const reply=await turn;assert.equal(reply,'好呀，两趟八十，对吗？');
-  assert.equal(Object.keys(envelope.legacy.chatLaborProposals).length,1);
+  for(let i=0;i<50&&started.length<1;i++)await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(started,['reply']);release();
+  const reply=await turn;assert.equal(reply,'好呀');
+  assert.equal(envelope.legacy.chatLaborProposals,undefined);
   assert.equal(envelope.life.events.filter(e=>e.type==='conversation.assistant').length,1);
 });
 

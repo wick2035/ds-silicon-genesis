@@ -40,20 +40,17 @@ test('余额调整、冻结、价格和并发检查使用同一账本',async()=>
   assert.equal((await f.finance.read('main')).events.filter(e=>e.text.includes('饭钱')).length,5);
 });
 
-test('工作需先接受、完成才可结薪，重复支付不会重复入账',async()=>{
+test('录入任务直接生效且欠薪可独立结算，重复支付只入账一次',async()=>{
   const f=fixture();
   await f.finance.write('main',{kind:'labor',requestId:'offer-first',action:'offer',trips:2,wage:80});
-  const id=f.get().legacy.labor.contracts[0].id;
-  await assert.rejects(f.finance.write('main',{kind:'labor',requestId:'confirm-early',action:'confirm',id}),/还没答应/);
-  await f.domain.laborDecision('main','decision-123',{id,trips:2,wage:80,choice:'bargain',counterTrips:3,counterWage:100});
-  await f.finance.write('main',{kind:'labor',requestId:'accept-counter',action:'counter',id});
-  await f.finance.write('main',{kind:'labor',requestId:'confirm-work',action:'confirm',id});
-  await assert.rejects(f.finance.write('main',{kind:'labor',requestId:'pay-too-early',action:'pay',id,amount:100}),/完成全部趟数/);
-  // Only the trusted action projector ordinarily makes a contract unpaid.
-  const contract=f.get().legacy.labor.contracts[0];contract.done=3;contract.status='unpaid';
-  const pay={kind:'labor',requestId:'payment-123',action:'pay',id,amount:100};
+  const contract=f.get().legacy.labor.contracts[0],id=contract.id;
+  assert.equal(contract.status,'queued');assert.equal(contract.workPermit,false);
+  contract.done=2;contract.status='unpaid';
+  await f.finance.write('main',{kind:'labor',requestId:'offer-second',action:'offer',trips:3,wage:100});
+  assert.equal((await f.finance.read('main')).labor.current.trips,3);
+  const pay={kind:'labor',requestId:'payment-123',action:'settle-cancelled',id,amount:80};
   await f.finance.write('main',pay);await f.finance.write('main',pay);
-  assert.equal(f.get().legacy.wallet.balance,10100);
+  assert.equal(f.get().legacy.wallet.balance,10080);
   assert.equal(f.get().legacy.labor.contracts[0].payments.length,1);
   assert.equal(f.get().legacy.labor.contracts[0].status,'paid');
 });

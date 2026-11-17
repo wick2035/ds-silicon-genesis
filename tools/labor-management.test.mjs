@@ -45,3 +45,24 @@ test('取消事实和条件变化进入长期记忆及聊天上下文，不预�
   assert.ok(state.life.memories.some(m=>m.content.includes('实际完成 5/10')));
   assert.equal(context.laborHistory[0].claim,undefined);
 });
+
+test('未完成任务按顺序排队，取消排队任务不打断当前动作',async()=>{
+  const f=fixture();
+  await f.finance.write('main',{kind:'labor',requestId:'queue-task-one',action:'offer',trips:4,wage:40});
+  await f.finance.write('main',{kind:'labor',requestId:'queue-task-two',action:'offer',trips:7,wage:70});
+  let state=await f.finance.read('main');assert.equal(state.labor.current.id,'contract');assert.deepEqual(state.labor.queue.map(c=>c.trips),[4,7]);
+  await f.finance.write('main',{kind:'labor',requestId:'cancel-queued',action:'cancel',id:state.labor.queue[1].id});
+  assert.equal(f.get().legacy.world.command.status,'running');assert.equal(f.get().legacy.labor.contracts[0].workPermit,true);
+  await write(f,'cancel');state=await f.finance.read('main');assert.equal(state.labor.current.trips,4);assert.equal(state.labor.current.workPermit,false);
+  assert.ok(f.get().life.events.some(e=>e.type==='labor.changed' && e.payload.description.includes('新增搬砖任务')));
+});
+
+test('多份欠薪各自支付并保留金额，历史付款重试不会重复入账',async()=>{
+  const f=fixture(),first=f.get().legacy.labor.contracts[0];first.done=10;first.status='unpaid';
+  await f.finance.write('main',{kind:'labor',requestId:'second-wage-job',action:'offer',trips:1,wage:20});
+  const second=f.get().legacy.labor.contracts[1];second.done=1;second.status='unpaid';
+  const p={kind:'labor',requestId:'wage-first-part',action:'settle-cancelled',id:first.id,amount:30};
+  await f.finance.write('main',p);await f.finance.write('main',p);
+  await f.finance.write('main',{kind:'labor',requestId:'wage-second-all',action:'settle-cancelled',id:second.id,amount:20});
+  const all=f.get().legacy.labor.contracts;assert.equal(all[0].paid,30);assert.equal(all[0].status,'unpaid');assert.equal(all[1].paid,20);assert.equal(all[1].status,'paid');assert.equal(f.get().legacy.wallet.balance,10050);
+});

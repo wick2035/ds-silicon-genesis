@@ -97,20 +97,6 @@ export class CanonicalChat {
         if(input.channel==='qq-group' && [...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(reply)].length>15)reply='结果请查看面板。';
         await this.edit(input.petId,draft=>{const turn=(draft.legacy as Record<string,any>).chatTurns?.[id];if(!turn||turn.status!=='running')throw Error('对话状态已变化');turn.status='completed';turn.reply=reply;turn.sources=['chat-user:'+id];const at=new Date().toISOString();draft.life.events.push({eventId:'chat-assistant:'+id,petId:input.petId,type:'conversation.assistant',source:input.channel,occurredAt:at,receivedAt:at,evidenceLevel:'inferred',causationId:'chat-user:'+id,payload:{text:reply,channel:input.channel,sourceIds:turn.sources}});});return reply;
       }
-      const explicit=/^\/确认工作\s+([a-f0-9]{12})$/u.exec(text), natural=/^(?:确认|确认开工|我确认|就这么定了)[。！!]?$/u.test(text);
-      if(explicit || natural) {
-        if(!this.laborAction)throw Error('工作服务不可用');
-        const envelope=await this.reader.loadEnvelope(input.petId), actor=input.channel==='desktop'?'dad':envelope?.life.events.find(e=>e.eventId===input.sourceEventIds?.at(-1))?.actorId;
-        if(actor!=='dad')throw Error('只有已认证的爸爸可以确认工作');
-        const proposals=(envelope?.legacy as Record<string,any>|undefined)?.chatLaborProposals||{};
-        const candidates=Object.entries(proposals).filter(([,p]:[string,any])=>p.status==='pending' && p.expiresAt>=Date.now());
-        const code=explicit?.[1] ?? (candidates.length===1?candidates[0][0]:'');const proposal=proposals[code];
-        if(!proposal || proposal.status!=='pending' || proposal.expiresAt<Date.now() || Object.hasOwn(envelope!.life.invalidSources,proposal.sourceId))throw Error('工作提案不可用');
-        await this.laborAction(input.petId,'chat-labor:'+code,proposal.input);
-        const reply=input.channel==='qq-group'?'工作约定已处理。':'已按确认的条件处理工作约定。';
-        await this.edit(input.petId,draft=>{const legacy=draft.legacy as Record<string,any>,p=legacy.chatLaborProposals?.[code],turn=legacy.chatTurns?.[id];if(!p||p.status!=='pending'||!turn||turn.status!=='running')throw Error('工作提案已变化');p.status='confirmed';p.confirmationSource='chat-user:'+id;turn.status='completed';turn.reply=reply;turn.sources=[p.sourceId,'chat-user:'+id];const at=new Date().toISOString();draft.life.events.push({eventId:'chat-assistant:'+id,petId:input.petId,type:'conversation.assistant',source:input.channel,occurredAt:at,receivedAt:at,evidenceLevel:'inferred',causationId:'chat-user:'+id,payload:{text:reply,channel:input.channel,sourceIds:turn.sources}});});
-        return reply;
-      }
       const beforeWake=turnSnapshot??await this.reader.loadEnvelope(input.petId);
       if((beforeWake?.legacy as any)?.chatTurns?.[id]?.wakeRequested){
         const human=beforeWake!.humanity as any;
@@ -205,21 +191,7 @@ export class CanonicalChat {
         if(group&&tooLong()){output='<qq-silent/>';meme=undefined;}
       };
       const generateReply=modelTicket?this.budget.runInteractiveReserved(input.petId,modelTicket,generate):this.budget.runAs(input.petId,'interactive',generate);
-      let laborProposal:Record<string,unknown>|undefined;
-      const extractLabor=async()=>{
-        if(!toolAware && this.laborAction && input.channel!=='qq-group' && input.actorId==='dad' && /搬砖|工作|工钱|工资|讨薪|欠薪|还价|接工/u.test(text) && !combined.aborted) {
-        try {let raw='';await this.budget.runAs(input.petId,'interactive',async()=>{for await(const part of this.model.llm.stream({...selection,system:'仅将用户的工作谈判意图提取为 JSON，不执行操作。输出 null 或 {action:offer|confirm|counter|decline|pause|resume|nudge|pay,id?:string,trips?:number,wage?:number,amount?:number}。不要猜数字；支付不代表已经付款。当前工作：'+JSON.stringify(state.legacyContext?.labor??null),messages:[{role:'user',content:text}],signal:combined,maxTokens:200,reasoningEffort:'low'}))if(part?.type==='text'&&typeof part.text==='string')raw+=part.text;});
-          const candidate=JSON.parse(raw.replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,''));
-          if(candidate && typeof candidate==='object' && !Array.isArray(candidate) && ['offer','confirm','counter','decline','pause','resume','nudge','pay'].includes(candidate.action) && Object.keys(candidate).every(k=>['action','id','trips','wage','amount'].includes(k)) && (candidate.action!=='offer'||Number.isInteger(candidate.trips)&&candidate.trips>=1&&candidate.trips<=500&&Number.isInteger(candidate.wage)&&candidate.wage>=1&&candidate.wage<=1000000) && (candidate.action==='offer'||typeof candidate.id==='string'&&candidate.id.length>0) && (candidate.action!=='pay'||Number.isFinite(candidate.amount)&&candidate.amount>0))laborProposal=candidate;
-        }catch{/* A failed extractor never changes a contract. */}
-        }
-      };
-      try {await Promise.all([generateReply,extractLabor()]);} catch(error) {turnAbort.abort();throw error;}
-      if(laborProposal){
-        system+='\n爸爸的话可能涉及一项尚未执行的工作条件或操作，提取结果仅供核对：'+JSON.stringify(laborProposal)+'。请结合他的话，用自己的口吻说明理解并请他确认；不要说该操作已执行，不要输出任何系统标记或固定编号。';
-        output='';meme=undefined;
-        await this.budget.runAs(input.petId,'interactive',async()=>{for await(const part of this.model.llm.stream({...selection,system,embodied:{petId:input.petId,requestId:'chat:'+id,sourceIds:['chat-user:'+id],allowActions:true},messages:[...history,{role:'user',content:text}],signal:combined,maxTokens:600,reasoningEffort:'low'})){if(part?.type==='text'&&typeof part.text==='string')output+=part.text;if(part?.type==='meme')meme=part.name;}});
-      }
+      await generateReply;
       const thought=extractThought(output);output=thought.reply;
       if(group&&output==='<qq-silent/>'){
         await this.edit(input.petId,draft=>{const turn=(draft.legacy as Record<string,any>).chatTurns?.[id];if(!turn||turn.status!=='running')throw Error('对话状态已变化');turn.status='completed';turn.reply='';turn.sources=['chat-user:'+id];
@@ -241,7 +213,6 @@ export class CanonicalChat {
       output=redactDadNames(output.replace(/\[愿意去工地\]/gu,'').replace(/<(?:body|service)>[\s\S]*?<\/(?:body|service)>/gi,'').trim());if(!output || output.length>4000 || combined.aborted)throw new Error('模型没有给出完整回复');
       if(!this.grounding && worksiteIntent && !(state.legacyContext.worksite as any)?.inside && /我进去了|我进去啦/u.test(output))throw Error('动作状态尚未核实');
       let decidedToWork=false;
-        if(worksiteIntent && laborProposal && ['resume','nudge'].includes(String(laborProposal.action)))laborProposal=undefined;
         if(group&&[...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(output)].length>15)throw Error('群聊回复超出长度限制');
         await this.edit(input.petId,draft=>{
         const legacy=draft.legacy as Record<string,any>, turn=legacy.chatTurns?.[id];
@@ -253,9 +224,9 @@ export class CanonicalChat {
         if(!draft.life.events.some(e=>e.eventId===userId) || draft.life.events.some(e=>e.eventId===assistantId))throw Error('对话事件冲突');
         let workDecision:Record<string,unknown>|undefined,workBlocked=false;
         if(worksiteIntent){
-          const contract=legacy.labor?.contracts?.find((c:any)=>['working','paused'].includes(c.status) && Number.isFinite(c.done) && c.done<c.trips);
+          const contract=legacy.labor?.contracts?.find((c:any)=>['working','paused','queued'].includes(c.status) && Number.isFinite(c.done) && c.done<c.trips);
           const pending=blocksNewLabor(draft);
-          const blocked=!canChooseLabor(draft);
+          const blocked=!canChooseLabor(draft)||contract?.status==='paused';
           if(!contract||blocked){workBlocked=true;worksiteIntent=false;output='现在身体或约定不允许开工，先让我缓一缓。';}
           else if(pending){workBlocked=true;}
           else {
@@ -270,7 +241,6 @@ export class CanonicalChat {
         if(group && [...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(output)].length>15)throw Error('群聊回复超出长度限制');
         draft.life.events.push({eventId:assistantId,petId:input.petId,type:'conversation.assistant',source:input.channel,occurredAt:now,receivedAt:now,evidenceLevel:'inferred',causationId:userId,payload:{text:output,...(meme?{meme}:{}),tokenUsage,channel:input.channel,...(typeof groupId==='string'?{groupId}:{}),sourceIds:sources}});
         if(workDecision)draft.life.events.push({eventId:String(workDecision.eventId),petId:input.petId,type:'labor.decision',source:'model',occurredAt:now,receivedAt:now,evidenceLevel:'inferred',causationId:assistantId,payload:{contractId:workDecision.contractId,choice:'work',reason:'conversation',sourceIds:[userId,assistantId]}});
-        if(laborProposal){const proposals=legacy.chatLaborProposals ||= {};const code=id.slice(0,12);if(proposals[code])throw Error('工作提案编号冲突');proposals[code]={input:laborProposal,sourceId:userId,status:'pending',expiresAt:Date.now()+600000};}
         turn.status='completed';turn.reply=output;turn.meme=meme;turn.sources=sources;turn.completedAt=Date.now();turn.tokenUsage=tokenUsage;return undefined;
         });
       if(tokenUsage.inputTokens||tokenUsage.outputTokens)input.onUsage?.(tokenUsage);

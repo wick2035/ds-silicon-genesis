@@ -11,7 +11,7 @@ import {blocksNewLabor} from '../dist/host/labor-pending.js';
 
 function fixture(reply,{tired=false,inside=true}={}){
   const old=Object.create(CompanionStore.prototype);Object.assign(old,{data:{version:2,pets:{}},loaded:true,clock:Date.now,save(){},load(){}});
-  const legacy=old.read('main');legacy.labor={contracts:[{id:'work',status:'paused',done:18,trips:50,workPermit:false}]};legacy.worksite={inside,forced:inside};legacy.services||={};
+  const legacy=old.read('main');legacy.labor={contracts:[{id:'work',status:'queued',done:18,trips:50,workPermit:false}]};legacy.worksite={inside,forced:inside};legacy.services||={};
   const human=createHumanity();human.helperReady=true;human.restrained=false;if(tired)human.stats.energy=10;
   let envelope={petId:'main',version:0,legacy,humanity:human,life:{events:[],invalidSources:{},relationships:[],goals:[],constraints:{permissions:[],capabilities:[{name:'labor.step',enabled:true,physical:true}],paused:false},memories:[],commitments:[],actions:[],receipts:[],legacyContext:{personaDescription:'test'},body:{},emotions:{}}};
   if(inside)envelope.life.events.push({eventId:'entry',petId:'main',type:'interaction.worksite',occurredAt:new Date().toISOString(),payload:{action:'enter-forced'}});
@@ -48,7 +48,7 @@ test('催促得到愿意立即干的回答时，恢复约定并唤醒工地',asy
 });
 
 test('拒绝、身体阻碍和没有真实回执时，回复与状态一致',async()=>{
-  const no=fixture('我现在不干，我想休息。');await turn(no,'立马干','no');assert.equal(no.get().legacy.labor.contracts[0].status,'paused');
+  const no=fixture('我现在不干，我想休息。');await turn(no,'立马干','no');assert.equal(no.get().legacy.labor.contracts[0].status,'queued');
   const tired=fixture('好，我马上干。',{tired:true});const allowed=await turn(tired,'立马干','tired');assert.match(allowed,/马上干/);assert.equal(tired.get().legacy.labor.contracts[0].status,'working');
   for(const claim of ['我没偷懒！都搬了十八趟啦。','我刚刚搬完这一趟了。','我正在搬砖呢。']){
     const f=fixture(claim);const reply=await turn(f,'你现在在干嘛？',claim);assert.match(reply,/没有确认/);assert.notEqual(reply,claim);assert.equal(f.get().legacy.labor.contracts[0].done,18);

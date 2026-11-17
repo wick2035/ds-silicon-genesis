@@ -14,7 +14,8 @@ const split=(s:string)=>s.match(/[^，,。！？!?；;\n]+[，,。！？!?；;\n
  * playing observation is ephemeral and is matched to the current action. */
 export function actionFacts(draft:CanonicalEnvelope,observation?:Observation) {
   const pet=draft.legacy as Record<string,any>,life=draft.life,body=draft.humanity as Record<string,any>;
-  const work=pet.labor?.contracts?.find((c:any)=>['working','paused','unpaid'].includes(c.status));
+  const contracts=pet.labor?.contracts||[];
+  const work=contracts.find((c:any)=>['working','paused','queued'].includes(c.status)&&c.done<c.trips)??[...contracts].reverse().find((c:any)=>c.status==='unpaid');
   const active=(life.actions??[]).find(a=>a.id===observation?.actionId && a.actionType===observation.kind && a.status==='DISPATCHED');
   const receipts=(life.actions??[]).slice(-30).flatMap(a=>{
     if(!(a.sourceIds??[]).every(id=>!Object.hasOwn(life.invalidSources,id)))return [];

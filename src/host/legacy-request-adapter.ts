@@ -95,7 +95,7 @@ export function createLegacyRequestAdapter({store,gate,domain,humanity,resolvePe
       else if(path==='humanity/companion/growth')result=await domain.growthControl(petId,requestId,input);
       else if(path==='humanity/companion/diary')result=await domain.diary(petId,requestId,input);
       else if(path==='humanity/companion/wish')result=await domain.wish(petId,requestId,input);
-      else if(path==='humanity/companion/labor' && ['offer','confirm','decline','pause','resume','counter','nudge','pay'].includes(input.action))result=await domain.laborAction(petId,requestId,input);
+      else if(path==='humanity/companion/labor' && ['offer','pause','resume','adjust','cancel','settle-cancelled'].includes(input.action))result=await domain.laborAction(petId,requestId,input);
       else return json({ok:false,message:'该操作尚未接入可信执行通道'},503);
       if(path.startsWith('humanity/companion/')) {const state=await read();const projected=projectLegacySnapshot(state,providers);return json({ok:true,result,state:projected.state,...(path==='humanity/companion/labor'?{labor:projected.labor}:{})});}
       return json(result);

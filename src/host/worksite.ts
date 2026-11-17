@@ -26,7 +26,7 @@ export function createWorksite(store:Reader,gate:PetGate,uow:UnitOfWork,view:(id
         let text='';
         if(action==='force-work'){
           const labor=pet.labor||={contracts:[]};labor.contracts||=[];
-          let contract=labor.contracts.find((c:any)=>['offered','working','paused'].includes(c.status) && Number.isFinite(c.done) && c.done<c.trips);
+          let contract=labor.contracts.find((c:any)=>['offered','working','paused','queued'].includes(c.status) && Number.isFinite(c.done) && c.done<c.trips);
           if(!contract){
             contract={id:randomUUID(),status:'working',trips:1,done:0,wage:0,wageUnspecified:true,paid:0,carrying:false,surface:'web',created:Date.now(),payments:[],decisions:[]};
             labor.contracts.unshift(contract);

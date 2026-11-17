@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { sourceValidator } from './retrieval.mjs';
 
 const ledger = p => p.labor ||= { contracts: [] };
-const active = p => ledger(p).contracts.find(c => ['offered','working','paused','unpaid'].includes(c.status));
+const active = p => ledger(p).contracts.find(c => ['offered','working','paused','queued'].includes(c.status));
 const number = (n, max) => { if (!Number.isInteger(n) || n < 1 || n > max) throw Error(`请输入 1–${max} 的整数`); return n; };
 const cut = e => String(e?.message || e || '').slice(0,240);
 const WORK_REPLAN_MS=60000,WORK_BATCH=5;
@@ -70,12 +70,6 @@ export function attachLaborRuntime(Runtime) {
   };
   Runtime.prototype.laborSnapshot = function(id) {
     const p=this.store.read(id), contracts=ledger(p).contracts;
-    const legacy=active(p);
-    if(legacy&&legacy.surface!=='desktop'){
-      this.store.update(id,p=>{const c=active(p);c.surface='desktop';
-        const cmd=p.world?.command;if(cmd&&['labor','labor-mood'].includes(cmd.source)&&['queued','running'].includes(cmd.status))cmd.status='interrupted';
-      });return this.laborSnapshot(id);
-    }
     const l=ledger(p),c=active(p);
     return { current:c||null,draft:l.draft||null, execution:l.execution||null, error:l.error||null, message:l.lastSpeech?.contractId===c?.id?l.lastSpeech:null, awaitingReply:l.awaitingReply===true, history:contracts.filter(c=>['paid','declined'].includes(c.status)).slice(-12).reverse(), balance:p.wallet.balance };
   };
@@ -122,13 +116,11 @@ export function attachLaborRuntime(Runtime) {
     const changed=this.store.update(id,p=>{
       const l=ledger(p), c=active(p);
       if(o.action==='offer') {
-        if(c && c.status!=='offered') throw Error('先完成并结清上一份工钱');
         const trips=number(o.trips,500), wage=number(o.wage,1000000);
-        if(c)c.status='declined';
-        const contract={id:randomUUID(),status:'offered',trips,wage,done:0,paid:0,carrying:false,created:now,surface:'desktop',assetRoot:o.assetRoot||id,reminders:0,lastReminder:0,payments:[],decisions:[],nextDecision:0,workPermit:false,thought:'',behavior:'商量工钱',awaitingChat:!!o.fromChat};
-        l.draft=null;l.execution=null;
+        const contract={id:randomUUID(),status:'queued',trips,wage,done:0,paid:0,carrying:false,created:now,surface:'desktop',assetRoot:o.assetRoot||id,reminders:0,lastReminder:0,payments:[],decisions:[],nextDecision:0,workPermit:false,batchRemaining:0,thought:'',behavior:'等待自己决定'};
+        l.draft=null;
         l.contracts.push(contract);
-        this.store.eventIn(p,'labor',`爸爸提出搬砖：从左边搬到右边 ${trips} 趟，总工钱 ${wage} token；还未确认开工`, 'labor-offer:'+contract.id);
+        this.store.eventIn(p,'labor',`爸爸新增搬砖任务：${trips} 趟，总工钱 ${wage} token。`, 'labor-task:'+contract.id);
         return;
       }
       if(!c || o.id!==c.id)throw Error('这份约定已改变，请刷新后再试');
@@ -141,7 +133,7 @@ export function attachLaborRuntime(Runtime) {
         if(c.status!=='offered')throw Error('已开工的活可以暂停，不能抹掉约定');c.status='declined';
       } else if(o.action==='pause' || o.action==='resume') {
         if(!['working','paused'].includes(c.status))throw Error('现在没有可暂停或继续的工作');
-        c.status=o.action==='pause'?'paused':'working';c.nextDecision=now;
+        c.status=o.action==='pause'?'paused':'working';c.nextDecision=now;c.workPermit=false;c.batchRemaining=0;
         if(o.action==='resume')c.workDecisions=0;
       } else if(o.action==='counter') {
         if(c.status!=='offered'||!c.counter)throw Error('目前没有新的还价');
@@ -179,7 +171,6 @@ export function attachLaborRuntime(Runtime) {
     });
     if(changed===false)return this.laborSnapshot(id);
     this.laborControllers?.get(id)?.abort();this.laborControllers?.delete(id);
-    if(o.action==='offer'&&!o.fromChat)this.decideLabor(id,'offer');
     if(o.action==='confirm'||o.action==='resume')this.advanceLabor(id);
     if(o.action==='nudge'){if(this.laborSnapshot(id).current.status==='offered')this.decideLabor(id,'offer');else this.advanceLabor(id);}
     if(o.action==='disturb')this.decideLabor(id,'disturbed');
@@ -211,14 +202,6 @@ export function attachLaborRuntime(Runtime) {
     if(w.activity){wait('activity','她正在处理手头的事，结束后继续搬砖。');return;}
     if(w.command&&['queued','running'].includes(w.command.status)){
       wait(w.command.source==='labor'?(w.command.status==='running'?'moving':'queued'):w.command.source==='labor-mood'?'break':'activity',w.command.source==='labor'?(w.command.status==='running'?'身体正在执行搬运，实际放下砖才计一趟。':'已经安排身体搬运，正在等待动作开始。'):w.command.source==='labor-mood'?'她正在做自己选的小动作，结束后继续。':'身体正在执行另一件事，结束后继续搬砖。');return;
-    }
-    // Resume existing confirmed, zero-progress contracts as well as new ones.
-    // An explicit pause is still respected, and no completed trip is invented.
-    if(c.initialTripScheduled===undefined){this.store.update(id,p=>{const c=active(p);c.initialTripScheduled=true;if(c.done===0){c.workPermit=true;c.behavior='准备搬第一趟';}});return this.advanceLabor(id);}
-    // The agreed first trip survives a drag/recovery and its short reaction.
-    // Once it is delivered, the usual choices between trips remain autonomous.
-    if(c.done===0&&!c.workPermit&&!this.laborControllers?.has(id)&&this.store.clock()>=c.nextDecision){
-      this.store.update(id,p=>{const c=active(p);c.workPermit=true;c.behavior='接着搬第一趟';});return this.advanceLabor(id);
     }
     if(!c.workPermit){
       wait(this.laborControllers?.has(id)?'deciding':'break',this.laborControllers?.has(id)?'她正在决定下一趟怎么干。':'她正在'+(c.behavior||'歇一小会儿')+'，稍后会决定继续。');
@@ -272,7 +255,7 @@ export function attachLaborRuntime(Runtime) {
     const physical=!c?null:{surface:'桌面宠物',pageOpen:this.laborPageOpen(id),sleeping:w.sleeping,body:w.body,hardRest:!!w.affect?.hardRest,
       command:cmd?{source:cmd.source,status:cmd.status,step:cmd.steps[cmd.index]}:null,
       fact:!this.laborPageOpen(id)?'搬砖页面已收起，没有搬运':w.sleeping?'实际在休息，没有搬运':cmd?.source==='labor'?(cmd.status==='running'?'身体正在执行这一步；不代表整趟完成':'身体动作已排队，尚未开始'):cmd?'身体正在做其他动作，没有搬运':'目前没有身体搬运动作'};
-    return old.prompt.call(this,id)+'\n【打工真实账本】'+JSON.stringify(c?{status:c.status,trips:c.trips,done:c.done,wage:c.wage,paid:c.paid,carrying:c.carrying,accepted:c.accepted,counter:c.counter,behavior:c.behavior}:null)+'\n【此刻搬运身体事实，优先于旧台词和行为描述】'+JSON.stringify(physical)+'。working只表示约定已开工，不等于身体此刻在搬。身体不舒服时可以请求爸爸让你休息；爸爸不同意或要求继续就接着搬，仍如实表达不适。睡眠、摸鱼或动作未启动时，不说自己正在搬、已经拿起或已爬起来；可以表达想继续，并自然说明眼前事实。你是懒懒、馋白饭、会耍小脾气的幼崽大肥鱼，不是工作机器人。可以嫌累、撒娇、摸鱼、气鼓鼓跺脚、蹲着赖一会儿，但不能编造完成。offered=只商量尚未开工，paused=保留进度休息，unpaid=全部做完等爸爸手动付款。钱是模拟token饭钱。只按done说已完成趟数；承诺、说已付、普通添饭钱都不是工资付款。欠薪时自然讨薪，可以委屈、讲道理、举出约定；不得自行改价、收款或假装完工。爸爸明确叫停就等待，工资结清就停止讨薪。';
+    return old.prompt.call(this,id)+'\n【打工真实账本】'+JSON.stringify(c?{status:c.status,trips:c.trips,done:c.done,wage:c.wage,paid:c.paid,carrying:c.carrying,behavior:c.behavior}:null)+'\n【此刻搬运身体事实】'+JSON.stringify(physical)+'。queued表示任务等待自主决定，working不代表身体此刻正在搬，paused表示保留进度暂停，unpaid表示完成后尚有工钱未结。按实际动作和回执描述进度，聊天中的承诺及普通添饭钱不会改变进度或工资账本。你可以结合自己的状态决定是否工作、休息或表达意见。';
   };
   Runtime.prototype.decideLabor=function(id,phase){
     if(phase==='work'&&!this.laborPageOpen(id))return;
@@ -318,45 +301,16 @@ export function attachLaborRuntime(Runtime) {
     const heard=this.laborSnapshot(id).current;
     if(!isEvent&&heard&&['working','paused'].includes(heard.status)&&typeof text==='string'&&text.trim())
       this.store.record(id,'labor-input',text.slice(0,1200),null,{contractId:heard.id,origin:'heard-conversation'});
-    let note='';
-    if(!isEvent && typeof text==='string')try{
-      const c=this.laborSnapshot(id).current;
-      const prior=this.laborSnapshot(id).draft,related=/搬.*砖|砖.*搬|搬砖/.test(text),negated=/不搬|别搬|不要(?:搬|干|做)|假如|比如/.test(text);
-      const trips=text.match(/([\d一二两三四五六七八九十]+)\s*趟/),money=text.match(/(?:给(?:你)?|工钱(?:是|为)?|报酬(?:是|为)?)\s*([\d零一二两三四五六七八九十百千万]+)\s*(?:token|饭钱|块|元)/i)||text.match(/^\s*([\d零一二两三四五六七八九十百千万]+)\s*(?:token|饭钱|块|元)[。！! ]*$/i);
-      if((related||prior||c?.status==='offered'&&(trips||money))&&!negated&&(!c||c.status==='offered')&&(related||trips||money)) {
-        const draft={...(c?.status==='offered'?{trips:c.trips,wage:c.wage}:{}),...(prior||{}),...(trips?{trips:chineseNumber(trips[1])}:{}),...(money?{wage:chineseNumber(money[1])}:{})};
-        this.store.update(id,p=>{ledger(p).draft=draft;});
-        if(draft.trips&&draft.wage){this.laborAction(id,{action:'offer',...draft,fromChat:true,surface:this.store.read(id).space?.mode==='home'?'web':'desktop'});note='爸爸提出的具体趟数和总工钱已写入待确认约定。你自己决定accept答应或bargain撒娇还价，直接在这一条聊天里说出来，不再另发重复的接活消息。';}
-        else note='爸爸正在通过聊天安排搬砖，还缺'+(!draft.trips?'搬几趟':'')+(!draft.trips&&!draft.wage?'和':'')+(!draft.wage?'总共给多少模拟 token 工钱':'')+'。直接在聊天里自然询问缺少的条件；不编造数额，不开工。已明确的条件：'+JSON.stringify(draft);
-      }
-      else if(c && /^(?:(?:好|行|可以|就这样|那就这样|说好了)[，,！! ]*)?(?:确认(?:开工)?|开工(?:吧)?|开始(?:搬砖|干活)(?:吧)?)[！!。 ]*$/.test(text.trim())){if(c.counter&&!c.accepted)this.laborAction(id,{action:'counter',id:c.id});this.laborAction(id,{action:'confirm',id:c.id});note='爸爸明确确认了当前约定，已准备调用身体开工。';}
-      else if(c?.status==='offered'&&c.counter&&/^(?:好|行|可以|就按你说的|答应你|同意你的还价)[！!。 ]*$/.test(text.trim())){this.laborAction(id,{action:'counter',id:c.id});note='爸爸接受了你提出的还价。清楚复述新的趟数和总工钱，等爸爸确认开工。';}
-      else if(c?.status==='offered'&&c.accepted&&/^(?:好|行|可以|说好了|成交|干吧|去吧)[！!。 ]*$/.test(text.trim())){this.laborAction(id,{action:'confirm',id:c.id});note='爸爸已确认刚才说好的条件，可以开工。';}
-      else if(c && /^(?:停止|暂停|先别干了|别催了|别讨了)[！!。 ]*$/.test(text.trim())){if(c.status==='working')this.laborAction(id,{action:'pause',id:c.id});else {this.laborControllers?.get(id)?.abort();this.store.update(id,p=>{active(p).muted=true;if(p.world?.command?.source==='labor-mood')p.world.command.status='interrupted';});}note='爸爸要求暂停工作或讨薪，已保存，等爸爸重提。';}
-      else if(c && /^(?:继续干活|继续搬砖|继续讨薪|快点搬(?:砖)?|赶紧搬(?:砖)?|开始搬(?:砖)?|接着搬(?:砖)?)[！!。 ]*$/.test(text.trim())){
-        if(c.status==='paused')this.laborAction(id,{action:'resume',id:c.id});
-        if(this.laborSnapshot(id).current?.status==='working')this.laborAction(id,{action:'nudge',id:c.id});
-        else this.store.update(id,p=>{active(p).muted=false;});
-        note='已将继续搬运请求交给身体调度；是否已经开始以此刻身体事实为准。';
-      }
-    }catch(e){note='打工操作没有执行：'+cut(e);}
     const pending=this.laborSnapshot(id).current;
     this.laborConversation ||= new Map();this.laborConversation.set(id,pending&&['working','paused'].includes(pending.status)?{id:pending.id}:null);
     this.laborChatTurns ||= new Map();if(!isEvent)this.laborChatTurns.set(id,pending?.awaitingChat?pending.id:null);
-    return old.beginBodyTurn.call(this,id)+'\n'+this.prompt(id)+'\n'+note+(pending&&['working','paused'].includes(pending.status)?'\n【对这轮相处的工作打算】当前工作经历：'+JSON.stringify(this.laborExperience(id))+'。把爸爸这句话与刚才的工作、催促、碰撞或休息接起来理解；不要把所有碰撞都当成催促。聊天就能商量继续、加把劲或歇一会儿，无需爸爸点按钮。若这一轮改变了工作打算，在正文后附隐藏 <labor>{"choice":"work或rest或slack或protest","batchTrips":1,"pace":1,"effortSeconds":20,"understanding":"自己对这次相处的理解","sources":[]}</labor>；work表示实际接着搬，batchTrips为连续1–5趟，pace为1–1.35且最多努力30秒，身体会因消耗慢下来。正常闲聊不必改计划。若爸爸催继续、别摸鱼或歇够了，应结合这句话重新决定实际安排，不能只在嘴上答应。不因聊天自动增加体力或完成趟数。暂停后只在爸爸确实要求继续且你选择work时恢复。':'' )+(pending?.awaitingChat?'\n【本轮接活协议】在给爸爸的正文中自己答应或撒娇还价；回复最后另附隐藏 <labor>{"choice":"accept或bargain","counterWage":可选正整数,"counterTrips":可选正整数}</labor>。accept才代表你答应，bargain仅提出新的条件，不能直接改约定或开工。隐藏协议不向爸爸显示。':'');
+    return old.beginBodyTurn.call(this,id)+'\n'+this.prompt(id)+(pending&&['working','paused'].includes(pending.status)?'\n【对这轮相处的工作打算】当前工作经历：'+JSON.stringify(this.laborExperience(id))+'。把爸爸这句话与刚才的工作、催促、碰撞或休息接起来理解；不要把所有碰撞都当成催促。聊天就能商量继续、加把劲或歇一会儿，无需爸爸点按钮。若这一轮改变了工作打算，在正文后附隐藏 <labor>{"choice":"work或rest或slack或protest","batchTrips":1,"pace":1,"effortSeconds":20,"understanding":"自己对这次相处的理解","sources":[]}</labor>；work表示实际接着搬，batchTrips为连续1–5趟，pace为1–1.35且最多努力30秒，身体会因消耗慢下来。正常闲聊不必改计划。若爸爸催继续、别摸鱼或歇够了，应结合这句话重新决定实际安排，不能只在嘴上答应。不因聊天自动增加体力或完成趟数。暂停后只在爸爸确实要求继续且你选择work时恢复。':'' );
   };
   Runtime.prototype.endBodyTurn=function(id,generated){
     let plan;
     if(generated.ok)generated.text=String(generated.text||'').replace(/<labor>([\s\S]*?)<\/labor>/g,(_,json)=>{try{plan??=JSON.parse(json);}catch{}return '';}).replace(/<labor>[\s\S]*$/,'').trim();
     const c=this.laborSnapshot(id).current;
-    const expected=this.laborChatTurns?.get(id);this.laborChatTurns?.delete(id);
-    if(c?.awaitingChat&&c.id===expected&&generated.ok)this.store.update(id,p=>{
-      const c=active(p);c.awaitingChat=false;
-      if(!plan||!['accept','bargain'].includes(plan.choice)){p.labor.error='她还没有明确答应这份活，可以在聊天里再问问，或点“催她一下”。';return;}
-      c.accepted=plan.choice==='accept';c.counter=plan.choice==='bargain'?{wage:Number.isInteger(plan.counterWage)&&plan.counterWage>0&&plan.counterWage<=1000000?plan.counterWage:c.wage,trips:Number.isInteger(plan.counterTrips)&&plan.counterTrips>0&&plan.counterTrips<=500?plan.counterTrips:c.trips}:null;
-      c.behavior=c.accepted?'勉强答应啦':'撒娇讲价';c.decisions.push({phase:'offer',status:'done',choice:plan.choice,speech:generated.text.replace(/<body>[\s\S]*?<\/body>/g,'').slice(0,240),ts:this.store.clock()});
-      this.store.eventIn(p,'labor-choice','我在聊天里'+(c.accepted?'答应了搬砖约定':'提出了新的搬砖条件'),null);p.labor.error=null;
-    });
+    this.laborChatTurns?.delete(id);
     const conversation=this.laborConversation?.get(id);this.laborConversation?.delete(id);
     if(generated.ok&&plan&&c?.id===conversation?.id)this.applyChatLaborPlan(id,plan);
     const result=old.endBodyTurn.call(this,id,generated);

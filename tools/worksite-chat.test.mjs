@@ -10,7 +10,7 @@ import {projectBody} from '../dist/host/body-projection.js';
 
 function fixture(reply,options={}){
   const old=Object.create(CompanionStore.prototype);old.data={version:2,pets:{}};old.loaded=true;old.clock=Date.now;old.save=()=>{};old.load=()=>{};
-  const legacy=old.read('main');legacy.labor={contracts:[{id:'work',status:'paused',done:2,trips:5,workPermit:false}]};legacy.services||={};legacy.worksite={inside:false,forced:false};
+  const legacy=old.read('main');legacy.labor={contracts:[{id:'work',status:'queued',done:2,trips:5,workPermit:false}]};legacy.services||={};legacy.worksite={inside:false,forced:false};
   const human=createHumanity();human.helperReady=true;human.restrained=false;if(options.tired)human.stats.energy=10;
   let envelope={petId:'main',version:0,legacy,humanity:human,life:{events:[],invalidSources:{},relationships:[],constraints:{permissions:[],capabilities:[{name:'labor.step',enabled:true,physical:true}],paused:false},memories:[],commitments:[],actions:[],receipts:[],legacyContext:{personaDescription:'test',labor:legacy.labor.contracts[0]},body:{},emotions:{}}};
   const gate={signal:new AbortController().signal,run:async(_id,fn)=>fn()};
@@ -27,6 +27,16 @@ test('her voluntary chat decision resumes one trip and requests the worksite',as
   const s=f.get(),c=s.legacy.labor.contracts[0];assert.doesNotMatch(reply,/愿意去工地/);
   assert.equal(c.status,'working');assert.equal(c.workPermit,true);assert.equal(c.batchRemaining,1);assert.equal(c.done,2);
   assert.equal(s.legacy.worksite.requested,true);assert.equal(s.life.events.find(e=>e.eventId===c.workDecisionEvent).payload.choice,'work');
+});
+
+test('a newly queued task does not automatically start its first trip',async()=>{
+  const f=fixture('');let dispatched=0;
+  const life=createDeterministicLife({get:async()=>structuredClone(f.get().humanity)},f.store,async()=>{},f.gate,f.uow,{}, {dispatch:async()=>{dispatched++;}},async()=>{});
+  await life.run('main',new AbortController().signal,{allowAutonomous:true});
+  assert.equal(f.get().legacy.labor.contracts[0].workPermit,false);
+  assert.equal(f.get().legacy.labor.contracts[0].done,2);
+  assert.equal(f.get().legacy.worksite.requested,undefined);
+  assert.equal(dispatched,0);
 });
 
 test('an unverified claim of entry is not published as completed',async()=>{
@@ -59,7 +69,7 @@ test('refusal and total exhaustion do not create a worksite entry',async()=>{
   for(const [reply,tired] of [['我想休息。',false],['我去搬一趟。\n[愿意去工地]',true]]){
     const f=fixture(reply,{tired});if(tired){Object.assign(f.get().humanity.stats,{stamina:0,energy:0,satiety:0});f.get().life.spirit={value:0,updatedAt:Date.now(),awakeSince:Date.now(),lastSleepHours:0,mode:'awake',config:{sleepHours:8,awakeHours:14,hourlyDrain:2,napPerHour:6,sweetGain:8,sweetCooldownHours:4}};}const turn=f.chat.turn({requestId:'rest-'+tired,petId:'main',channel:'desktop',actorId:'dad',text:'你想去工地吗？'},new AbortController().signal);
     const answer=await turn;if(tired){assert.match(answer,/不允许开工/);assert.doesNotMatch(answer,/我去搬一趟/);}
-    assert.equal(f.get().legacy.labor.contracts[0].status,'paused');assert.equal(f.get().legacy.worksite.requested,undefined);
+    assert.equal(f.get().legacy.labor.contracts[0].status,'queued');assert.equal(f.get().legacy.worksite.requested,undefined);
   }
 });
 
@@ -69,4 +79,17 @@ test('an old unknown meal is not replayed and does not block an independent work
   let meals=0;const life=createDeterministicLife({get:async()=>structuredClone(f.get().humanity)},f.store,async()=>{meals++;},f.gate,f.uow,{}, {},async()=>{});
   await life.run('main',new AbortController().signal,{allowAutonomous:true});
   assert.equal(meals,0);assert.equal(f.get().legacy.worksite.requested,true);assert.equal(f.get().life.actions[0].status,'UNKNOWN');
+});
+
+test('paused task blocks the queued task even if she suggests working',async()=>{
+  const f=fixture('好，我自己去搬一趟。');const first=f.get().legacy.labor.contracts[0];first.status='paused';
+  f.get().legacy.labor.contracts.push({id:'next',status:'queued',done:0,trips:4,workPermit:false});
+  await f.chat.turn({requestId:'paused-block',petId:'main',channel:'desktop',actorId:'dad',text:'想搬吗？'},new AbortController().signal);
+  assert.equal(f.get().legacy.labor.contracts[0].status,'paused');assert.equal(f.get().legacy.labor.contracts[1].workPermit,false);
+});
+
+test('聊天谈论任务不创建提案或直接改动任务',async()=>{
+  const f=fixture('好，我们可以再说说。');
+  await f.chat.turn({requestId:'normal-labor-chat',petId:'main',channel:'desktop',actorId:'dad',text:'搬十趟，给你一百工钱，好吗？'},new AbortController().signal);
+  assert.equal(f.get().legacy.labor.contracts.length,1);assert.equal(f.get().legacy.labor.contracts[0].trips,5);assert.equal(f.get().legacy.chatLaborProposals,undefined);
 });

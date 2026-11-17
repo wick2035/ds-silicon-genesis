@@ -3,7 +3,6 @@ import {hasActiveConversation} from './active-conversation.js';
 import {riceMotivation} from './companion-personality.js';
 import {hasForcedWork,canChooseLabor} from './forced-labor.js';
 import {advanceSpirit} from '../kernel/spirit.js';
-import {strategyScore} from '../kernel/index.js';
 import {expireCommitments} from '../kernel/goal-lifecycle.js';
 import {projectBody} from './body-projection.js';
 import {blocksNewLabor} from './labor-pending.js';
@@ -85,26 +84,15 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     await gate.run(petId,async()=>{
       let current=await reader.loadEnvelope(petId);if(!current||signal.aborted||current.life.constraints.paused&&!hasForcedWork(current))return;
       if(blocksNewLabor(current) || current.life.actions.some(a=>a.actionType==='service.eat-rice' && ['PENDING','DISPATCHED'].includes(a.status)))return;
-      let pet=current.legacy as Record<string,any>, contract=pet.labor?.contracts?.find((c:any)=>c.status==='working');
-      if(!contract || !Number.isFinite(contract.done) || contract.done>=contract.trips)return;
+      let pet=current.legacy as Record<string,any>, contract=pet.labor?.contracts?.find((c:any)=>['working','paused','queued'].includes(c.status) && c.done<c.trips);
+      if(!contract || contract.status!=='working' || !Number.isFinite(contract.done) || contract.done>=contract.trips)return;
       if(contract.workPermit && contract.workDecisionEvent && Object.hasOwn(current.life.invalidSources,contract.workDecisionEvent)){await uow.apply(petId,current.version,draft=>{const c=(draft.legacy as Record<string,any>).labor?.contracts?.find((x:any)=>x.id===contract.id);if(c){c.workPermit=false;c.batchRemaining=0;c.nextDecision=0;}return {};});current=await reader.loadEnvelope(petId);if(!current)return;pet=current.legacy as Record<string,any>;contract=pet.labor?.contracts?.find((c:any)=>c.id===contract.id);if(!contract)return;}
       if(!hasForcedWork(current)&&!canChooseLabor(current))return;
-      if(!contract.workPermit) {
-        const now=Date.now();if(Number.isFinite(contract.nextDecision) && contract.nextDecision>now && !contract.forced)return;
-        const state={...current.life,petId,version:current.version,...projectBody(current)};
-        const dad=state.relationships.find(r=>r.personId==='dad'),score=strategyScore(state,'labor.step','execution');
-        const overdue=(dad?.outstandingWages??0)>0;
-        const workGoal=state.goals.some(g=>g.kind==='work' && g.status==='active' && g.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id)));
-        const weak=score.samples>=3 && score.score<.3 && !workGoal;
-        // A forced task overrides voluntary rest; the distress it causes
-        // is recorded as real evidence downstream, not suppressed here.
-        const choice=hasForcedWork(current)?'work':(overdue||weak?'rest':'work');
-        await uow.apply(petId,current.version,draft=>{const c=(draft.legacy as Record<string,any>).labor?.contracts?.find((x:any)=>x.id===contract.id);if(!c||c.status!=='working'||c.workPermit||draft.life.constraints.paused&&!hasForcedWork(draft))throw Error('工作状态已变化');
-          c.workPermit=choice==='work';c.batchRemaining=choice==='work'?hasForcedWork(draft)?c.trips-c.done:Math.min(c.trips-c.done,workGoal?2:1):0;c.lastWorkDecision=now;c.nextDecision=now+(choice==='work'?60000:300000);c.behavior=choice==='work'?(contract.forced?'爸爸强行让我继续搬砖':'决定继续一小批工作'):'决定先休息并重新考虑';
-          const site=(draft.legacy as Record<string,any>).worksite||={inside:false,forced:false};site.suppressUntilDecision=false;if(choice==='work'&&!site.inside)site.requested=true;
-          const at=new Date(now).toISOString(),eventId='labor-decision:'+randomUUID();c.workDecisionEvent=eventId;draft.life.events.push({eventId,petId,type:'labor.decision',source:'scheduler',occurredAt:at,receivedAt:at,evidenceLevel:'inferred',payload:{contractId:c.id,choice,reason:contract.forced?'forced':overdue?'unpaid':weak?'experience':'agreement',sourceIds:[...(dad?.sourceIds||[]),...state.goals.filter(g=>g.kind==='work'&&g.status==='active').flatMap(g=>g.sourceIds)]}});return {};});
-        if(choice!=='work')return;
-        current=await reader.loadEnvelope(petId);if(!current||signal.aborted)return;pet=current.legacy as Record<string,any>;contract=pet.labor?.contracts?.find((c:any)=>c.id===contract.id);if(!contract?.workPermit)return;
+      // Voluntary work requires her decision. Existing forced batches retain their original authority.
+      if(!contract.workPermit){
+        if(!hasForcedWork(current))return;
+        await uow.apply(petId,current.version,draft=>{const c=(draft.legacy as Record<string,any>).labor?.contracts?.find((x:any)=>x.id===contract.id);if(c&&c.status==='working'&&c.forced){c.workPermit=true;c.batchRemaining=c.trips-c.done;}return {};});
+        current=await reader.loadEnvelope(petId);if(!current)return;pet=current.legacy as Record<string,any>;contract=pet.labor?.contracts?.find((c:any)=>c.id===contract.id);if(!contract?.workPermit)return;
       }
       if(!pet.worksite?.inside){
         if(!pet.worksite?.requested && !pet.worksite?.suppressUntilDecision)await uow.apply(petId,current.version,draft=>{const site=(draft.legacy as Record<string,any>).worksite||={inside:false,forced:false};if(!site.inside)site.requested=true;return {};});

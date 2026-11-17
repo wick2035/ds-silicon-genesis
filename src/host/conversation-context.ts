@@ -35,7 +35,8 @@ export function conversationContext(state:LifeState, envelope:CanonicalEnvelope,
 /** Historical contract totals are not evidence of activity in the current visit. */
 export function worksiteFacts(envelope:CanonicalEnvelope) {
   const pet=envelope.legacy as Record<string,any>, site=pet.worksite??{};
-  const contract=(pet.labor?.contracts??[]).find((c:any)=>['working','paused','unpaid'].includes(c.status));
+  const contracts=pet.labor?.contracts??[];
+  const contract=contracts.find((c:any)=>['working','paused','queued'].includes(c.status) && c.done<c.trips)??[...contracts].reverse().find((c:any)=>c.status==='unpaid');
   const transition=envelope.life.events.filter(e=>e.type==='interaction.worksite' && !Object.hasOwn(envelope.life.invalidSources,e.eventId) && ['enter-forced','enter-voluntary','release','leave-voluntary'].includes(String((e.payload as any)?.action))).at(-1);
   const enteredAt=site.inside===true && transition && ['enter-forced','enter-voluntary'].includes(String((transition.payload as any)?.action)) ? Date.parse(transition.occurredAt) : Infinity;
   // A trip is finished when its "deliver" leg completes: the leg is encoded on

@@ -234,42 +234,28 @@ export class LegacyDomain {
     if (authority !== this.#observerAuthority || !identity(source) || !kind || typeof text !== 'string' || !extra || Object.keys(extra).some(k => ['id','kind','text','ts'].includes(k))) throw new Error('事件缺少可信来源或包含保留字段');
     return this.call(petId,requestId,'record',[kind,text,source,extra]);
   }
-  /** Domain-only offer, negotiation, confirmation, interruption and simulated
-   * settlement. Execution and decisions are separate approved workflows. */
+  /** Record task changes and simulated settlement; execution and decisions
+   * are handled by their respective workflows. */
   laborAction(petId: string, requestId: string, input: Record<string, unknown>, authority?: object): Promise<unknown> {
-    if (!input || !['offer','confirm','decline','pause','resume','counter','nudge','disturb','pay','adjust','cancel','settle-cancelled'].includes(String(input.action))) throw new Error('不支持的工作操作');
+    if (!input || !['offer','pause','resume','disturb','adjust','cancel','settle-cancelled'].includes(String(input.action))) throw new Error('不支持的工作操作');
     if (input.action === 'disturb' && authority !== this.#observerAuthority) throw new Error('搬砖打扰缺少可信观察');
     return this.mutate(petId,requestId,'labor-action',input,(store,draft) => {
       const runtime = new LaborDraftRuntime(store);
       const result = ['adjust','cancel','settle-cancelled'].includes(String(input.action))?manageLabor(store,petId,input):runtime.laborAction(petId,input);
-      if(['adjust','cancel','settle-cancelled'].includes(String(input.action))){
+      if(['offer','adjust','cancel','settle-cancelled'].includes(String(input.action))){
         const event=store.read(petId).events.at(-1),eventId='labor-change:'+requestId,at=new Date(store.clock()).toISOString();
-        draft.life.events.push({eventId,petId,type:'labor.changed',source:'user',actorId:'dad',occurredAt:at,receivedAt:at,evidenceLevel:'observed',payload:{contractId:input.id,action:input.action,description:event.text}});
+        draft.life.events.push({eventId,petId,type:'labor.changed',source:'user',actorId:'dad',occurredAt:at,receivedAt:at,evidenceLevel:'observed',payload:{contractId:input.id??store.read(petId).labor?.contracts?.at(-1)?.id,action:input.action,description:event.text}});
         draft.life.memories.push({id:'labor-memory:'+requestId,kind:'autobiographical',content:event.text,sourceIds:[eventId],evidenceLevel:'observed',valid:true,createdAt:at});
       }
-      if (input.action === 'confirm' || input.action === 'pay' || input.action === 'settle-cancelled') {
+      if (input.action === 'settle-cancelled') {
         const contract = store.read(petId).labor?.contracts?.find((c: Obj) => c.id===input.id);
         if (!contract) throw new Error('工作约定不存在');
         const id = 'social-labor:'+requestId, now = new Date(store.clock()).toISOString();
-        draft.life.events.push({eventId:id,petId,type:input.action==='confirm'?'social.labor.confirmed':'social.labor.payment',source:'user',actorId:'dad',occurredAt:now,receivedAt:now,evidenceLevel:'observed',payload:{contractId:contract.id,amount:input.action!=='confirm'?input.amount:0,outstanding:Math.max(0,contract.wage-contract.paid)}});
+        draft.life.events.push({eventId:id,petId,type:'social.labor.payment',source:'user',actorId:'dad',occurredAt:now,receivedAt:now,evidenceLevel:'observed',payload:{contractId:contract.id,amount:input.amount,outstanding:Math.max(0,contract.wage-contract.paid)}});
         rebuildRelationships(draft.life);
       }
       return result;
     });
-  }
-  laborDecision(petId:string,requestId:string,input:{id:string;trips:number;wage:number;choice:'accept'|'bargain'|'decline';counterTrips?:number;counterWage?:number}):Promise<unknown> {
-    return this.mutate(petId,requestId,'labor-decision',input,(store,draft)=>store.update(petId,(pet:Obj)=>{
-      const c=pet.labor?.contracts?.find((item:Obj)=>item.id===input.id && item.status==='offered');
-      if(!c||c.trips!==input.trips||c.wage!==input.wage||c.accepted||c.counter)throw Error('工作约定已变化，请刷新后重试');
-      c.accepted=input.choice==='accept';
-      c.counter=input.choice==='bargain'?{trips:input.counterTrips,wage:input.counterWage}:null;
-      if(input.choice==='decline')c.status='declined';
-      const text=input.choice==='accept'?'她答应了这份工作，等待确认开工。':input.choice==='bargain'?`她提出 ${input.counterTrips} 趟、${input.counterWage} token 的还价。`:'她拒绝了这份工作。';
-      store.eventIn(pet,'labor',text,'labor-decision:'+requestId);
-      const at=new Date(store.clock()).toISOString();
-      draft.life.events.push({eventId:'labor-response:'+requestId,petId,type:'labor.offer.decision',source:'model',occurredAt:at,receivedAt:at,evidenceLevel:'inferred',payload:{contractId:c.id,choice:input.choice,trips:c.trips,wage:c.wage}});
-      return {choice:input.choice};
-    }));
   }
   /** A dropped fragment must be an authenticated observed physical event. */
   dropToken(petId: string, requestId: string, input: Record<string, unknown>, authority: object): Promise<unknown> {
