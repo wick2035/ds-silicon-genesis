@@ -46,7 +46,7 @@ function decisionFacts(envelope:CanonicalEnvelope):string {
 /** One tool-aware turn for every utterance. Text preceding a tool call is a
  * draft, not a published claim. Real receipts return to the same model. */
 export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<CanonicalEnvelope|null>},gate:PetGate,uow:UnitOfWork,actions:ActionCoordinator,dispatcher:OutboxDispatcher,
-  beginWork:(id:string,sourceIds:string[],key:string)=>Promise<unknown>,leaveWork:(id:string)=>Promise<unknown>) {
+  beginWork:(id:string,sourceIds:string[],key:string)=>Promise<unknown>,leaveWork:(id:string)=>Promise<unknown>,enterWork?:(id:string)=>Promise<unknown>,stopWork?:(id:string)=>Promise<unknown>) {
   async function sense(petId:string, excludeEventIds:string[]=[],query='',snapshot?:CanonicalEnvelope){
     const envelope=snapshot??await reader.loadEnvelope(petId);if(!envelope)throw Error('生命状态不可用');
     const events=envelope.life.events.filter(e=>!Object.hasOwn(envelope.life.invalidSources,e.eventId) &&
@@ -58,6 +58,8 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
   }
   async function execute(speech:Speech,type:string,parameters:Record<string,unknown>,key:string,signal:AbortSignal,expectedFacts:string){
     if(!speech.allowActions||signal.aborted||gate.signal.aborted)throw Error('当前发言不能执行行动');
+    if(type==='work.enter'){if(!enterWork)throw Error('工地不可用');return enterWork(speech.petId);}
+    if(type==='work.stop'){if(!stopWork)throw Error('工地不可用');return stopWork(speech.petId);}
     if(type==='work.begin')return beginWork(speech.petId,speech.sourceIds,key);
     if(type==='work.leave'){const current=await reader.loadEnvelope(speech.petId);if(!current||current.life.constraints.paused)throw Error('自主活动已暂停');return leaveWork(speech.petId);}
     if(!executable.has(type)||type==='labor.step')throw Error('不支持的自主行动；搬砖请用 work.begin');
@@ -98,7 +100,9 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
     if(!initial.envelope.life.constraints.capabilities.some(c=>c.name==='care.water')&&initial.envelope.life.constraints.capabilities.some(c=>c.name==='care.feed'&&c.enabled))allowed.push('care.water');
     const tools=[{name:'sense_self',description:'感知此刻身体、需求、钱包、近期真实互动与行动结果。',inputSchema:empty},
       ...(speech.allowActions?[{name:'act',description:'按自己的需要选择一次实际行动。吃饭先买后吃；口头说做了不算完成。'+JSON.stringify(actionCatalog),inputSchema:{type:'object',properties:{actionType:{type:'string',enum:allowed},parameters:{type:'object'}},required:['actionType','parameters'],additionalProperties:false}},
-      {name:'begin_work',description:'自主决定履行已有工作约定，申请进入工地并搬一趟；不创建合同、不确认爸爸提案、不支付工资。',inputSchema:empty},
+      {name:'enter_worksite',description:'自主决定进入工地，即使没有任务也可以去；有任务时自动开始工作。',inputSchema:empty},
+      {name:'begin_work',description:'在工地恢复普通工作，之后持续搬砖；不创建合同，不触发强制模式。',inputSchema:empty},
+      {name:'stop_work',description:'自主决定在工地停工，留在工地；强制工作期间不能覆盖爸爸的强制命令。',inputSchema:empty},
       {name:'leave_worksite',description:'自主离开自己进入的工地；被爸爸放进去时须等他接出。',inputSchema:empty}]:[])];
     const personality=STABLE_PERSONALITY+'\n'+(options.system.includes('【你自己的心思和口吻】')?'':COMPANION_PERSONALITY+'\n'+TIME_AWARENESS);
     const context=options.embodiedSnapshot?{
@@ -161,12 +165,14 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
             result=await execute(speech,p.actionType,p.parameters,`${speech.requestId}:${round}:${index}`,signal,signature);
             if(physical&&(result as any)?.status==='UNKNOWN')uncertainBody=true;
           }
+          else if(c.name==='enter_worksite')result=await execute(speech,'work.enter',{},`${speech.requestId}:${round}:${index}`,signal,signature);
+          else if(c.name==='stop_work')result=await execute(speech,'work.stop',{},`${speech.requestId}:${round}:${index}`,signal,signature);
           else if(c.name==='begin_work')result=await execute(speech,'work.begin',{},`${speech.requestId}:${round}:${index}`,signal,signature);
           else if(c.name==='leave_worksite')result=await execute(speech,'work.leave',{},`${speech.requestId}:${round}:${index}`,signal,signature);
           else throw Error('工具不存在');
         }catch(error){isError=true;result={status:'failed',reason:error instanceof Error?error.message:'行动失败'};}
         const current=await reader.loadEnvelope(speech.petId);
-        messages.push({role:'tool',toolCallId:c.id,isError,content:promptData({result,身体:current?.humanity?.stats,...(['begin_work','leave_worksite'].includes(c.name)&&current?{工地现状:worksiteFacts(current)}:{}),...(c.name==='act'&&['service.buy-rice','service.eat-rice'].includes(actionType??'')?{food:current?riceMotivation(current.humanity as any,(current.legacy as any).config??{}):null,饭钱:(current?.legacy as any)?.wallet?.balance,库存:current?riceInventory(current):[],食物可用性:current?riceAvailability(current):null}:{})},5000)});index++;
+        messages.push({role:'tool',toolCallId:c.id,isError,content:promptData({result,身体:current?.humanity?.stats,...(['begin_work','enter_worksite','stop_work','leave_worksite'].includes(c.name)&&current?{工地现状:worksiteFacts(current)}:{}),...(c.name==='act'&&['service.buy-rice','service.eat-rice'].includes(actionType??'')?{food:current?riceMotivation(current.humanity as any,(current.legacy as any).config??{}):null,饭钱:(current?.legacy as any)?.wallet?.balance,库存:current?riceInventory(current):[],食物可用性:current?riceAvailability(current):null}:{})},5000)});index++;
       }
       // A purchase or meal changes current facts within the same model turn.
       const refreshed=await sense(speech.petId,speech.contextExcludeIds??speech.sourceIds,query);

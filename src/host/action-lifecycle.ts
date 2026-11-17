@@ -1,3 +1,4 @@
+import {hasForcedWork} from './forced-labor.js';
 import {hasActiveConversation} from './active-conversation.js';
 import {settleGroupOpener} from './qq-group-proactive-policy.js';
 import {validateRicePurchase} from './rice-purchase.js';
@@ -108,6 +109,7 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
       if(action.actionType==='body.activity' && ((draft.legacy as Record<string,any>).space?.mode!=='outside' || (draft.legacy as Record<string,any>).labor?.contracts?.some((c:any)=>c.status==='working')))throw Error('当前桌面空间或工作状态不允许走动');
       if(action.actionType==='labor.step'){
         const pet=draft.legacy as Record<string,any>,command=pet.world?.command,contract=pet.labor?.contracts?.find((c:any)=>c.id===action.parameters.contractId);
+        if(pet.worksite?.workState==='stopped'&&!hasForcedWork(draft))throw Error('她已停工');
         if(!pet.worksite?.inside || command?.surface!=='web')throw Error('她不在网页工地里');
         if(command.id!==action.parameters.commandId || command.labor?.id!==contract?.id || command.status!=='queued' || !Number.isFinite(command.expires) || command.expires<=this.clock().valueOf() || contract?.status!=='working' || !contract.workPermit || contract.done>=contract.trips)throw Error('搬砖任务或步骤已变化');
       }

@@ -1,7 +1,7 @@
 import {availableRice} from './rice-inventory.js';
 import {hasActiveConversation} from './active-conversation.js';
 import {riceMotivation} from './companion-personality.js';
-import {hasForcedWork,canChooseLabor} from './forced-labor.js';
+import {hasForcedWork,canChooseLabor,hasLaborResources} from './forced-labor.js';
 import {advanceSpirit} from '../kernel/spirit.js';
 import {expireCommitments} from '../kernel/goal-lifecycle.js';
 import {projectBody} from './body-projection.js';
@@ -49,9 +49,16 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     if(signal.aborted)return;
     const human=await humanity.get(petId);
     const forceState=await reader.loadEnvelope(petId),forced=!!forceState&&hasForcedWork(forceState);
+    // Exhaustion is a work-state transition even when the helper is offline or
+    // the pet is asleep; those conditions must not hide an exhausted session.
+    if(forceState && !forced && (forceState.legacy as Record<string,any>).worksite?.inside && (forceState.legacy as Record<string,any>).worksite?.workState!=='stopped' && !hasLaborResources(forceState)){
+      await gate.run(petId,async()=>{const current=await reader.loadEnvelope(petId),site=(current?.legacy as Record<string,any>)?.worksite;
+        if(current&&site?.inside&&site.workState!=='stopped'&&!hasForcedWork(current)&&!hasLaborResources(current))await uow.apply(petId,current.version,draft=>{const s=(draft.legacy as Record<string,any>).worksite;s.workState='stopped';s.stopReason='exhausted';s.sessionId=randomUUID();return {};});
+      });return;
+    }
     if(signal.aborted || !forced&&(!allowAutonomous || human.restrained) || human.helperReady!==true)return;
     const resting=await reader.loadEnvelope(petId);
-    if(!resting)return;if(hasActiveConversation(resting)&&!forced&&!resting.life.actions.some(a=>a.actionType==='labor.step'&&a.status==='PENDING'))return;const spirit=advanceSpirit(resting.life);
+    if(!resting)return;if(hasActiveConversation(resting)&&!(resting.legacy as any).worksite?.inside&&!forced&&!resting.life.actions.some(a=>a.actionType==='labor.step'&&a.status==='PENDING'))return;const spirit=advanceSpirit(resting.life);
     if(human.sleeping&&!forced){if(spirit.mode==='sleep' && spirit.value>=100 || spirit.mode==='nap' && Date.now()-spirit.sleepStartedAt!>=1200000)await service(petId,{key:'auto-wake:'+spirit.sleepStartedAt,command:'/醒来'},'autonomous');return;}
     if(!needsManaged && spirit.value<=2 && !(resting.legacy as any).worksite?.inside && !(resting.legacy as any).labor?.contracts?.some((c:any)=>c.status==='working'&&c.workPermit)){await service(petId,{key:'auto-sleep:'+Math.floor(Date.now()/3600000),command:'/休息'},'autonomous');return;}
     if(Number.isFinite(human.restingUntil) && human.restingUntil>Date.now()&&!forced&&!(resting.legacy as any).labor?.contracts?.some((c:any)=>c.status==='working'&&c.workPermit))return;
@@ -83,6 +90,11 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     // fabricated trip. Actual progress only comes from the helper receipt.
     await gate.run(petId,async()=>{
       let current=await reader.loadEnvelope(petId);if(!current||signal.aborted||current.life.constraints.paused&&!hasForcedWork(current))return;
+      let site=(current.legacy as Record<string,any>).worksite;
+      if(site?.inside && !hasForcedWork(current) && site.workState!=='stopped' && !hasLaborResources(current)){
+        await uow.apply(petId,current.version,draft=>{const s=(draft.legacy as Record<string,any>).worksite;s.workState='stopped';s.stopReason='exhausted';s.sessionId=randomUUID();return {};});return;
+      }
+      if(site?.inside && site.workState==='stopped' && !hasForcedWork(current))return;
       const pendingLabor=current.life.actions.find(a=>a.actionType==='labor.step'&&a.status==='PENDING');
       if(pendingLabor){
         const receipt=await dispatcher.dispatch(pendingLabor.id);
@@ -91,7 +103,13 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
       }
       if(blocksNewLabor(current) || current.life.actions.some(a=>a.actionType==='service.eat-rice' && ['PENDING','DISPATCHED'].includes(a.status)))return;
       let pet=current.legacy as Record<string,any>, contract=pet.labor?.contracts?.find((c:any)=>['working','paused','queued'].includes(c.status) && c.done<c.trips);
-      if(!contract || contract.status!=='working' || !Number.isFinite(contract.done) || contract.done>=contract.trips)return;
+      if(!contract || contract.status==='paused' || !Number.isFinite(contract.done) || contract.done>=contract.trips)return;
+      if(contract.workDecisionEvent && Object.hasOwn(current.life.invalidSources,contract.workDecisionEvent))return;
+      if(pet.worksite?.inside && pet.worksite.workState!=='stopped' && !hasForcedWork(current) && (contract.status==='queued'||!contract.workPermit)){
+        await uow.apply(petId,current.version,draft=>{const c=(draft.legacy as Record<string,any>).labor?.contracts?.find((x:any)=>x.id===contract.id);if(c&&['working','queued'].includes(c.status)){c.status='working';c.workPermit=true;c.batchRemaining=c.trips-c.done;}return {};});
+        current=await reader.loadEnvelope(petId);if(!current)return;pet=current.legacy as Record<string,any>;contract=pet.labor?.contracts?.find((c:any)=>c.id===contract.id);
+      }
+      if(!contract || contract.status!=='working')return;
       if(contract.workPermit && contract.workDecisionEvent && Object.hasOwn(current.life.invalidSources,contract.workDecisionEvent)){await uow.apply(petId,current.version,draft=>{const c=(draft.legacy as Record<string,any>).labor?.contracts?.find((x:any)=>x.id===contract.id);if(c){c.workPermit=false;c.batchRemaining=0;c.nextDecision=0;}return {};});current=await reader.loadEnvelope(petId);if(!current)return;pet=current.legacy as Record<string,any>;contract=pet.labor?.contracts?.find((c:any)=>c.id===contract.id);if(!contract)return;}
       if(!hasForcedWork(current)&&!canChooseLabor(current))return;
       // Voluntary work requires her decision. Existing forced batches retain their original authority.

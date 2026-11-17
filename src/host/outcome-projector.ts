@@ -35,7 +35,7 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
     const command=pet.world?.command, contract=pet.labor?.contracts?.find((c:Obj)=>c.id===params?.contractId);
     if(command?.id===params?.commandId && ['queued','running'].includes(command.status)) {
       command.status='interrupted'; command.interruptedReason='execution-'+receipt.status;
-      if(contract && command.labor?.id===contract.id){contract.workPermit=false;contract.batchRemaining=0;contract.behavior='动作中断，等待新的工作决定';}
+      if(contract && command.labor?.id===contract.id){contract.workPermit=false;contract.batchRemaining=0;contract.behavior='动作中断，等待新的工作决定';if(!contract.forced&&pet.worksite?.inside){pet.worksite.workState='stopped';pet.worksite.stopReason='interrupted';pet.worksite.sessionId='interrupted:'+intent.id;}}
     }
   }
   if (receipt.status !== 'completed' && !(intent.type==='labor.step' && receipt.status==='cancelled' && receipt.evidence?.confirmed===true)) return;
@@ -117,6 +117,7 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
     else {
       assert(cmd.labor.leg === 'deliver' && contract.carrying === true, '没有正在搬运的砖');
       contract.carrying = false; contract.done++; contract.batchRemaining = Math.max(0,(contract.batchRemaining || 1)-1);
+      if(!contract.forced && pet.worksite?.inside && pet.worksite.workState==='running'){pet.worksite.completedInSession=(Number(pet.worksite.completedInSession)||0)+1;pet.worksite.lastCompletedContractId=contract.id;contract.batchRemaining=contract.trips-contract.done;}
       contract.workPermit = contract.batchRemaining > 0; contract.nextDecision = Math.max(at + 1000,(contract.lastWorkDecision || 0)+60000);
       if (contract.done === contract.trips) {
         contract.status = 'unpaid'; contract.finished = at;

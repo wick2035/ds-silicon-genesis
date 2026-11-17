@@ -42,7 +42,7 @@ function register({ipcMain,petWindows,hostRequest,BrowserWindow,screen,app}) {
   });
   ipcMain.handle('worksite:snapshot',async event=>{const id=siteFor(event.sender);if(!id)throw Error('工地窗口不可用');return call(id,'snapshot');});
   ipcMain.handle('worksite:action',async(event,action)=>{
-    const id=siteFor(event.sender);if(!id||!['release','touch','drag','force-work'].includes(action))throw Error('工地操作无效');
+    const id=siteFor(event.sender);if(!id||!['release','touch','drag','force-work','resume-work','retry-unconfirmed'].includes(action))throw Error('工地操作无效');
     const state=await call(id,action);if(action==='release'||action==='force-work')showBody(id,state.location?.inside===true);return state;
   });
   ipcMain.handle('worksite:receipt',async(event,receipt)=>{
@@ -65,9 +65,6 @@ function register({ipcMain,petWindows,hostRequest,BrowserWindow,screen,app}) {
         if(!win.webContents.isLoading()&&!win.isDestroyed()){state=await call(id,'enter-voluntary');}
       }
       if(state.location?.inside){open(id,false);showBody(id,true);
-        if(!state.location.forced&&!['working','paused'].includes(state.labor?.current?.status)){
-          state=await call(id,'leave-voluntary');showBody(id,false);
-        }
       }else showBody(id,last.get(id)?.location?.inside===true);
     }catch(e){/* Keep the last confirmed body location on a disconnected host. */}
     finally{busy.delete(id);}

@@ -1,5 +1,4 @@
-import {laborBlockReason} from './forced-labor.js';
-import {blocksNewLabor} from './labor-pending.js';
+import {createWorksiteReviews} from './worksite-reviews.js';
 import {createLaborCompletionNotices} from './labor-completion-notices.js';
 import {companionContext,COMPANION_PERSONALITY} from './companion-personality.js';
 import {createInteractionReactions} from './interaction-reactions.js';
@@ -149,21 +148,8 @@ export async function main():Promise<void> {
     executors.set('image.observe',createImageObserver(store,budget,model));
     const actions=new ActionCoordinator(unitOfWork,projectBody);
     const service=createLegacyServiceActions(store,lease,unitOfWork,actions,dispatcher);
-    const speech=createEmbodiedSpeech(store,lease,unitOfWork,actions,dispatcher,async(id,sources,key)=>{
-      await lease.run(id,async()=>{const current=await store.loadEnvelope(id);if(!current)throw Error('生命状态不可用');
-        await unitOfWork.apply(id,current.version,draft=>{
-          const p=draft.legacy as any;
-          const reason=laborBlockReason(draft);if(reason)throw Error(reason);
-          if(sources.some(source=>Object.hasOwn(draft.life.invalidSources,source)||!draft.life.events.some(e=>e.eventId===source)))throw Error('决定来源不可用');
-          const contract=p.labor?.contracts?.find((c:any)=>['working','paused','queued'].includes(c.status)&&c.done<c.trips);if(!contract)throw Error('当前没有搬砖任务');if(contract.status==='paused')throw Error('当前任务已暂停');
-          if(blocksNewLabor(draft))throw Error('已有工作正在等待实际结果');
-          const eventId='speech-work:'+createHash('sha256').update(key).digest('hex');
-          if(draft.life.events.some(e=>e.eventId===eventId))return {};
-          contract.status='working';contract.workPermit=true;contract.batchRemaining=1;contract.workDecisionEvent=eventId;contract.nextDecision=Date.now()+60000;
-          const site=p.worksite||={inside:false,forced:false};site.suppressUntilDecision=false;if(!site.inside)site.requested=true;
-          const at=new Date().toISOString();draft.life.events.push({eventId,petId:id,type:'labor.decision',source:'model',occurredAt:at,receivedAt:at,evidenceLevel:'inferred',payload:{contractId:contract.id,choice:'work',sourceIds:sources}});return {};
-        });});worksiteWake(id);return {status:'PENDING',message:'已提出去搬一趟；进入和完成仍等待身体确认'};
-    },id=>worksite.act(id,'leave-voluntary'));
+    const speech=createEmbodiedSpeech(store,lease,unitOfWork,actions,dispatcher,async(id)=>worksite.act(id,'resume-work'),
+      id=>worksite.act(id,'leave-voluntary'),id=>worksite.act(id,'request-entry'),id=>worksite.act(id,'stop-work'));
     let memeSource:MemeSource=async()=>[];
     const replyMemes=new Map<string,string>();
     const rememberMeme=(text:string,meme?:string)=>{if(meme)replyMemes.set(text,meme);else replyMemes.delete(text);if(replyMemes.size>100)replyMemes.delete(replyMemes.keys().next().value!);};
@@ -185,7 +171,9 @@ export async function main():Promise<void> {
     const memoryIndex=new MemoryIndex(lease,store),embedding=new MemoryEmbedding(lease,store,modelConfig);
     const scheduleMemory=(draft:Parameters<typeof memoryIndex.schedule>[0])=>{memoryIndex.schedule(draft);embedding.schedule(draft);};
     observeCommits(scheduleMemory);
-    const initialIndexState=await store.loadEnvelope(petId);if(initialIndexState)scheduleMemory(initialIndexState);
+    const worksiteReviews=createWorksiteReviews(store,lease,unitOfWork,budget,model,(id,expected)=>worksite.act(id,'stop-work',expected));
+    observeCommits(worksiteReviews.observe);
+    const initialIndexState=await store.loadEnvelope(petId);if(initialIndexState){scheduleMemory(initialIndexState);worksiteReviews.observe(initialIndexState);}
     const retrieval=new CanonicalMemoryRetrieval(lease,desktopIdle,reranker,memoryIndex,embedding), chat=new CanonicalChat(store,lease,unitOfWork,budget,model,(id,q,snapshot)=>retrieval.search(id,q,12,snapshot),(id,key,input)=>domain.laborAction(id,key,input),(id,input)=>service(id,input),id=>worksiteWake(id),grounding);
     let requestShutdown=()=>{};
     let companionManagement:ReturnType<typeof createCompanionManagement>;
@@ -333,10 +321,20 @@ export async function main():Promise<void> {
       }
     }
     let closing=false;
-    const close=async()=>{if(closing)return;closing=true;qq?.stop();model?.dispose();bili?.close();tokens.close();commandChannel.cancelPet(petId);commandChannel.close();
-      const results=await Promise.allSettled([scheduler!.stop(),app!.close(),lease.close()]);
-      if(results[2].status==='fulfilled')await pool.end();
-      if(results.some(result=>result.status==='rejected'))console.error('部分组件未能正常关闭，请检查本次运行状态。');};
+    const close=async()=>{if(closing)return;closing=true;worksiteWake=()=>{};qq?.stop();model?.dispose();bili?.close();tokens.close();commandChannel.cancelPet(petId);
+      // Keep the writer lease alive until an interrupted helper receipt has
+      // actually committed; otherwise a normal restart turns it into UNKNOWN.
+      const schedulerResult=await Promise.allSettled([scheduler!.stop()]);
+      const deadline=Date.now()+5000;
+      while(!lease.signal.aborted&&Date.now()<deadline){
+        const pending=await lease.query("SELECT 1 FROM silicon_genesis.outbox WHERE pet_id=$1 AND state='dispatched' LIMIT 1",[petId]).catch(()=>null);
+        if(!pending||pending.rowCount===0)break;
+        await new Promise(resolve=>setTimeout(resolve,100));
+      }
+      commandChannel.close();
+      const results=await Promise.allSettled([app!.close(),lease.close()]);
+      if(results[1].status==='fulfilled')await pool.end();
+      if([...schedulerResult,...results].some(result=>result.status==='rejected'))console.error('部分组件未能正常关闭，请检查本次运行状态。');};
     requestShutdown=()=>{void close();};
     app.setShutdown(()=>{void close();});
     process.once('SIGINT',()=>{void close();});process.once('SIGTERM',()=>{void close();});

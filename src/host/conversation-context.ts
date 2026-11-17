@@ -48,7 +48,7 @@ export function worksiteFacts(envelope:CanonicalEnvelope) {
   // side the brick is loaded from, and a slightly-off final position should not
   // erase a real, confirmed delivery.
   const completedTrips=(envelope.life.actions??[]).filter(a=>a.actionType==='labor.step' && a.parameters?.contractId===contract?.id && a.sourceIds.every(id=>!Object.hasOwn(envelope.life.invalidSources,id))).filter(a=>(envelope.life.receipts??[]).some(r=>{const details=r.details as Record<string,unknown>;return r.actionId===a.id && r.receiptId===a.receiptId && r.status==='COMPLETED' && details?.index===1 && Date.parse(r.occurredAt)>=enteredAt && envelope.life.events.some(e=>e.causationId===r.receiptId && !Object.hasOwn(envelope.life.invalidSources,e.eventId));})).length;
-  return {inside:site.inside===true,forced:site.forced===true,status:contract?.status??null,completedTotal:contract?.done??null,trips:contract?.trips??null,
+  return {inside:site.inside===true,forced:site.forced===true,workState:site.workState??null,stopReason:site.stopReason??null,status:contract?.status??null,completedTotal:contract?.done??null,trips:contract?.trips??null,
     taskCompleted:!!contract && Number.isFinite(contract.done) && contract.done>=contract.trips,
     wage:contract?.wage??null,paid:contract?.paid??null,remainingPay:contract?Math.max(0,(contract.wage??0)-(contract.paid??0)):null,
     finishedAt:contract?.finished?new Date(contract.finished).toISOString():null,
