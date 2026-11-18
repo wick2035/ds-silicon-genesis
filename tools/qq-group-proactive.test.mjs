@@ -79,12 +79,14 @@ test('platform rejection is distinct from ambiguous network delivery',async()=>{
   }
 });
 
-test('opener decisions see public group context only, rewrite whole sentences, and can stay silent without paying',async()=>{
+test('openers can use private contact timing without private content, rewrite, and stay silent without paying',async()=>{
   const f=fixture();await f.ready();const snapshot=await f.claim();
   snapshot.life.events.push({eventId:'private',type:'conversation.user',source:'desktop',actorId:'dad',payload:{text:'不能公开的私聊'},occurredAt:new Date().toISOString()});
   const calls=[],model={async *stream(o){calls.push(o);yield {type:'text',text:calls.length===1?'鱼'.repeat(20):'群里好安静呀。'};}};
   assert.equal(await generateGroupOpener(snapshot,model,{provider:'test',model:'test'},new AbortController().signal),'群里好安静呀。');
-  assert.equal(calls.length,2);assert.doesNotMatch(JSON.stringify(calls),/不能公开的私聊/);assert.equal(calls[0].tools,undefined);assert.equal(calls[0].embodied,undefined);
+  assert.equal(calls.length,2);assert.doesNotMatch(JSON.stringify(calls),/不能公开的私聊/);
+  for(const call of calls)assert.match(call.system,/收到过爸爸的私聊发言/);
+  assert.equal(calls[0].tools,undefined);assert.equal(calls[0].embodied,undefined);
   const quiet=fixture();await quiet.ready();let dispatched=0,decisions=0;
   const service=createGroupProactive({canonical:quiet.qq,authority:quiet.authority,generate:async()=>{decisions++;return null;},dispatch:async()=>dispatched++});
   await service.run('main',new AbortController().signal);await service.run('main',new AbortController().signal);

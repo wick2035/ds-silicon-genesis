@@ -1,7 +1,7 @@
 import {canChooseLabor} from './forced-labor.js';
 import {recentGroupActivity,GROUP_CONTINUITY} from './group-conversation-context.js';
 import {SPEAKER_MEMORY_RULE} from '../kernel/speech-provenance.js';
-import {privateConversationHistory,historicalMemory,CONVERSATION_CONTINUITY} from './conversation-history.js';
+import {privateConversationHistory,groupPrivateContinuity,historicalMemory,CONVERSATION_CONTINUITY} from './conversation-history.js';
 import {evidenceMemoryPrompt} from './memory-evidence.js';
 import {setSpiritRest} from '../kernel/spirit.js';
 import {promptData} from './prompt-data.js';
@@ -127,15 +127,14 @@ export class CanonicalChat {
       const situation=!toolAware&&envelope ? conversationContext({...state,...envelope.life,version:envelope.version,petId:input.petId} as LifeState,envelope,['chat-user:'+id,...(input.sourceEventIds??[])]) : null;
       const completedUsers=new Set(state.events.filter(e=>e.type==='conversation.assistant'&&live(state,e.eventId)&&e.causationId).map(e=>e.causationId));
       const completedUser=(eventId:string)=>!eventId.startsWith('chat-user:') || completedUsers.has(eventId);
-      const recentContext=privateConversationHistory(state,['chat-user:'+id],4).map(e=>e.content.slice(0,100));
-      const memoryQuery=[text,...recentContext.reverse()].join(' ').slice(0,500);
+      const privateHistory=group?[]:privateConversationHistory(state,['chat-user:'+id]);
+      const memoryQuery=[text,...privateHistory.slice(-4).reverse().map(e=>e.content.slice(0,100))].join(' ').slice(0,500);
       const memories=(group ? [] : await this.search(input.petId,memoryQuery,state)).filter(m=>m.valid && m.sourceIds.every(source=>live(state,source))).slice(0,8);
       const primaryEvidence=group?'':evidenceMemoryPrompt(memories,state);
       const otherMemories=memories.filter(m=>!m.id.startsWith('worksite-episode:'));
       timing('memories');
       const sources=[...new Set(memories.flatMap(m=>m.sourceIds).concat(input.sourceEventIds??[],(input.attachments??[]).map(a=>a.sourceEventId)))];
       const groupId=group?(state.events.find(e=>e.eventId===input.sourceEventIds?.at(-1))?.payload as Record<string,unknown>|undefined)?.groupId:undefined;
-      const privateHistory=group?[]:privateConversationHistory(state,['chat-user:'+id]);
       const groupActivity=group?[]:recentGroupActivity(state);
       const groupActors=group?(input.sourceEventIds??[]).map(source=>state.events.find(e=>e.eventId===source)?.actorId).filter((actor):actor is string=>!!actor):undefined;
       const people=groupPeopleContext(state,groupActors,text);
@@ -183,7 +182,7 @@ export class CanonicalChat {
       // attributed speech and delivery status, not the internal event keys.
       if(!group)system+='\n'+GROUP_CONTINUITY+'\n自己最近的群聊经历：'+promptData(groupActivity.map(({sourceIds,...item})=>item),5000);
       if(!group)system+='\n当前群聊权限与爸爸最近的操作：'+JSON.stringify((state.legacyContext.companion as any)?.groupChat??null)+'。只把实际操作当已发生，可自然表达自己的感受，不假装知道禁止期间的群消息。';
-      if(group)system+='\n群聊正文必须从生成时就写成一句完整、自然的话，最多15个字素，标点和表情也计数。先选最想表达的一点再说，不写需要截断的长句；不合适接话时输出 <qq-silent/>。';
+      if(group)system+='\n'+groupPrivateContinuity(state)+'\n群聊正文必须从生成时就写成一句完整、自然的话，最多15个字素，标点和表情也计数。先选最想表达的一点再说，不写需要截断的长句；不合适接话时输出 <qq-silent/>。';
       const generate=async()=>{
         for await(const part of this.model.llm.stream({...selection,system,streamText:!group,embodiedSnapshot:envelope,beforeActions:initialCommit,embodied:{petId:input.petId,requestId:'chat:'+id,sourceIds:['chat-user:'+id],allowActions:true,privateTime:!group},messages:[...history,{role:'user',content:input.attachments?.length?[{type:'text',text},...input.attachments.map(a=>({type:'image',attachment:{petId:a.petId,id:a.id}}))]:text}],signal:combined,maxTokens:group?120:500,reasoningEffort:'low'})) {
           if(part?.type==='usage'){tokenUsage.inputTokens+=part.inputTokens??0;tokenUsage.outputTokens+=part.outputTokens??0;tokenUsage.cachedTokens+=part.cachedTokens??0;}

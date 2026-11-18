@@ -1,11 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {privateConversationHistory,recentPrivateActivity,privateConversationThread,historicalMemory} from '../dist/host/conversation-history.js';
+import {privateConversationHistory,recentPrivateActivity,privateConversationThread,groupPrivateContinuity,historicalMemory} from '../dist/host/conversation-history.js';
 import {createLegacyResponses} from '../dist/host/legacy-responses.js';
 import {CanonicalChat} from '../dist/host/chat-service.js';
 import {CompanionStore} from '../vendor/pet-plugins/behavior/core.mjs';
 
 const event=(id,type,text,seconds,extra={})=>({eventId:id,type,source:'desktop',occurredAt:new Date(Date.UTC(2026,10,15,9,7,seconds)).toISOString(),payload:{text},...extra});
+
+test('group contact timing uses the Hong Kong day and skips future, pending, and invalid speech',()=>{
+  const now=Date.UTC(2026,10,16,16,2),at=(minutes)=>new Date(now+minutes*60000).toISOString();
+  const contact=event('chat-user:private','conversation.user','私人内容',0,{source:'qq-c2c',actorId:'dad',occurredAt:at(-4)});
+  const state={events:[
+    contact,event('chat-assistant:private','conversation.assistant','私聊答复',0,{source:'qq-c2c',causationId:contact.eventId,occurredAt:at(-3)}),
+    event('chat-user:pending','conversation.user','待回复',0,{occurredAt:at(-1)}),
+    event('deleted','conversation.user','已删除',0,{occurredAt:at(-1)}),
+    event('future','conversation.user','未来',0,{occurredAt:at(1)})],invalidSources:{deleted:'deleted'}};
+  assert.match(groupPrivateContinuity(state,now),/昨天收到过爸爸的私聊发言，距今约4分钟/);
+  assert.equal(groupPrivateContinuity(state,now-5*60000),'');
+  state.invalidSources[contact.eventId]='deleted';
+  assert.equal(groupPrivateContinuity(state,now),'');
+});
 
 test('ambient interaction speech cannot displace recent private dialogue or break its question and answer',()=>{
   const events=[event('chat-user:topic','conversation.user','你自己问小金鲸答应你的大白饭',0,{actorId:'dad'}),
