@@ -71,7 +71,11 @@ function render(state) {
   grow(field.stage);
   get('stage').textContent=labels[field.stage];
   growthSteps.forEach((step,index)=>step.toggleAttribute('data-done',index<field.growth));
-  get('growth-detail').textContent=field.stage==='empty'?'等大肥鱼播种':field.stage==='ripe'?`可收 ${field.expectedBowls} 碗生米`:`已达标 ${field.growth} / 3 日 · 预计 ${field.expectedBowls} 碗`;
+  get('growth-detail').textContent=field.stage==='empty'?(field.operation?'等大肥鱼播种':'待补种子'):field.stage==='ripe'?`可收 ${field.expectedBowls} 碗生米`:`已达标 ${field.growth} / 3 日 · 预计 ${field.expectedBowls} 碗`;
+  const seeds=field.seeds;
+  get('seed-stock').textContent=`${seeds.stock} / ${seeds.limit} 束`;
+  const seedHelp=field.stage==='empty'&&seeds.missing?(field.seedPurchase?`还需买 ${seeds.missing} 束`:'种子和饭钱不足 · 可在「饭钱」页购买'):`每季用 ${seeds.perSeason} 束`;
+  get('seed-detail').textContent=seedHelp;
   get('water').textContent=field.stage==='empty'||field.stage==='ripe'?'—':`${field.watered} / 2 次`;
   if (field.stage==='empty'||field.stage==='ripe') get('water-detail').textContent='每日零点结算';
   else if (field.watered===2) get('water-detail').textContent=field.rain?'今日达标 · 含雨水补给':'今日达标 · 零点结算';

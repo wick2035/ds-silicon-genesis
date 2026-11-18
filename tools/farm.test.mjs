@@ -13,8 +13,12 @@ import {createCognitiveModel} from '../dist/host/cognitive-model.js';
 import {CanonicalActionLifecycle} from '../dist/host/action-lifecycle.js';
 
 const date = (day, hour=0, min=0) => Date.parse(`2026-11-${day}T${String(hour).padStart(2,'0')}:${String(min).padStart(2,'0')}:00+08:00`);
-const fixture = () => ({petId:'main',version:0,legacy:{services:{inventory:[]}},humanity:{helperReady:true,restrained:false,sleeping:false,restingUntil:0},
+const fixture = () => ({petId:'main',version:0,legacy:{services:{inventory:[]},wallet:{balance:100,frozen:false}},humanity:{helperReady:true,restrained:false,sleeping:false,restingUntil:0},
   life:{events:[],memories:[],actions:[],invalidSources:{},constraints:{paused:false}}});
+const tend = (state,operation,id,at) => {
+  const quote=operation==='plant' && farmFacts(state,at).seedPurchase;
+  completeFarmOperation(state,{operation,...(quote?{seedPurchase:quote}:{})},id,at);
+};
 const irrigate = (state,day) => changeFarmWeather(state,'heavy-rain',date(day,8));
 const noRain = (state,day) => changeFarmWeather(state,'light-hail',date(day,8));
 // A deterministic seed with dry weather on the first two dates.
@@ -23,32 +27,32 @@ const drySeed = Array.from({length:200},(_,i)=>`test-${i}`).find(seed=>['16','17
 test('counts planting day, enforces four hours across midnight, and skips a dry day',()=>{
   const s=fixture();
   advanceFarm(s,date(16,10),true,drySeed);
-  completeFarmOperation(s,'plant','sow',date(16,17));
-  completeFarmOperation(s,'water','first',date(16,18));
-  assert.throws(()=>completeFarmOperation(s,'water','early',date(16,21,59)),/浇水时间/);
-  completeFarmOperation(s,'water','second',date(16,22));
+  tend(s,'plant','sow',date(16,17));
+  tend(s,'water','first',date(16,18));
+  assert.throws(()=>tend(s,'water','early',date(16,21,59)),/浇水时间/);
+  tend(s,'water','second',date(16,22));
   advanceFarm(s,date(17));
   assert.equal(farmFacts(s,date(17)).growth,1);
   assert.equal(farmFacts(s,date(17)).nextWaterAt,date(17,2));
-  assert.throws(()=>completeFarmOperation(s,'water','early-next',date(17,1,59)),/浇水时间/);
-  completeFarmOperation(s,'water','next',date(17,2));
+  assert.throws(()=>tend(s,'water','early-next',date(17,1,59)),/浇水时间/);
+  tend(s,'water','next',date(17,2));
   advanceFarm(s,date(18));
   assert.equal(farmFacts(s,date(18)).growth,1);
   irrigate(s,18);advanceFarm(s,date(19));
   assert.equal(farmFacts(s,date(19)).growth,2);
   irrigate(s,19);advanceFarm(s,date(20));
   assert.equal(farmFacts(s,date(20)).stage,'ripe');
-  completeFarmOperation(s,'harvest','cut',date(20));
+  tend(s,'harvest','cut',date(20));
   assert.equal(farmFacts(s,date(20)).rawBowls,6);
-  assert.throws(()=>completeFarmOperation(s,'harvest','cut',date(20)),/稻田状态/);
+  assert.throws(()=>tend(s,'harvest','cut',date(20)),/稻田状态/);
   assert.throws(()=>validateRiceMeal(s,'cut'),/饭的编号不存在/);
 });
 
 test('rain credits and the worst damage survive a same-day weather replacement, while ripe yield stays locked',()=>{
   const s=fixture();
   advanceFarm(s,date(16,7),true,drySeed);
-  completeFarmOperation(s,'plant','sow',date(16,7));
-  completeFarmOperation(s,'water','water',date(16,7));
+  tend(s,'plant','sow',date(16,7));
+  tend(s,'water','water',date(16,7));
   changeFarmWeather(s,'light-rain',date(16,8));
   assert.equal(farmFacts(s,date(16,8)).watered,2);
   changeFarmWeather(s,'light-hail',date(16,9));
@@ -60,14 +64,14 @@ test('rain credits and the worst damage survive a same-day weather replacement, 
   irrigate(s,17);irrigate(s,18);advanceFarm(s,date(19));
   changeFarmWeather(s,'heavy-typhoon',date(19,10));
   assert.equal(farmFacts(s,date(19,10)).expectedBowls,0);
-  completeFarmOperation(s,'harvest','cut',date(19,10));
+  tend(s,'harvest','cut',date(19,10));
   assert.equal(farmFacts(s,date(19,10)).lastHarvest,0);
   assert.equal(farmFacts(s,date(19,10)).operation,'plant');
 });
 
 test('settles offline deterministically with weather only and without attributing weather to the user',()=>{
   const a=fixture();
-  advanceFarm(a,date(16,7),true,drySeed);completeFarmOperation(a,'plant','sow',date(16,7));
+  advanceFarm(a,date(16,7),true,drySeed);tend(a,'plant','sow',date(16,7));
   const b=structuredClone(a);
   noRain(a,16);noRain(b,16);
   advanceFarm(a,date(25));
@@ -110,22 +114,31 @@ test('scene checks helper generation, worksite ownership and the completed anima
   await helper('enter');
   await assert.rejects(worksite.act('main','enter-forced'),/她在稻田/);
   await helper('leave');
-  const intent={id:'sow',type:'farm.tend',payload:{parameters:{operation:'plant'}}};
+  state.legacy.farmSeedBundles=4;
+  const intent={id:'sow',type:'farm.tend',payload:{parameters:{operation:'plant',seedPurchase:farmFacts(state,now).seedPurchase}}};
   const receipt=scene.execute('main',intent,gate.signal);
   await new Promise(setImmediate);
   assert.equal((await helper('snapshot')).command.id,'sow');
   await helper('start','sow');
   await assert.rejects(helper('complete','sow'),/回执无效/);
   assert.equal(farmFacts(state,now).stage,'empty');
+  assert.equal(state.legacy.wallet.balance,100);
+  assert.equal(farmFacts(state,now).seeds.stock,4);
   now+=1600;
   await helper('complete','sow');
   await assert.rejects(helper('complete','sow'),/回执无效/);
   const completed=checkFarmReceipt(state,intent,await receipt,now);
   const midnight=date(17);
   assert.equal(checkFarmReceipt(state,intent,completed,midnight).status,'cancelled');
+  const changed=structuredClone(state);changed.legacy.config={costs:{riceSeed:2}};
+  assert.equal(checkFarmReceipt(changed,intent,completed,now).status,'cancelled');
+  assert.equal(changed.legacy.wallet.balance,100);
   projectOutcome(state,intent,completed,new Date(now).toISOString(),'result:sow');
   assert.equal(farmVisit(state),undefined);
   assert.equal(farmFacts(state,now).stage,'seedling');
+  assert.equal(state.legacy.wallet.balance,80);
+  assert.equal(farmFacts(state,now).seeds.stock,0);
+  assert.equal(state.life.events.filter(event=>event.payload?.kind==='farm-seeds').length,1);
   assert.equal((await helper('snapshot')).inside,false);
   await helper('enter');
   await scene.disconnected('main',epoch);
@@ -143,7 +156,7 @@ test('the cognition model may skip or propose a farm action, and old weather can
     const farm=JSON.parse(request.messages[0].content).当前.legacyContext.farm;
     assert.equal(farm.operation,'plant');
     assert.equal(farm.rawBowls,0);
-    const action=wantsToPlant?{actionType:'farm.tend',parameters:{operation:'plant'},priority:50,interruptPolicy:'interruptible',requiredCapabilities:['farm.tend'],sourceIds:[farm.weatherEventId]}:null;
+    const action=wantsToPlant?{actionType:'farm.tend',parameters:{operation:'plant',seedPurchase:farm.seedPurchase},priority:50,interruptPolicy:'interruptible',requiredCapabilities:['farm.tend'],sourceIds:[farm.weatherEventId]}:null;
     yield {type:'text',text:JSON.stringify({action,thought:null,goals:[],goalUpdates:[],plan:[],interests:[],selfModel:[]})};
   }},()=>({provider:'fixture',model:'fixture'}));
   const cognition=new Cognition(model,{reserve:async()=>({}),withReserved:async(_id,_ticket,fn)=>fn()},
@@ -160,4 +173,18 @@ test('the cognition model may skip or propose a farm action, and old weather can
   assert.equal(lifecycle.prepare(structuredClone(s),intent).allowed,true);
   changeFarmWeather(s,'heavy-hail',now);
   assert.match(lifecycle.prepare(s,intent).reason,/当前天气重新决定/);
+});
+
+test('a season takes 24 bundles, existing seed stock is used first, and a shortage requires a current purchase quote',()=>{
+  const s=fixture(),now=date(16,8);
+  advanceFarm(s,now,true,drySeed);
+  s.legacy.wallet.balance=23.99;
+  assert.equal(farmFacts(s,now).operation,null);
+  assert.throws(()=>completeFarmOperation(s,{operation:'plant'},'sow',now),/种子或饭钱不足/);
+  s.legacy.farmSeedBundles=72;
+  assert.equal(farmFacts(s,now).seedPurchase,null);
+  tend(s,'plant','sow',now);
+  assert.equal(farmFacts(s,now).seeds.stock,48);
+  assert.equal(farmFacts(s,now).expectedBowls,6);
+  assert.equal(s.legacy.wallet.balance,23.99);
 });

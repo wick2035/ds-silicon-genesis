@@ -1,10 +1,10 @@
-export const actionCatalog = {'self.express':'{text:string,meme?:string}','service.sweet':'{}','care.water':'{}','service.buy-rice':'{}','service.eat-rice':'{itemId:string}','labor.step':'{contractId:string,commandId:string}','token.pickup':'{coinId:string}','farm.tend':'{operation:"plant"|"water"|"harvest"}','body.activity':'{activity:"walk"|"run"|"play"|"cube"|"juggle"|"dance"|"hum"|"stretch"|"bubble"|"look",target?:"left"|"right"|"center"}','body.sleep':'{mode?:"nap"}','body.wake':'{}','image.observe':'{query:string,attachmentId:string,attachmentSourceId:string}','learning.observe':'{kind:"search"|"fetch"|"bili",query:string,url?:string,followUpQuestion?:string}'} as const;
+export const actionCatalog = {'self.express':'{text:string,meme?:string}','service.sweet':'{}','care.water':'{}','service.buy-rice':'{}','service.eat-rice':'{itemId:string}','labor.step':'{contractId:string,commandId:string}','token.pickup':'{coinId:string}','farm.tend':'{operation:"plant"|"water"|"harvest",seedPurchase?:{count:number,unitCharge:number}}','body.activity':'{activity:"walk"|"run"|"play"|"cube"|"juggle"|"dance"|"hum"|"stretch"|"bubble"|"look",target?:"left"|"right"|"center"}','body.sleep':'{mode?:"nap"}','body.wake':'{}','image.observe':'{query:string,attachmentId:string,attachmentSourceId:string}','learning.observe':'{kind:"search"|"fetch"|"bili",query:string,url?:string,followUpQuestion?:string}'} as const;
 export function validateActionParameters(type:string,p:Record<string,unknown>):void {
   const str=(v:unknown,max:number)=>typeof v==='string'&&v.trim().length>0&&v.length<=max;
   if(!p||typeof p!=='object'||Array.isArray(p))throw Error('行动参数无效');
   const fields:Record<string,string[]>={'self.express':['text','meme'],'service.sweet':['legacyCommand'],
     'service.buy-rice':['legacyCommand'],'care.feed':['legacyCommand'],'care.water':['legacyCommand'],'care.pet':['legacyCommand'],'care.play':['legacyCommand'],'care.soothe':['legacyCommand'],'care.accompany':['legacyCommand'],'body.sleep':['legacyCommand','mode'],'body.wake':['legacyCommand'],
-    'body.activity':['activity','target'],'farm.tend':['operation'],
+    'body.activity':['activity','target'],'farm.tend':['operation','seedPurchase'],
     'service.eat-rice':['itemId','legacyCommand'],'token.pickup':['coinId'],'labor.step':['contractId','commandId'],
     'image.observe':['query','attachmentId','attachmentSourceId','legacyCommand','kind','wishId'],
     'learning.observe':['kind','query','url','followUpQuestion','legacyCommand','wishId','careAction']};
@@ -14,7 +14,13 @@ export function validateActionParameters(type:string,p:Record<string,unknown>):v
   if(type==='service.sweet')return;
   if(type==='body.sleep' && p.mode!==undefined && p.mode!=='nap')throw Error('睡眠模式无效');
   if(['service.buy-rice','care.feed','care.water','care.pet','care.play','care.soothe','care.accompany','body.sleep','body.wake'].includes(type))return;
-  if(type==='farm.tend' && ['plant','water','harvest'].includes(String(p.operation)))return;
+  if(type==='farm.tend' && ['plant','water','harvest'].includes(String(p.operation))) {
+    if(p.seedPurchase===undefined)return;
+    if(p.operation==='plant' && p.seedPurchase && typeof p.seedPurchase==='object' && !Array.isArray(p.seedPurchase)) {
+      const {count,unitCharge}=p.seedPurchase as Record<string,unknown>;
+      if(Object.keys(p.seedPurchase).length===2 && typeof count==='number' && Number.isSafeInteger(count) && count>0 && typeof unitCharge==='number' && Number.isFinite(unitCharge) && unitCharge>=0)return;
+    }
+  }
   if(type==='body.activity' && ['walk','run','play','cube','juggle','dance','hum','stretch','bubble','look'].includes(String(p.activity)) && (['walk','run'].includes(String(p.activity)) ? ['left','right','center'].includes(String(p.target)) : p.target===undefined))return;
   if(type==='image.observe'&&str(p.query,300)&&typeof p.attachmentId==='string'&&/^image:[a-f0-9]{64}$/.test(p.attachmentId)&&str(p.attachmentSourceId,200))return;
   if(type==='service.eat-rice'&&str(p.itemId,200))return;

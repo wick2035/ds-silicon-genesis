@@ -55,6 +55,30 @@ test('录入任务直接生效且欠薪可独立结算，重复支付只入账�
   assert.equal(f.get().legacy.labor.contracts[0].status,'paid');
 });
 
+test('种子单价可设为零，批量购买受饭钱和 72 束库存限制，重试只扣一次',async()=>{
+  const f=fixture();
+  const buy=(requestId,count,unitCharge)=>f.finance.write('main',{kind:'farm-seeds',requestId,count,unitCharge});
+  const initial=await f.finance.read('main');
+  assert.equal(initial.costs.riceSeed,1);
+  assert.equal(initial.seedShop.stock,0);
+  assert.equal(initial.seedShop.maxPurchase,72);
+  assert.equal(initial.seedShop.perSeason,24);
+  f.get().legacy.wallet.balance=48.01;
+  await assert.rejects(buy('seed-over-budget',49,1),/饭钱不足/);
+  await buy('seed-first-24',24,1);await buy('seed-first-24',24,1);
+  assert.equal(f.get().legacy.wallet.balance,24.01);
+  assert.equal((await f.finance.read('main')).seedShop.stock,24);
+  assert.equal(f.get().life.events.filter(e=>e.type==='wallet.spend'&&e.payload.kind==='farm-seeds').length,1);
+  const setPrice=(requestId,riceSeed)=>f.finance.write('main',{kind:'costs',requestId,costs:{...initial.costs,riceSeed}});
+  await assert.rejects(setPrice('seed-price-bad',-1),/价格须为/);
+  await setPrice('seed-price-zero',0);
+  await assert.rejects(buy('seed-price-stale',1,1),/价格或消费状态已变化/);
+  await assert.rejects(buy('seed-over-cap',49,0),/最多可放 72 束/);
+  await buy('seed-fill-cap',48,0);
+  assert.equal((await f.finance.read('main')).seedShop.stock,72);
+  assert.equal(f.get().legacy.wallet.balance,24.01);
+});
+
 test('饭钱 HTTP 接口校验授权、方法及错误',async()=>{
   const f=fixture(),handler=createLifeApi({authorize:r=>r.headers.get('x-test')==='yes',petId:()=> 'main',getState:async()=>{throw Error('unexpected');},finance:f.finance});
   const req=(method,body,auth=true)=>new Request('http://localhost/api/life/finance',{method,headers:{...(auth?{'x-test':'yes'}:{}),...(body?{'content-type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});

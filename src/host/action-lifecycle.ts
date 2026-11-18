@@ -1,4 +1,4 @@
-import {farmActionTarget,farmFacts,farmVisit,type FarmOperation} from './farm.js';
+import {farmActionTarget,farmFacts,farmVisit,type FarmAction} from './farm.js';
 import {checkFarmBody,checkFarmReceipt} from './farm-scene.js';
 import {hasForcedWork} from './forced-labor.js';
 import {hasActiveConversation} from './active-conversation.js';
@@ -111,7 +111,7 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
       if(farmVisit(draft) && (action.actionType.startsWith('care.') || ['service.eat-rice','body.sleep','body.wake','token.pickup','body.activity'].includes(action.actionType)))throw Error('她在稻田里，请先接她回桌面');
       if(action.actionType==='farm.tend'){
         const now=this.clock().valueOf();checkFarmBody(draft,now,true);
-        farmActionTarget(draft,action.parameters.operation as FarmOperation,now);
+        farmActionTarget(draft,action.parameters as FarmAction,now);
         if(!action.sourceIds.includes(farmFacts(draft,now)!.weatherEventId))throw Error('请根据稻田当前天气重新决定');
       }
       if(action.actionType==='body.activity' && ((draft.legacy as Record<string,any>).space?.mode!=='outside' || (draft.legacy as Record<string,any>).labor?.contracts?.some((c:any)=>c.status==='working')))throw Error('当前桌面空间或工作状态不允许走动');

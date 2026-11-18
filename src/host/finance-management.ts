@@ -1,6 +1,7 @@
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 import type {PetGate} from '../storage/uow.js';
 import type {LegacyDomain} from './legacy-domain.js';
+import {farmSeedShop} from './farm.js';
 
 type Reader={loadEnvelope(id:string):Promise<CanonicalEnvelope|null>};
 const money=(value:unknown,max:number):value is number=>typeof value==='number' && Number.isFinite(value) && value>=0 && value<=max && Math.abs(value*100-Math.round(value*100))<1e-5;
@@ -13,7 +14,8 @@ export function createFinanceManagement(store:Reader,gate:PetGate,domain:LegacyD
       const envelope=await store.loadEnvelope(id);if(!envelope)throw Error('饭钱状态不可用');
       const p=envelope.legacy as Record<string,any>, labor=p.labor||{},contracts=Array.isArray(labor.contracts)?labor.contracts:[];
       const pending=contracts.filter((c:any)=>['offered','working','paused','queued'].includes(c.status) && c.done<c.trips);
-      return {wallet:p.wallet,costs:p.config?.costs,labor:{current:pending[0]||null,queue:pending.slice(1),history:contracts.filter((c:any)=>['paid','declined','cancelled','unpaid'].includes(c.status)).slice().reverse(),execution:labor.execution||null},
+      const seedShop=farmSeedShop(envelope.legacy);
+      return {wallet:p.wallet,costs:{...p.config?.costs,riceSeed:seedShop.price},seedShop,labor:{current:pending[0]||null,queue:pending.slice(1),history:contracts.filter((c:any)=>['paid','declined','cancelled','unpaid'].includes(c.status)).slice().reverse(),execution:labor.execution||null},
         events:(Array.isArray(p.events)?p.events:[]).filter((e:any)=>['wallet','wallet-spend','labor'].includes(e.kind)).slice(-30).reverse().map((e:any)=>({id:e.id,text:e.text,ts:e.ts}))};
     }),
     write:async(id:string,input:Record<string,unknown>)=>{
@@ -31,8 +33,13 @@ export function createFinanceManagement(store:Reader,gate:PetGate,domain:LegacyD
       if(input.kind==='costs') {
         const costs=input.costs;if(!costs||typeof costs!=='object'||Array.isArray(costs))throw Error('消费价格无效');
         const values=costs as Record<string,unknown>;
-        if(Object.keys(values).length!==costNames.length||costNames.some(k=>!money(values[k],100000)))throw Error('价格须为 0–100000，最多两位小数');
-        return domain.configure(id,requestId,{costs:Object.fromEntries(costNames.map(k=>[k,values[k]]))});
+        const keys=Object.hasOwn(values,'riceSeed')?[...costNames,'riceSeed']:costNames;
+        if(Object.keys(values).length!==keys.length||keys.some(k=>!money(values[k],100000)))throw Error('价格须为 0–100000，最多两位小数');
+        return domain.configure(id,requestId,{costs:Object.fromEntries(keys.map(k=>[k,values[k]]))});
+      }
+      if(input.kind==='farm-seeds') {
+        if(typeof input.count!=='number'||!Number.isSafeInteger(input.count)||input.count<1||!money(input.unitCharge,100000))throw Error('种子数量或报价无效');
+        return domain.buyFarmSeeds(id,requestId,input.count,input.unitCharge);
       }
       if(input.kind==='labor') {
         const action=input.action;

@@ -2,6 +2,9 @@ import {createHash, randomUUID} from 'node:crypto';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 
 export const FARM_WATER_GAP = 4 * 60 * 60 * 1000;
+const SEEDS_PER_SEASON = 24;
+const SEED_LIMIT = SEEDS_PER_SEASON * 3;
+const DEFAULT_SEED_PRICE = 1;
 const DAY = 24 * 60 * 60 * 1000;
 const hongKongDate = new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Hong_Kong', year:'numeric', month:'2-digit', day:'2-digit'});
 
@@ -17,12 +20,42 @@ export const farmWeather = {
 
 export type FarmWeather = keyof typeof farmWeather;
 export type FarmOperation = 'plant'|'water'|'harvest';
+type SeedQuote = {count:number; unitCharge:number};
+export type FarmAction = {operation:FarmOperation; seedPurchase?:SeedQuote};
 export type FarmVisit = {id:string; epoch:string; actionId?:string};
 type FarmCrop = {id:string; growth:number; loss:number; waters:number; rain:number; dayLoss:number; lastWaterAt?:number};
 type FarmDay = {date:string; weather:FarmWeather; eventId:string};
 type Farm = {seed:string; day:FarmDay; crop:FarmCrop|null; rawBowls:number; lastHarvest:number|null};
-type FarmStorage = {farm?:Farm; farmVisit?:FarmVisit};
+type FarmStorage = {farm?:Farm; farmVisit?:FarmVisit; farmSeedBundles?:number};
 const storage = (draft:CanonicalEnvelope) => draft.legacy as FarmStorage;
+
+export function farmSeedShop(legacy:CanonicalEnvelope['legacy']) {
+  const pet = legacy as Record<string,any>;
+  const stock = (legacy as FarmStorage).farmSeedBundles ?? 0;
+  const price = pet.config?.costs?.riceSeed ?? DEFAULT_SEED_PRICE;
+  const charge = pet.wallet?.frozen === true ? 0 : price;
+  const balance = pet.wallet?.balance;
+  const affordable = !Number.isFinite(balance) || balance < 0 ? 0 : charge === 0 ? SEED_LIMIT : Math.floor(Math.round(balance * 100) / Math.round(charge * 100));
+  return {stock,limit:SEED_LIMIT,perSeason:SEEDS_PER_SEASON,missing:Math.max(0,SEEDS_PER_SEASON-stock),price,charge,maxPurchase:Math.min(SEED_LIMIT - stock,affordable)};
+}
+
+export function purchaseFarmSeeds(draft:Pick<CanonicalEnvelope,'legacy'|'life'|'petId'>, count:number, expectedCharge:number, key:string, at:number) {
+  const shop = farmSeedShop(draft.legacy);
+  if (shop.charge !== expectedCharge) throw Error('种子价格或消费状态已变化，请刷新后重试');
+  if (!Number.isInteger(count) || count < 1 || count > shop.limit - shop.stock) throw Error(`种子库存最多可放 ${shop.limit} 束`);
+  if (count > shop.maxPurchase) throw Error('饭钱不足，无法购买这么多种子');
+  const pet = draft.legacy as Record<string,any>, wallet = pet.wallet;
+  const amount = Math.round(shop.charge * 100) * count / 100;
+  const before = wallet.balance;
+  wallet.balance = (Math.round(before * 100) - Math.round(amount * 100)) / 100;
+  if (before > 0 && wallet.balance === 0) {wallet.emptySince = at;delete wallet.emptyAskedAt;}
+  (draft.legacy as FarmStorage).farmSeedBundles = shop.stock + count;
+  const description = `买入 ${count} 束水稻种子，花费 ${amount} token，余额 ${wallet.balance} token`;
+  const eventId = `finance:${key}`, stamp = new Date(at).toISOString();
+  (pet.events ??= []).push({id:eventId,kind:'wallet-spend',text:description,ts:at});
+  draft.life.events.push({eventId,petId:draft.petId,type:'wallet.spend',source:'canonical',occurredAt:stamp,receivedAt:stamp,evidenceLevel:'observed',payload:{kind:'farm-seeds',count,amount,balance:wallet.balance,description}});
+  return {count,amount,stock:shop.stock + count};
+}
 
 export const farmDay = (at:number) => hongKongDate.format(at);
 const dayStart = (date:string) => Date.parse(`${date}T00:00:00+08:00`);
@@ -111,27 +144,37 @@ export function farmFacts(draft:CanonicalEnvelope, at = Date.now()) {
   const growing = crop && growth < 3;
   const watered = growing ? Math.min(2,crop.waters + crop.rain) : 0;
   const nextWater = growing && watered < 2 ? Math.max(dayStart(day.date),(crop.lastWaterAt ?? 0) + FARM_WATER_GAP) : null;
-  const operation:FarmOperation|null = day.date !== farmDay(at) ? null : !crop ? 'plant' : stage === 'ripe' ? 'harvest' : nextWater !== null && nextWater <= at ? 'water' : null;
+  const seeds = farmSeedShop(draft.legacy);
+  const operation:FarmOperation|null = day.date !== farmDay(at) ? null : !crop ? (seeds.maxPurchase >= seeds.missing ? 'plant' : null) : stage === 'ripe' ? 'harvest' : nextWater !== null && nextWater <= at ? 'water' : null;
+  const seedPurchase = operation === 'plant' && seeds.missing > 0 ? {count:seeds.missing,unitCharge:seeds.charge} : null;
   return {date:day.date,weather:day.weather,weatherLabel:farmWeather[day.weather].label, weatherEventId:day.eventId,stage,growth,
-    watered,rain:growing ? crop.rain : 0,nextWaterAt:nextWater,rawBowls,lastHarvest,
+    watered,rain:growing ? crop.rain : 0,nextWaterAt:nextWater,rawBowls,lastHarvest,seeds,seedPurchase,
     expectedBowls:crop ? Math.max(0,6 - crop.loss - crop.dayLoss) : null,operation};
 }
 
-export function farmActionTarget(draft:CanonicalEnvelope, operation:FarmOperation, at:number) {
+export function farmActionTarget(draft:CanonicalEnvelope, {operation,seedPurchase}:FarmAction, at:number) {
   const facts = farmFacts(draft,at);
+  if (operation === 'plant' && facts?.stage === 'empty') {
+    const seeds = facts.seeds;
+    if (seeds.missing > 0 && (seeds.maxPurchase < seeds.missing || seedPurchase?.count !== seeds.missing || seedPurchase.unitCharge !== seeds.charge)) throw Error('种子或饭钱不足，或购买报价已变化');
+    if (seeds.missing === 0 && seedPurchase !== undefined) throw Error('已有足够种子，可直接播种');
+  }
   if (facts?.operation !== operation) throw Error('稻田状态已变化或还没到浇水时间');
   return {date:facts.date,cropId:storage(draft).farm?.crop?.id ?? null};
 }
 
-export function completeFarmOperation(draft:CanonicalEnvelope, operation:FarmOperation, actionId:string, at:number) {
-  farmActionTarget(draft,operation,at);
+export function completeFarmOperation(draft:CanonicalEnvelope, action:FarmAction, actionId:string, at:number) {
+  farmActionTarget(draft,action,at);
+  const {operation,seedPurchase} = action;
   const farm = storage(draft).farm!;
   let description:string, bowls:number|undefined;
   switch (operation) {
     case 'plant': {
+      if (seedPurchase) purchaseFarmSeeds(draft,seedPurchase.count,seedPurchase.unitCharge,actionId,at);
+      storage(draft).farmSeedBundles = (storage(draft).farmSeedBundles ?? 0) - SEEDS_PER_SEASON;
       const weather = farmWeather[farm.day.weather];
       farm.crop = {id:actionId,growth:0,loss:0,waters:0,rain:weather.water,dayLoss:weather.loss};
-      description = '我在稻田里种下了一季水稻。';
+      description = `我用 ${SEEDS_PER_SEASON} 束种子种下了一季水稻。`;
       break;
     }
     case 'water':

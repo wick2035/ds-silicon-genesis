@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {manageLabor} from './labor-management.js';
+import {purchaseFarmSeeds} from './farm.js';
 import {invalidateDependents} from '../kernel/index.js';
 import type {LifeState} from '../kernel/types.js';
 import { rebuildRelationships } from '../kernel/index.js';
@@ -166,6 +167,10 @@ export class LegacyDomain {
     });
   }
   configure(petId: string, requestId: string, input: Record<string, unknown>): Promise<unknown> { return this.call(petId,requestId,'configure',[input]); }
+  buyFarmSeeds(petId:string, requestId:string, count:number, unitCharge:number):Promise<unknown> {
+    return this.mutate(petId,requestId,'buy-farm-seeds',{count,unitCharge},(store,draft)=>store.update(petId,(pet:Obj)=>
+      purchaseFarmSeeds({...draft,legacy:pet},count,unitCharge,'farm-seeds:'+requestId,store.clock())));
+  }
   grant(petId: string, requestId: string, ability: string, action: string): Promise<unknown> { return this.call(petId,requestId,'grant',[ability,action]); }
   configureNetwork(petId: string, requestId: string, enabled: boolean): Promise<unknown> { return this.call(petId,requestId,'configureNetwork',[enabled]); }
   memory(petId: string, requestId: string, input: Record<string, unknown>): Promise<unknown> { return this.call(petId,requestId,'memory',[input]); }

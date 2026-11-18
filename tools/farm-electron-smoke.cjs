@@ -69,7 +69,7 @@ app.whenReady().then(async()=>{
   await until(()=>!farmVisit(state) && desktop.isVisible());
 
   await farm.weather('main','light-rain');
-  const plant={id:'electron-sow',type:'farm.tend',payload:{parameters:{operation:'plant'}}};
+  const plant={id:'electron-sow',type:'farm.tend',payload:{parameters:{operation:'plant',seedPurchase:farmFacts(state).seedPurchase}}};
   const animate=farm.execute('main',plant,gate.signal);
   await until(()=>render('document.getElementById("farmer").src.includes("plant.gif")'));
   const completed=checkFarmReceipt(state,plant,await animate,Date.now());
@@ -77,6 +77,8 @@ app.whenReady().then(async()=>{
   projectOutcome(state,plant,completed,new Date().toISOString(),'action-result:electron-sow');
   await until(()=>render('document.querySelectorAll(".crop img").length === 24'));
   assert.equal(farmFacts(state).stage,'seedling');
+  assert.equal(state.legacy.wallet.balance,76);
+  assert.equal(await render('document.getElementById("seed-stock").textContent'),'0 / 72 束');
   await until(()=>desktop.isVisible());
   if(process.env.SILICON_FARM_SMOKE_IMAGE) {
     await until(()=>render('document.getElementById("visit").textContent === "带她进田" && !document.getElementById("visit").disabled'));
@@ -93,7 +95,7 @@ app.whenReady().then(async()=>{
   await until(()=>render('document.getElementById("scene").dataset.weather === "heavy-typhoon"'));
   win.setContentSize(490,575);
   await until(()=>render('window.innerWidth <= 500'));
-  assert.equal(await render('document.documentElement.scrollWidth === innerWidth'),true);
+  assert.equal(await render('document.documentElement.scrollWidth === document.documentElement.clientWidth'),true);
   assert.equal(await render('document.querySelector(".field-notes").getBoundingClientRect().top > document.querySelector(".scene").getBoundingClientRect().bottom'),true);
   await win.webContents.debugger.attach('1.3');
   await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]});

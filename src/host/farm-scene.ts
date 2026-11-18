@@ -1,12 +1,12 @@
 import {randomUUID} from 'node:crypto';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 import type {ExecutionReceipt, OutboxIntent, PetGate, UnitOfWork} from '../storage/uow.js';
-import {advanceFarm, changeFarmWeather, farmActionTarget, farmFacts, farmVisit, farmWeather, needsFarmAdvance, setFarmVisit, type FarmOperation, type FarmWeather} from './farm.js';
+import {advanceFarm, changeFarmWeather, farmActionTarget, farmFacts, farmVisit, farmWeather, needsFarmAdvance, setFarmVisit, type FarmAction, type FarmWeather} from './farm.js';
 
 const CLIP_MS = 1600;
 type Reader = {loadEnvelope(id:string):Promise<CanonicalEnvelope|null>};
 type OpenRequest = {id:string; promise:Promise<void>; finish:(error?:Error)=>void};
-type ActiveCommand = {id:string; operation:FarmOperation; epoch:string; target:ReturnType<typeof farmActionTarget>;
+type ActiveCommand = {id:string; action:FarmAction; epoch:string; target:ReturnType<typeof farmActionTarget>;
   started?:{at:number; visitId:string}; finish:(receipt:ExecutionReceipt)=>void};
 
 export function checkFarmBody(state:CanonicalEnvelope, now:number, autonomous:boolean) {
@@ -21,8 +21,7 @@ export function checkFarmReceipt(state:CanonicalEnvelope, intent:OutboxIntent, r
   const {evidence} = receipt;
   try {
     checkFarmBody(state,now,true);
-    const operation = (intent.payload.parameters as {operation:FarmOperation}).operation;
-    const target = farmActionTarget(state,operation,now);
+    const target = farmActionTarget(state,intent.payload.parameters as FarmAction,now);
     if (evidence.confirmed !== true || evidence.actionId !== intent.id || evidence.kind !== intent.type ||
       evidence.date !== target.date || evidence.cropId !== target.cropId || !evidence.visitId || evidence.visitId !== farmVisit(state)?.id) throw Error('稻田动作回执已失效');
     return {...receipt,evidence:{...evidence,settledAt:now}};
@@ -55,7 +54,7 @@ export function createFarmScene(store:Reader, gate:PetGate, uow:UnitOfWork, cloc
     const latest = await load(id);
     const state = needsFarmAdvance(latest,clock()) ? await settle(id) : latest;
     const cmd = active.get(id), opening = openings.get(id);
-    const command = cmd && cmd.epoch === epoch ? {id:cmd.id,operation:cmd.operation,clipMs:CLIP_MS} : null;
+    const command = cmd && cmd.epoch === epoch ? {id:cmd.id,operation:cmd.action.operation,clipMs:CLIP_MS} : null;
     const inside = !!epoch && farmVisit(state)?.epoch === epoch;
     return {field:farmFacts(state,clock()),inside,command,openRequestId:opening?.id,
       worksiteInside:(state.legacy as any).worksite?.inside === true};
@@ -94,12 +93,12 @@ export function createFarmScene(store:Reader, gate:PetGate, uow:UnitOfWork, cloc
       return {field:(await snapshot(id)).field};
     },
     async execute(id:string, intent:OutboxIntent, signal:AbortSignal):Promise<ExecutionReceipt> {
-      const owner = epoch, operation = (intent.payload.parameters as {operation:FarmOperation}).operation;
+      const owner = epoch, action = intent.payload.parameters as FarmAction;
       try {
         if (!owner || signal.aborted) throw Error('稻田窗口尚未连接');
         const state = await settle(id);
         checkFarmBody(state,clock(),true);
-        const target = farmActionTarget(state,operation,clock());
+        const target = farmActionTarget(state,action,clock());
         if (owner !== epoch || signal.aborted || active.has(id)) throw Error('稻田窗口暂不可用');
         return await new Promise<ExecutionReceipt>(resolve=>{
           const timeout = setTimeout(()=>cancel(id,'稻田动作等待超时'),15000);
@@ -107,7 +106,7 @@ export function createFarmScene(store:Reader, gate:PetGate, uow:UnitOfWork, cloc
           const finish:ActiveCommand['finish'] = result => {
             clearTimeout(timeout);signal.removeEventListener('abort',aborted);active.delete(id);resolve(result);
           };
-          active.set(id,{id:intent.id,operation,epoch:owner,target,finish});
+          active.set(id,{id:intent.id,action,epoch:owner,target,finish});
           signal.addEventListener('abort',aborted,{once:true});
           if (signal.aborted) aborted();
         });
@@ -142,7 +141,7 @@ export function createFarmScene(store:Reader, gate:PetGate, uow:UnitOfWork, cloc
             if (epoch !== owner || active.get(id) !== cmd) throw Error('稻田动作已中断');
             const now = clock();
             checkFarmBody(draft,now,true);
-            const target = farmActionTarget(draft,cmd.operation,now);
+            const target = farmActionTarget(draft,cmd.action,now);
             if (target.cropId !== cmd.target.cropId || target.date !== cmd.target.date) throw Error('稻田状态已变化');
             if (farmVisit(draft)?.epoch !== owner) setFarmVisit(draft,{id:randomUUID(),epoch:owner,actionId:cmd.id});
             return {};

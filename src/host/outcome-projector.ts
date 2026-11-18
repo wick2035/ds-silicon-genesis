@@ -1,4 +1,4 @@
-import {completeFarmOperation,farmVisit,setFarmVisit,type FarmOperation} from './farm.js';
+import {completeFarmOperation,farmVisit,setFarmVisit,type FarmAction} from './farm.js';
 import {sweetPrice} from './spirit-activity.js';
 import {mergeDuplicateGoals} from '../kernel/goal-lifecycle.js';
 import {setSpiritRest,advanceSpirit} from '../kernel/spirit.js';
@@ -44,7 +44,7 @@ function forcedEffort(draft:CanonicalEnvelope,contract:Obj,next:Obj,human:Obj,ef
  * Unknown, failed and cancelled operations never create positive outcomes. */
 export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, receipt: ExecutionReceipt, occurredAt: string, sourceEventId: string): void {
   if(intent.type==='farm.tend') {
-    if(receipt.status==='completed')completeFarmOperation(draft,(intent.payload.parameters as {operation:FarmOperation}).operation,intent.id,Number(receipt.evidence.settledAt));
+    if(receipt.status==='completed')completeFarmOperation(draft,intent.payload.parameters as FarmAction,intent.id,Number(receipt.evidence.settledAt));
     if(farmVisit(draft)?.actionId===intent.id)setFarmVisit(draft);
     return;
   }
