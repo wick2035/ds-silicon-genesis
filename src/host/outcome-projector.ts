@@ -1,3 +1,4 @@
+import {completeFarmOperation,farmVisit,setFarmVisit,type FarmOperation} from './farm.js';
 import {sweetPrice} from './spirit-activity.js';
 import {mergeDuplicateGoals} from '../kernel/goal-lifecycle.js';
 import {setSpiritRest,advanceSpirit} from '../kernel/spirit.js';
@@ -31,6 +32,11 @@ function forcedEffort(draft:CanonicalEnvelope,contract:Obj,next:Obj,human:Obj,ef
  * Called inside the same locked DB transaction as the receipt and outbox update.
  * Unknown, failed and cancelled operations never create positive outcomes. */
 export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, receipt: ExecutionReceipt, occurredAt: string, sourceEventId: string): void {
+  if(intent.type==='farm.tend') {
+    if(receipt.status==='completed')completeFarmOperation(draft,(intent.payload.parameters as {operation:FarmOperation}).operation,intent.id,Number(receipt.evidence.settledAt));
+    if(farmVisit(draft)?.actionId===intent.id)setFarmVisit(draft);
+    return;
+  }
   if(intent.type==='labor.step' && (receipt.status==='cancelled'||receipt.status==='failed')) {
     const pet=draft.legacy as Obj, params=intent.payload.parameters as Obj;
     const command=pet.world?.command, contract=pet.labor?.contracts?.find((c:Obj)=>c.id===params?.contractId);

@@ -17,6 +17,7 @@ export interface LifeApiHost {
   links?: {chat?:string;play?:string};
   shutdown?:()=>void;
   openWorksite?:(petId:string)=>Promise<void>;
+  farm?:{requestOpen(petId:string):Promise<void>;weather(petId:string,weather:unknown):Promise<unknown>};
   finance?: {read:(petId:string)=>Promise<unknown>; write:(petId:string,input:Record<string,unknown>)=>Promise<unknown>};
   companion?: {read:(petId:string,signal:AbortSignal)=>Promise<unknown>; write:(petId:string,input:Record<string,unknown>,signal:AbortSignal)=>Promise<unknown>};
   model?: {read:(petId:string,signal:AbortSignal)=>Promise<unknown>; write:(petId:string,input:Record<string,unknown>,signal:AbortSignal)=>Promise<unknown>};
@@ -124,12 +125,20 @@ export function createLifeApi(host:LifeApiHost) {
     const url=new URL(request.url);if(!url.pathname.startsWith('/api/life/'))return undefined;
     if(!await host.authorize(request))return response(403,{ok:false,error:'没有访问权限'});
     const endpoint=url.pathname.slice('/api/life/'.length);
-    if(!['snapshot','goals','timeline','relationships','growth','settings','manage','memory-search','memory-graph','shutdown','attachment','finance','companion','model','worksite'].includes(endpoint))return response(404,{ok:false,error:'没有这个接口'});
-    if(request.method!=='GET' && !(request.method==='POST' && ['manage','shutdown','attachment','finance','companion','model','worksite'].includes(endpoint)) || request.method==='GET' && ['manage','shutdown','attachment','worksite'].includes(endpoint))return response(405,{ok:false,error:'请求方法不受支持'});
+    if(!['snapshot','goals','timeline','relationships','growth','settings','manage','memory-search','memory-graph','shutdown','attachment','finance','companion','model','worksite','farm','farm-weather'].includes(endpoint))return response(404,{ok:false,error:'没有这个接口'});
+    if(request.method!=='GET' && !(request.method==='POST' && ['manage','shutdown','attachment','finance','companion','model','worksite','farm','farm-weather'].includes(endpoint)) || request.method==='GET' && ['manage','shutdown','attachment','worksite','farm','farm-weather'].includes(endpoint))return response(405,{ok:false,error:'请求方法不受支持'});
     try {
       if(endpoint==='shutdown') {if(!host.shutdown)return response(503,{ok:false,error:'关闭入口不可用'});setTimeout(host.shutdown,100);return response(200,{ok:true,value:{closing:true}});}
       const id=await host.petId();
       if(endpoint==='worksite'){if(!host.openWorksite)return response(503,{ok:false,error:'工地入口暂不可用'});try{await host.openWorksite(id);return response(200,{ok:true,value:{opened:true}});}catch(error){return response(503,{ok:false,error:error instanceof Error?error.message:'工地窗口暂不可用'});}}
+      if(endpoint==='farm'||endpoint==='farm-weather'){
+        if(!host.farm)return response(503,{ok:false,error:'稻田入口暂不可用'});
+        if(endpoint==='farm'){await host.farm.requestOpen(id);return response(200,{ok:true,value:{opened:true}});}
+        if(!/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type')||''))return response(415,{ok:false,error:'请求格式无效'});
+        const input=await request.json().catch(()=>null);
+        if(!input||typeof input.weather!=='string')return response(400,{ok:false,error:'请选择天气'});
+        return response(200,{ok:true,value:await host.farm.weather(id,input.weather)});
+      }
       if(endpoint==='attachment'){
         if(!host.attachments)return response(503,{ok:false,error:'图片服务尚未接入'});
         const type=request.headers.get('content-type')||'',requestId=request.headers.get('x-request-id')||'';
@@ -169,6 +178,6 @@ export function createLifeApi(host:LifeApiHost) {
         settings:{version:state.version,paused:state.constraints.paused,permissions:state.constraints.permissions,groupChatBlocked:endpoint==='settings'&&host.groupChatBlocked?await host.groupChatBlocked(id):false}
       };
       return response(200,{ok:true,value:endpoint==='manage'?{version:state.version}:views[endpoint]});
-    }catch(error){return response(409,{ok:false,error:['finance','companion','model'].includes(endpoint) && error instanceof Error ? error.message : '操作未完成或状态已变化，请刷新后重试'});}
+    }catch(error){return response(409,{ok:false,error:['finance','companion','model','farm','farm-weather'].includes(endpoint) && error instanceof Error ? error.message : '操作未完成或状态已变化，请刷新后重试'});}
   };
 }

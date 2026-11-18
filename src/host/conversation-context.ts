@@ -1,3 +1,4 @@
+import {farmFacts,farmVisit} from './farm.js';
 import {riceAvailability} from './rice-inventory.js';
 import {recentOperationFeedback} from './operation-feedback.js';
 import type {LifeState} from '../kernel/types.js';
@@ -18,12 +19,14 @@ export function conversationContext(state:LifeState, envelope:CanonicalEnvelope,
       ...(typeof details?.reason==='string'?{reason:details.reason.slice(0,300)}:{})};
   });
   const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  const field=farmFacts(envelope);
   const recentMoney=Array.isArray(pet.events)?pet.events.filter((e:any)=>['wallet','wallet-spend'].includes(e.kind)).slice(-6).map((e:any)=>e.text):[];
   return {
     operationUpdates:recentOperationFeedback({...envelope,life:envelope.life??state}),
     companion:companionContext({...envelope,life:envelope.life??state},Date.now(),excludeEventIds),
     food:{...riceMotivation(envelope.humanity??{},config),balance:wallet.balance??null,frozen:wallet.frozen===true,price:config.costs?.feed??null,
       ...riceAvailability({...envelope,life:envelope.life??state}),eating:pet.services?.eating??null,recentChanges:recentMoney},
+    ...(field?{farm:{...field,inside:!!farmVisit(envelope)}}:{}),
     worksite:worksiteFacts({...envelope,life:envelope.life??state}),
     laborHistory:laborHistory(pet),
     resources:{coins:(pet.tokens?.coins??[]).filter((c:any)=>c.status==='floor').slice(0,12).map((c:any)=>({id:c.id,surface:c.surface})),attachments:state.events.filter(e=>e.type==='attachment.shared'&&!Object.hasOwn(state.invalidSources,e.eventId)).slice(-3).map(e=>({sourceId:e.eventId,attachmentId:(e.payload as any)?.attachmentId}))},

@@ -1,0 +1,163 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {advanceFarm,changeFarmWeather,completeFarmOperation,farmFacts,farmVisit,randomFarmWeather} from '../dist/host/farm.js';
+import {checkFarmReceipt,createFarmScene} from '../dist/host/farm-scene.js';
+import {createWorksite} from '../dist/host/worksite.js';
+import {projectOutcome} from '../dist/host/outcome-projector.js';
+import {createLifeApi} from '../dist/host/life-api.js';
+import {validateRiceMeal} from '../dist/host/rice-inventory.js';
+import {developmentMaterial} from '../dist/host/development-material.js';
+import {Cognition} from '../dist/cognition/index.js';
+import {createInitialState} from '../dist/kernel/index.js';
+import {createCognitiveModel} from '../dist/host/cognitive-model.js';
+import {CanonicalActionLifecycle} from '../dist/host/action-lifecycle.js';
+
+const date = (day, hour=0, min=0) => Date.parse(`2026-11-${day}T${String(hour).padStart(2,'0')}:${String(min).padStart(2,'0')}:00+08:00`);
+const fixture = () => ({petId:'main',version:0,legacy:{services:{inventory:[]}},humanity:{helperReady:true,restrained:false,sleeping:false,restingUntil:0},
+  life:{events:[],memories:[],actions:[],invalidSources:{},constraints:{paused:false}}});
+const irrigate = (state,day) => changeFarmWeather(state,'heavy-rain',date(day,8));
+const noRain = (state,day) => changeFarmWeather(state,'light-hail',date(day,8));
+// A deterministic seed with dry weather on the first two dates.
+const drySeed = Array.from({length:200},(_,i)=>`test-${i}`).find(seed=>['16','17'].every(day=>randomFarmWeather(seed,`2026-11-${day}`)==='sunny'));
+
+test('counts planting day, enforces four hours across midnight, and skips a dry day',()=>{
+  const s=fixture();
+  advanceFarm(s,date(16,10),true,drySeed);
+  completeFarmOperation(s,'plant','sow',date(16,17));
+  completeFarmOperation(s,'water','first',date(16,18));
+  assert.throws(()=>completeFarmOperation(s,'water','early',date(16,21,59)),/浇水时间/);
+  completeFarmOperation(s,'water','second',date(16,22));
+  advanceFarm(s,date(17));
+  assert.equal(farmFacts(s,date(17)).growth,1);
+  assert.equal(farmFacts(s,date(17)).nextWaterAt,date(17,2));
+  assert.throws(()=>completeFarmOperation(s,'water','early-next',date(17,1,59)),/浇水时间/);
+  completeFarmOperation(s,'water','next',date(17,2));
+  advanceFarm(s,date(18));
+  assert.equal(farmFacts(s,date(18)).growth,1);
+  irrigate(s,18);advanceFarm(s,date(19));
+  assert.equal(farmFacts(s,date(19)).growth,2);
+  irrigate(s,19);advanceFarm(s,date(20));
+  assert.equal(farmFacts(s,date(20)).stage,'ripe');
+  completeFarmOperation(s,'harvest','cut',date(20));
+  assert.equal(farmFacts(s,date(20)).rawBowls,6);
+  assert.throws(()=>completeFarmOperation(s,'harvest','cut',date(20)),/稻田状态/);
+  assert.throws(()=>validateRiceMeal(s,'cut'),/饭的编号不存在/);
+});
+
+test('rain credits and the worst damage survive a same-day weather replacement, while ripe yield stays locked',()=>{
+  const s=fixture();
+  advanceFarm(s,date(16,7),true,drySeed);
+  completeFarmOperation(s,'plant','sow',date(16,7));
+  completeFarmOperation(s,'water','water',date(16,7));
+  changeFarmWeather(s,'light-rain',date(16,8));
+  assert.equal(farmFacts(s,date(16,8)).watered,2);
+  changeFarmWeather(s,'light-hail',date(16,9));
+  changeFarmWeather(s,'heavy-typhoon',date(16,10));
+  changeFarmWeather(s,'light-hail',date(16,11));
+  assert.equal(farmFacts(s,date(16,11)).watered,2);
+  assert.equal(farmFacts(s,date(16,11)).expectedBowls,3);
+  changeFarmWeather(s,'heavy-typhoon',date(17,7));
+  irrigate(s,17);irrigate(s,18);advanceFarm(s,date(19));
+  changeFarmWeather(s,'heavy-typhoon',date(19,10));
+  assert.equal(farmFacts(s,date(19,10)).expectedBowls,0);
+  completeFarmOperation(s,'harvest','cut',date(19,10));
+  assert.equal(farmFacts(s,date(19,10)).lastHarvest,0);
+  assert.equal(farmFacts(s,date(19,10)).operation,'plant');
+});
+
+test('settles offline deterministically with weather only and without attributing weather to the user',()=>{
+  const a=fixture();
+  advanceFarm(a,date(16,7),true,drySeed);completeFarmOperation(a,'plant','sow',date(16,7));
+  const b=structuredClone(a);
+  noRain(a,16);noRain(b,16);
+  advanceFarm(a,date(25));
+  for(let day=17;day<=25;day++)advanceFarm(b,date(day));
+  const {weatherEventId:unusedA,...fieldA}=farmFacts(a,date(25));
+  const {weatherEventId:unusedB,...fieldB}=farmFacts(b,date(25));
+  assert.deepEqual(fieldA,fieldB);
+  assert.equal(a.life.events.filter(e=>e.type==='farm.tended').length,1);
+  const weather=a.life.events.filter(e=>e.type==='farm.weather');
+  const weatherFacts=state=>state.life.events.filter(e=>e.type==='farm.weather').map(e=>e.payload);
+  assert.deepEqual(weatherFacts(a),weatherFacts(b));
+  assert.ok(weather.every(e=>e.source==='environment'&&!e.actorId&&!e.causationId));
+  const manual=weather.find(e=>e.payload.weather==='light-hail');
+  assert.deepEqual(Object.keys(manual.payload).sort(),['date','description','loss','water','weather']);
+  assert.ok(a.life.memories.some(m=>m.sourceIds.includes(manual.eventId)&&!m.content.includes('爸爸')));
+  assert.ok(developmentMaterial(a,'2026-11-16',new Set()).some(e=>e.id===manual.eventId&&!e.text.includes('爸爸')));
+  const empty=fixture();
+  advanceFarm(empty,date(16,7),true,drySeed);advanceFarm(empty,date(19));
+  assert.deepEqual(weatherFacts(empty).map(e=>e.date),['2026-11-16','2026-11-17','2026-11-18','2026-11-19']);
+});
+
+test('scene checks helper generation, worksite ownership and the completed animation, then projects one outcome',async()=>{
+  let state=fixture(), now=date(16,8);
+  const gate={run:async(_id,fn)=>fn(),signal:new AbortController().signal};
+  const store={loadEnvelope:async()=>structuredClone(state)};
+  const save=async(_id,change)=>{const draft=structuredClone(state);change(draft);draft.version++;state=draft;return structuredClone(state);};
+  const uow={apply:async(id,version,change)=>{assert.equal(version,state.version);return save(id,change);},applyCurrent:save};
+  const scene=createFarmScene(store,gate,uow,()=>now);
+  const worksite=createWorksite(store,gate,uow,()=>null,()=>{});
+  const epoch='a'.repeat(32);
+  const helper=(action,requestId)=>scene.helper('main',epoch,{action,requestId});
+  scene.opened(epoch);
+  const api=createLifeApi({authorize:()=>true,petId:()=> 'main',farm:scene});
+  const response=api(new Request('http://localhost/api/life/farm',{method:'POST'}));
+  await new Promise(setImmediate);
+  const opening=await helper('snapshot');assert.ok(opening.openRequestId);
+  await helper('open-ack',opening.openRequestId);
+  assert.equal((await response).status,200);
+  await assert.rejects(scene.helper('main','stale',{action:'enter'}),/已断开/);
+  await helper('enter');
+  await assert.rejects(worksite.act('main','enter-forced'),/她在稻田/);
+  await helper('leave');
+  const intent={id:'sow',type:'farm.tend',payload:{parameters:{operation:'plant'}}};
+  const receipt=scene.execute('main',intent,gate.signal);
+  await new Promise(setImmediate);
+  assert.equal((await helper('snapshot')).command.id,'sow');
+  await helper('start','sow');
+  await assert.rejects(helper('complete','sow'),/回执无效/);
+  assert.equal(farmFacts(state,now).stage,'empty');
+  now+=1600;
+  await helper('complete','sow');
+  await assert.rejects(helper('complete','sow'),/回执无效/);
+  const completed=checkFarmReceipt(state,intent,await receipt,now);
+  const midnight=date(17);
+  assert.equal(checkFarmReceipt(state,intent,completed,midnight).status,'cancelled');
+  projectOutcome(state,intent,completed,new Date(now).toISOString(),'result:sow');
+  assert.equal(farmVisit(state),undefined);
+  assert.equal(farmFacts(state,now).stage,'seedling');
+  assert.equal((await helper('snapshot')).inside,false);
+  await helper('enter');
+  await scene.disconnected('main',epoch);
+  assert.equal(farmVisit(state),undefined);
+});
+
+test('the cognition model may skip or propose a farm action, and old weather cannot authorize dispatch',async()=>{
+  const s=fixture(), now=date(16,8), at=new Date(now).toISOString();
+  s.life=createInitialState('main',at);
+  s.life.constraints={paused:false,permissions:[],remainingBudget:5,capabilities:[{name:'farm.tend',enabled:true,physical:true}]};
+  advanceFarm(s,now,true,drySeed);
+  s.life.legacyContext={farm:farmFacts(s,now)};
+  let wantsToPlant=false;
+  const model=createCognitiveModel({async *stream(request){
+    const farm=JSON.parse(request.messages[0].content).当前.legacyContext.farm;
+    assert.equal(farm.operation,'plant');
+    assert.equal(farm.rawBowls,0);
+    const action=wantsToPlant?{actionType:'farm.tend',parameters:{operation:'plant'},priority:50,interruptPolicy:'interruptible',requiredCapabilities:['farm.tend'],sourceIds:[farm.weatherEventId]}:null;
+    yield {type:'text',text:JSON.stringify({action,thought:null,goals:[],goalUpdates:[],plan:[],interests:[],selfModel:[]})};
+  }},()=>({provider:'fixture',model:'fixture'}));
+  const cognition=new Cognition(model,{reserve:async()=>({}),withReserved:async(_id,_ticket,fn)=>fn()},
+    {forCognition:async()=>[],world:async()=>({space:{},inventory:[],capabilities:s.life.constraints.capabilities,recentResults:[]})});
+  const propose=()=>cognition.propose(s.life,new AbortController().signal,async()=>s.life);
+  const skipped=await propose();assert.equal(skipped.status,'proposed');assert.equal(skipped.proposal,null);
+  wantsToPlant=true;
+  const choice=await propose();assert.equal(choice.status,'proposed');
+  const action=choice.proposal;
+  assert.equal(action.actionType,'farm.tend');
+  s.life.actions.push({...action,status:'PENDING',createdAt:at,updatedAt:at});
+  const intent={id:action.id,type:action.actionType,payload:{actionId:action.id,petId:'main',actionType:action.actionType,parameters:action.parameters}};
+  const lifecycle=new CanonicalActionLifecycle(()=>({body:s.life.body,emotions:s.life.emotions}),()=>new Date(now));
+  assert.equal(lifecycle.prepare(structuredClone(s),intent).allowed,true);
+  changeFarmWeather(s,'heavy-hail',now);
+  assert.match(lifecycle.prepare(s,intent).reason,/当前天气重新决定/);
+});

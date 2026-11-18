@@ -1,3 +1,4 @@
+import type {createFarmScene} from './farm-scene.js';
 import {randomUUID} from 'node:crypto';
 import {HelperObserver, type HelperRestraintEvent} from './helper-observer.js';
 import type {CanonicalHumanityAdapter} from './humanity-adapter.js';
@@ -8,7 +9,7 @@ import type {createDesktopCommandChannel} from './desktop-command-channel.js';
  * to HTTP handlers. Observations travel on the spawned child's stdout bridge. */
 export function createHelperChannel(humanity:CanonicalHumanityAdapter, desktop:TrustedDesktopBridge,
   petIds:readonly string[], observerAuthority:object, sourceCapability:object,
-  commands:ReturnType<typeof createDesktopCommandChannel>, observeSpace?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, tokens?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, disturb?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, semantic?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, worksite?:(petId:string,action:string)=>Promise<unknown>, idle?:{update(seconds:number,observedAt:number):void;clear():void}, wakeWorksite?:(petId:string)=>void) {
+  commands:ReturnType<typeof createDesktopCommandChannel>, observeSpace?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, tokens?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, disturb?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, semantic?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, worksite?:(petId:string,action:string)=>Promise<unknown>, idle?:{update(seconds:number,observedAt:number):void;clear():void}, wakeWorksite?:(petId:string)=>void, farm?:ReturnType<typeof createFarmScene>) {
   const allowed=new Set(petIds), observers=new Map<string,HelperObserver>();
   const epochs=new Map<string,string>();
   const openRequests=new Map<string,{id:string;promise:Promise<void>;resolve:()=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>();
@@ -16,7 +17,7 @@ export function createHelperChannel(humanity:CanonicalHumanityAdapter, desktop:T
   const disconnected=(old:string) => {
     for(const pending of openRequests.values()){clearTimeout(pending.timer);pending.reject(Error('桌面角色已断开，请重新启动后再试'));}openRequests.clear();
     idle?.clear();
-    for(const id of allowed) commands.cancelPet(id);
+    for(const id of allowed){commands.cancelPet(id);void farm?.disconnected(id,old).catch(()=>{});}
     for(const observer of observers.values())observer.close(sourceCapability);
     observers.clear();
     epochs.clear();
@@ -41,12 +42,16 @@ export function createHelperChannel(humanity:CanonicalHumanityAdapter, desktop:T
       if(input.action==='open-ack'){const pending=openRequests.get(input.petId);if(pending&&pending.id===input.requestId){openRequests.delete(input.petId);clearTimeout(pending.timer);pending.resolve();}return {ok:true};}
       const result=await worksite(input.petId,input.action);
       const pending=openRequests.get(input.petId);
-      return input.action==='snapshot'&&pending?{...(result as object),openRequestId:pending.id}:result;
+      return input.action==='snapshot'&&(pending||farm)?{...(result as object),...(pending?{openRequestId:pending.id}:{}),...(farm?{farmPending:farm.pending(input.petId)}:{})}:result;
+    },
+    farm(sourceEpoch:string,input:{petId:string;action:string;requestId?:string}) {
+      if(!sourceEpoch || sourceEpoch!==epoch || !farm || !allowed.has(input?.petId))throw Error('稻田通道不可用');
+      return farm.helper(input.petId,sourceEpoch,input);
     },
     opened(next:string) {
       if(!/^[a-f0-9]{32}$/.test(next))throw Error('桌宠通道标识无效');
       if(epoch)void disconnected(epoch).catch(()=>{});
-      epoch=next;
+      epoch=next;farm?.opened(next);
     },
     closed(old:string) {
       if(old!==epoch)return;

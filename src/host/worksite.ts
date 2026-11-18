@@ -1,3 +1,4 @@
+import {farmVisit} from './farm.js';
 import {randomUUID} from 'node:crypto';
 import {advanceHumanity} from '../../vendor/dsh-pet/src/host/humanity.mjs';
 import {setSpiritRest} from '../kernel/spirit.js';
@@ -16,7 +17,7 @@ export function createWorksite(store:Reader,gate:PetGate,uow:UnitOfWork,view:(id
   const snapshot=async(id:string)=>{
     const state=await store.loadEnvelope(id);if(!state)throw Error('生命状态不可用');
     const pet=state.legacy as Record<string,any>,projected=projectLegacySnapshot(state);
-    return {location:pet.worksite||{inside:false,forced:false},waitingForReceipt:uncertainLabor(state).length>0,labor:projected.labor,world:{...projected.world,command:view(id)??null}};
+    return {farmInside:!!farmVisit(state),location:pet.worksite||{inside:false,forced:false},waitingForReceipt:uncertainLabor(state).length>0,labor:projected.labor,world:{...projected.world,command:view(id)??null}};
   };
   return {snapshot,async act(id:string,action:Action,expected?:{sessionId:string;contractId:string}){
     if(!['enter-forced','enter-voluntary','release','leave-voluntary','touch','drag','force-work','request-entry','stop-work','resume-work','retry-unconfirmed'].includes(action))throw Error('工地操作无效');
@@ -25,6 +26,7 @@ export function createWorksite(store:Reader,gate:PetGate,uow:UnitOfWork,view:(id
       const state=await store.loadEnvelope(id);if(!state)throw Error('生命状态不可用');
       await uow.apply(id,state.version,draft=>{
         const pet=draft.legacy as Record<string,any>,site=pet.worksite||={inside:false,forced:false};
+        if(farmVisit(draft) && ['enter-forced','enter-voluntary','force-work','request-entry'].includes(action))throw Error('她在稻田里，请先接她回桌面');
         let text='';
         if(expected){const active=pet.labor?.contracts?.find((c:any)=>['working','paused','queued'].includes(c.status)&&c.done<c.trips);if(!site.inside||site.workState!=='running'||site.sessionId!==expected.sessionId||active?.status==='paused'||(active?.id??site.lastCompletedContractId)!==expected.contractId||hasForcedWork(draft))throw Error('工作状态已变化');}
         if(action==='retry-unconfirmed'){

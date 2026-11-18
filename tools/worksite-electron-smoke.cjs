@@ -20,7 +20,7 @@ app.whenReady().then(async()=>{
   const {createWorksite}=await load('dist/host/worksite.js');
   const {createHelperChannel}=await load('dist/host/helper-channel.js');
   const {createHumanity}=await load('vendor/dsh-pet/src/host/humanity.mjs');
-  let state={petId:'main',version:0,legacy:{events:[],labor:{contracts:[]},world:{},wallet:{balance:100},config:{costs:{}}},humanity:createHumanity(),life:{events:[],memories:[],invalidSources:{},constraints:{paused:false}}};
+  let state={petId:'main',version:0,legacy:{events:[],labor:{contracts:[]},world:{},wallet:{balance:100},config:{costs:{}}},humanity:createHumanity(),life:{actions:[],events:[],memories:[],invalidSources:{},constraints:{paused:false}}};
   const store={loadEnvelope:async()=>structuredClone(state)},gate={run:async(_id,fn)=>fn()};
   const uow={apply:async(_id,version,fn)=>{assert.equal(version,state.version);const d=structuredClone(state);fn(d);d.version++;state=d;}};
   let command=null;const receipts=[];

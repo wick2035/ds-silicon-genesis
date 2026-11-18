@@ -45,6 +45,8 @@ window.lifeApi = Object.freeze({
   },
   uploadImage: file => request('attachment', {method:'POST',headers:{'content-type':file.type,'x-request-id':crypto.randomUUID()},body:file}),
   shutdown: () => request('shutdown', {method:'POST'}),
+  openFarm: () => request('farm', {method:'POST'}),
+  setFarmWeather: weather => request('farm-weather', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({weather})}),
   openWorksite: () => request('worksite', {method:'POST'}),
   getSnapshot: () => {if(initialSnapshot){const snapshot=initialSnapshot;initialSnapshot=undefined;return Promise.resolve(snapshot);}return request('snapshot');},
   getGoals: () => request('goals'),

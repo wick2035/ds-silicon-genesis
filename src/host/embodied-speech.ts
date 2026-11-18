@@ -1,4 +1,5 @@
 import {riceInventory,riceAvailability,validateRiceMeal} from './rice-inventory.js';
+import {farmFacts,farmVisit} from './farm.js';
 import {COMPANION_PERSONALITY,TIME_AWARENESS,riceMotivation} from './companion-personality.js';
 import {createHash} from 'node:crypto';
 import {selfModelContext,STABLE_PERSONALITY} from './self-model-context.js';
@@ -37,10 +38,10 @@ function conflicts(envelope:CanonicalEnvelope,type:string,parameters:Record<stri
 function decisionFacts(envelope:CanonicalEnvelope):string {
   const pet=envelope.legacy as any;
   const events=envelope.life.events.filter(e=>!Object.hasOwn(envelope.life.invalidSources,e.eventId) &&
-    ['interaction.operation','interaction.worksite','body.adjusted','body.meal','social.care','labor.changed','labor.completed','action.receipt','action.reconciled'].includes(e.type) &&
+    ['interaction.operation','interaction.worksite','body.adjusted','body.meal','social.care','farm.weather','farm.tended','labor.changed','labor.completed','action.receipt','action.reconciled'].includes(e.type) &&
     !(e.type.startsWith('action.') && envelope.life.actions.find(a=>a.id===(e.payload as any)?.actionId)?.actionType==='qq.send'));
   return JSON.stringify({wallet:pet.wallet,inventory:pet.services?.inventory,sleeping:envelope.humanity.sleeping,
-    restingUntil:envelope.humanity.restingUntil,worksite:worksiteFacts(envelope),events:events.slice(-16).map(e=>e.eventId)});
+    restingUntil:envelope.humanity.restingUntil,worksite:worksiteFacts(envelope),farmInside:!!farmVisit(envelope),events:events.slice(-16).map(e=>e.eventId)});
 }
 
 /** One tool-aware turn for every utterance. Text preceding a tool call is a
@@ -50,7 +51,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
   async function sense(petId:string, excludeEventIds:string[]=[],query='',snapshot?:CanonicalEnvelope){
     const envelope=snapshot??await reader.loadEnvelope(petId);if(!envelope)throw Error('生命状态不可用');
     const events=envelope.life.events.filter(e=>!Object.hasOwn(envelope.life.invalidSources,e.eventId) &&
-      ['body.observed','body.adjusted','wallet','wallet.spend','body.meal','social.care','interaction','interaction.operation','interaction.worksite','labor.changed','action.receipt','action.reconciled'].includes(e.type) &&
+      ['body.observed','body.adjusted','wallet','wallet.spend','body.meal','social.care','interaction','interaction.operation','interaction.worksite','farm.weather','farm.tended','labor.changed','action.receipt','action.reconciled'].includes(e.type) &&
       !(e.type==='action.receipt' && (e.payload as any)?.status==='UNKNOWN' && envelope.life.actions.some(a=>a.id===(e.payload as any)?.actionId&&a.status!=='UNKNOWN'))).slice(-16);
     return {envelope,context:{感受:humanityPrompt(envelope.humanity),生活:conversationContext({...envelope.life,petId,version:envelope.version} as any,envelope,excludeEventIds),
       近期真实经历:events.map(e=>({id:e.eventId,at:e.occurredAt,actor:e.actorId??'未确认',type:e.type,detail:e.payload})),
@@ -124,7 +125,10 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
       // Reuse it once; later rounds and stale retries always read afresh.
       const decision=firstDecision?initial:await sense(speech.petId,speech.contextExcludeIds??speech.sourceIds,query);firstDecision=false;
       const signature=decisionFacts(decision.envelope);
-      const liveSystem=system+'\n此刻实况：'+promptData(decision.context,2400)+timeFor(decision.envelope)+liveWorkFor(decision.envelope)+updatesFor(decision.envelope)+'\n当前身体与食物（优先于旧对话和历史摘要）：'+JSON.stringify(liveFoodFor(decision.envelope));
+      const {近期真实经历:recentExperiences,...currentContext}=decision.context;
+      const field=farmFacts(decision.envelope);
+      const liveFarm=field?'\n稻田实况：'+JSON.stringify({...field,inside:!!farmVisit(decision.envelope)})+'。天气起因未知。米缸只存生米。':'';
+      const liveSystem=system+'\n此刻实况：'+promptData(currentContext,1600)+'\n近期真实经历：'+promptData(recentExperiences,800)+timeFor(decision.envelope)+liveWorkFor(decision.envelope)+updatesFor(decision.envelope)+liveFarm+'\n当前身体与食物（优先于旧对话和历史摘要）：'+JSON.stringify(liveFoodFor(decision.envelope));
       let text='';const calls=new Map<number,{id:string;name:string;arguments:string}>();
       for await(const part of model.stream({...options,embodied:undefined,embodiedSnapshot:undefined,signal,system:liveSystem,messages,tools:round<4?tools:undefined})){
         if(part.type==='usage')yield part;

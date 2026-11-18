@@ -1,3 +1,4 @@
+import {farmVisit} from './farm.js';
 import {availableRice} from './rice-inventory.js';
 import {hasActiveConversation,hasRunningChat} from './active-conversation.js';
 import {riceMotivation} from './companion-personality.js';
@@ -29,7 +30,7 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
       if(signal.aborted || freshHuman.restrained || freshHuman.helperReady!==true || freshHuman.sleeping || tokenHeld(petId))return false;
       const legacy=current.legacy as Record<string,any>;
       const coin=legacy.tokens?.coins?.find((c:any)=>c.status==='floor' && c.surface==='desktop');
-      if(legacy.worksite?.inside || !coin || !current.life.constraints.capabilities.some(c=>c.name==='token.pickup' && c.enabled) || current.life.actions.some(a=>a.actionType==='token.pickup' && ['PENDING','DISPATCHED','UNKNOWN'].includes(a.status)))return false;
+      if(farmVisit(current) || legacy.worksite?.inside || !coin || !current.life.constraints.capabilities.some(c=>c.name==='token.pickup' && c.enabled) || current.life.actions.some(a=>a.actionType==='token.pickup' && ['PENDING','DISPATCHED','UNKNOWN'].includes(a.status)))return false;
       const id='token-pickup:'+randomUUID(),at=new Date().toISOString();
       await uow.apply(petId,current.version,draft=>{draft.life.actions.push({id,petId,actionType:'token.pickup',parameters:{coinId:coin.id},priority:40,interruptPolicy:'safe-point',requiredCapabilities:['token.pickup'],expectedStateVersion:draft.version,sourceIds:[],status:'PROPOSED',createdAt:at,updatedAt:at});return {};});
       current=await reader.loadEnvelope(petId);if(!current || signal.aborted)return false;
@@ -58,7 +59,7 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     }
     if(signal.aborted || !forced&&(!allowAutonomous || human.restrained) || human.helperReady!==true)return;
     const resting=await reader.loadEnvelope(petId);
-    if(!resting)return;if(hasActiveConversation(resting)&&!(resting.legacy as any).worksite?.inside&&!forced&&!resting.life.actions.some(a=>a.actionType==='labor.step'&&a.status==='PENDING'))return;const spirit=advanceSpirit(resting.life);
+    if(!resting||farmVisit(resting))return;if(hasActiveConversation(resting)&&!(resting.legacy as any).worksite?.inside&&!forced&&!resting.life.actions.some(a=>a.actionType==='labor.step'&&a.status==='PENDING'))return;const spirit=advanceSpirit(resting.life);
     if(human.sleeping&&!forced){if(spirit.mode==='sleep' && spirit.value>=100 || spirit.mode==='nap' && Date.now()-spirit.sleepStartedAt!>=1200000)await service(petId,{key:'auto-wake:'+spirit.sleepStartedAt,command:'/醒来'},'autonomous');return;}
     if(!needsManaged && spirit.value<=2 && !(resting.legacy as any).worksite?.inside && !(resting.legacy as any).labor?.contracts?.some((c:any)=>c.status==='working'&&c.workPermit)){await service(petId,{key:'auto-sleep:'+Math.floor(Date.now()/3600000),command:'/休息'},'autonomous');return;}
     if(Number.isFinite(human.restingUntil) && human.restingUntil>Date.now()&&!forced&&!(resting.legacy as any).labor?.contracts?.some((c:any)=>c.status==='working'&&c.workPermit))return;
@@ -90,6 +91,7 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     // fabricated trip. Actual progress only comes from the helper receipt.
     await gate.run(petId,async()=>{
       let current=await reader.loadEnvelope(petId);if(!current||signal.aborted||current.life.constraints.paused&&!hasForcedWork(current))return;
+      if(farmVisit(current))return;
       let site=(current.legacy as Record<string,any>).worksite;
       if(site?.inside && !hasForcedWork(current) && site.workState!=='stopped' && !hasLaborResources(current)){
         await uow.apply(petId,current.version,draft=>{const s=(draft.legacy as Record<string,any>).worksite;s.workState='stopped';s.stopReason='exhausted';s.sessionId=randomUUID();return {};});return;

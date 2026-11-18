@@ -21,6 +21,7 @@ export interface SchedulerOptions {
   signal: AbortSignal;
   wakeCoordinator: WakeCoordinator;
   deterministic: DeterministicActivity;
+  farm?:{settle(petId:string):Promise<unknown>};
   needs?: {run(petId:string,signal:AbortSignal):Promise<boolean>};
   groupConversation?: {run(petId:string,signal:AbortSignal):Promise<void>};
   resultCoordinator: CognitiveResultCoordinator;
@@ -85,6 +86,7 @@ export class LifeScheduler {
           try {
             if (this.controller.signal.aborted) throw new Error('Scheduler stopped');
             if(this.options.reminders)await this.options.reminders.run(this.options.petId,this.controller.signal);
+            if(this.options.farm)await this.options.farm.settle(this.options.petId);
             const before = await this.kernel.getState(this.options.petId);
             if (this.controller.signal.aborted) throw new Error('Scheduler stopped');
             let needsHandled=false;
@@ -97,7 +99,8 @@ export class LifeScheduler {
             if(!state.constraints.paused && this.options.development)await this.options.development.run(this.options.petId,this.controller.signal);
             const idleBefore=this.options.idle?.snapshot();
             const ongoing=(state.cognitivePlans||[]).some(p=>p.status==='active'||p.status==='failed') || state.goals.some(g=>g.status==='active');
-            if (!needsHandled && !resumed && !state.constraints.paused && (claim.changed || hasCognitiveDemand(state) || ongoing || (idleBefore?.seconds??0)>=120) && await this.options.resultCoordinator.claimCognition(this.options.petId,this.options.cognitiveIntervalSeconds??1800,this.controller.signal)) {
+            const farmDemand=!!state.legacyContext?.farm?.operation && !state.body.sleeping && !state.body.restrained && !state.body.injured;
+            if (!needsHandled && !resumed && !state.constraints.paused && (claim.changed || farmDemand || hasCognitiveDemand(state) || ongoing || (idleBefore?.seconds??0)>=120) && await this.options.resultCoordinator.claimCognition(this.options.petId,this.options.cognitiveIntervalSeconds??1800,this.controller.signal)) {
               const fresh=await this.kernel.getState(this.options.petId);
               const result = await this.cognition.propose(fresh, this.controller.signal, () => this.kernel.getState(this.options.petId));
               if (result.status === 'proposed' && !this.controller.signal.aborted) {

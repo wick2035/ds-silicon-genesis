@@ -46,6 +46,7 @@ export function validateProposal(state: LifeState, proposal: ActionProposal): vo
   assert(!state.constraints.paused, 'Autonomy is paused');
   assert(Number.isFinite(proposal.priority) && proposal.priority >= 0 && proposal.priority <= 100, 'Invalid priority');
   assert(['interruptible', 'safe-point', 'noninterruptible'].includes(proposal.interruptPolicy), 'Invalid interrupt policy');
+  if(proposal.actionType==='farm.tend')assert(proposal.interruptPolicy==='interruptible','农活必须可中断');
   if(proposal.actionType==='body.activity')assert(proposal.interruptPolicy==='interruptible','桌面走动必须可随时打断');
   assert(proposal.parameters !== null && typeof proposal.parameters === 'object' && !Array.isArray(proposal.parameters), 'Invalid action parameters');
   assert(Array.isArray(proposal.requiredCapabilities) && proposal.requiredCapabilities.includes(proposal.actionType) && proposal.requiredCapabilities.every(nonempty), 'Action type requires its registered capability');

@@ -61,6 +61,7 @@ export interface ActionLifecycle {
   prepare(draft: CanonicalEnvelope, intent: OutboxIntent): {allowed: boolean; reason?: string};
   /** Pure projection of a trusted executor receipt into the same envelope. */
   complete(draft: CanonicalEnvelope, intent: OutboxIntent, receipt: ExecutionReceipt): void;
+  validateReceipt?(draft:CanonicalEnvelope,intent:OutboxIntent,receipt:ExecutionReceipt):ExecutionReceipt;
   reconcile(draft: CanonicalEnvelope, intent: OutboxIntent, receipt: ActionReceipt): void;
 }
 
@@ -237,6 +238,7 @@ export class OutboxDispatcher {
       if (state.rows.length !== 1) throw new Error('生命状态不存在');
       const draft = structuredClone(state.rows[0].payload) as CanonicalEnvelope;
       if (draft.petId !== petId || draft.version !== Number(state.rows[0].version)) throw new Error('生命状态信封不一致');
+      receipt = this.lifecycle.validateReceipt?.(draft,intent,receipt) ?? receipt;
       this.lifecycle.complete(draft, intent, receipt);
       draft.version++;
       await doneClient.query('UPDATE silicon_genesis.life_state SET version=$2,payload=$3::jsonb,updated_at=now() WHERE pet_id=$1', [petId,draft.version,JSON.stringify(draft)]);

@@ -34,6 +34,7 @@ import {LegacyDomain} from './legacy-domain.js';
 import {createLegacyRequestAdapter} from './legacy-request-adapter.js';
 import {createDesktopCommandChannel} from './desktop-command-channel.js';
 import {createHelperChannel} from './helper-channel.js';
+import {createFarmScene} from './farm-scene.js';
 import {createWorksite} from './worksite.js';
 import {createDomainExecutors} from './domain-executors.js';
 import {CanonicalActionLifecycle} from './action-lifecycle.js';
@@ -115,6 +116,10 @@ export async function main():Promise<void> {
     // whether she works, so widen the physical floor on existing archives.
     await lease.run(petId,async()=>{const state=await store.loadEnvelope(petId);if(!state)return;const cap=state.life.constraints.capabilities.find(c=>c.name==='labor.step');if(cap&&(!cap.bodyLimits||cap.bodyLimits.minStamina===undefined||cap.bodyLimits.minStamina>=0))await unitOfWork.apply(petId,state.version,draft=>{const c=draft.life.constraints.capabilities.find((x:any)=>x.name==='labor.step');if(c)c.bodyLimits={...(c.bodyLimits||{}),allowSleeping:true,allowRestrained:true,allowInjured:true,minStamina:-101,maxPain:101};return {};});});
     await lease.run(petId,async()=>{const state=await store.loadEnvelope(petId);if(state&&(!state.life.spirit||!['self.express','service.sweet'].every(name=>state.life.constraints.capabilities.some(c=>c.name===name))))await unitOfWork.apply(petId,state.version,draft=>{initializeSpirit(draft);return {};});});
+    const farm=createFarmScene(store,lease,unitOfWork);
+    await farm.clearVisit(petId);
+    await lease.run(petId,async()=>{const state=await store.loadEnvelope(petId);if(state&&!state.life.constraints.capabilities.some(c=>c.name==='farm.tend'))await unitOfWork.apply(petId,state.version,draft=>{draft.life.constraints.capabilities.push({name:'farm.tend',enabled:true,physical:true});return {};});});
+    await farm.settle(petId);
     const authority={},observerAuthority={},helperAuthority={};
     const humanity=new CanonicalHumanityAdapter(store,unitOfWork,lease,authority,observerAuthority);
     const domain=new LegacyDomain(store,unitOfWork,lease,observerAuthority);
@@ -135,9 +140,10 @@ export async function main():Promise<void> {
       },
       async(id,requestId,detail)=>{const d=detail as any;if(!d||typeof d.id!=='string'||typeof d.key!=='string'||![d.fromX,d.toX].every((n:unknown)=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=1))throw Error('搬砖拖动观察无效');await domain.laborAction(id,requestId,{action:'disturb',id:d.id,key:d.key,surface:'desktop',fromX:d.fromX,toX:d.toX},observerAuthority);const state=await store.loadEnvelope(id);if(!state)throw Error('状态不可用');return projectLegacySnapshot(state).labor;},
       (id,requestId,detail)=>{if(!semanticResponse)throw Error('互动服务尚未就绪');return semanticResponse(id,requestId,detail);},
-      (id,action)=>action==='snapshot'?worksite.snapshot(id):worksite.act(id,action as Parameters<typeof worksite.act>[1]),desktopIdle,id=>worksiteWake(id));
+      (id,action)=>action==='snapshot'?worksite.snapshot(id):worksite.act(id,action as Parameters<typeof worksite.act>[1]),desktopIdle,id=>worksiteWake(id),farm);
     bili=createBiliReader(root);
     const executors=new Map(createDomainExecutors(commandChannel.bridge));
+    executors.set('farm.tend',farm.execute);
     executors.set('learning.observe',createExplorationExecutor(createPublicWeb(),bili));
     const dispatcher=new OutboxDispatcher(lease,executors,lease,new CanonicalActionLifecycle(projectBody),new Map([['service.buy-rice',localRiceReconciler(store)]]));
     await dispatcher.recoverInterrupted();
@@ -180,7 +186,7 @@ export async function main():Promise<void> {
     const retrieval=new CanonicalMemoryRetrieval(lease,desktopIdle,reranker,memoryIndex,embedding), chat=new CanonicalChat(store,lease,unitOfWork,budget,model,(id,q,snapshot)=>retrieval.search(id,q,12,snapshot),(id,key,input)=>domain.laborAction(id,key,input),(id,input)=>service(id,input),id=>worksiteWake(id),grounding,waitForWorksiteStep,resumeWorkAfterChat);
     let requestShutdown=()=>{};
     let companionManagement:ReturnType<typeof createCompanionManagement>;
-    const lifeApi=createLifeApi({authorize:()=>true,petId:()=>petId,getState:id=>kernel.getState(id),shutdown:()=>requestShutdown(),openWorksite:id=>helper.requestWorksiteOpen(id),attachments,finance:createFinanceManagement(store,lease,domain),
+    const lifeApi=createLifeApi({authorize:()=>true,petId:()=>petId,getState:id=>kernel.getState(id),shutdown:()=>requestShutdown(),openWorksite:id=>helper.requestWorksiteOpen(id),farm,attachments,finance:createFinanceManagement(store,lease,domain),
       companion:{read:(id,signal)=>companionManagement.read(id,signal),write:(id,input,signal)=>companionManagement.write(id,input,signal)},
       model:{read:async()=>model!.getSettings(),write:async(id,input)=>{
         if(input.operation==='save'){const {operation,...settings}=input;return model!.saveSettings(settings);}
@@ -230,7 +236,7 @@ export async function main():Promise<void> {
       groupConversation:{run:async(id,signal)=>{await groupConversation?.run(id,signal);}},
       reminders:{run:(id,signal)=>todos.remind(id,signal,t=>{if(!publishWhisper)throw Error('桌宠显示尚未就绪');publishWhisper('提醒：'+t.text);})},
       whisper:{settings:()=>model!.getSettings(),run:async(id,signal)=>{if(!publishWhisper)throw Error('桌宠显示尚未就绪');const text=await responses(id,'whisper',signal,undefined,{autonomous:true});if(!signal.aborted)publishWhisper(text);}},
-      wakeCoordinator:wakes,deterministic,resultCoordinator:coordinator,
+      wakeCoordinator:wakes,deterministic,resultCoordinator:coordinator,farm,
       needs:createAutonomousNeeds(store,lease,unitOfWork,budget,model,text=>{if(!publishWhisper)throw Error('桌宠显示尚未就绪');publishWhisper(text);}),
       assertExclusive:async()=>lease.assertHeld()});
     app=await startStandalone({root,llm:model.llm,ai:{...model,queryBalance:meteredBalance,testConnection:(input:Record<string,unknown>)=>budget.runAs(petId,'interactive',()=>model!.testConnection(input))},agentDefaultModel:model.agentDefaultModel,helperChannel:helper,api,

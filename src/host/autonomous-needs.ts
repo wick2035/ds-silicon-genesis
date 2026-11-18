@@ -1,4 +1,5 @@
 import {randomUUID} from 'node:crypto';
+import {farmVisit} from './farm.js';
 import {riceMotivation} from './companion-personality.js';
 import {hasActiveConversation} from './active-conversation.js';
 import {hasForcedWork} from './forced-labor.js';
@@ -35,7 +36,7 @@ export function createAutonomousNeeds(reader:{loadEnvelope(id:string):Promise<Ca
   const eligible=await gate.run(petId,async()=>{
    const state=await reader.loadEnvelope(petId);if(!state)return false;
    const pet=state.legacy as any,human=state.humanity as any;
-   if(signal.aborted||state.life.constraints.paused||pet.config?.autonomousPaused||pet.growth?.stopAt||human.helperReady!==true||human.restrained||hasForcedWork(state)||hasActiveConversation(state)||!riceMotivation(human,pet.config??{}).mealDue)return false;
+   if(signal.aborted||state.life.constraints.paused||pet.config?.autonomousPaused||pet.growth?.stopAt||human.helperReady!==true||human.restrained||farmVisit(state)||hasForcedWork(state)||hasActiveConversation(state)||!riceMotivation(human,pet.config??{}).mealDue)return false;
    const signature=signatureFor(state);
    if(pet.autonomousNeeds?.nextAt>Date.now()&&pet.autonomousNeeds.signature===signature)return pet.autonomousNeeds.status!=='failed';
    if(state.life.actions.some(a=>['PENDING','DISPATCHED'].includes(a.status)))return false;
