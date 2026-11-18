@@ -48,6 +48,45 @@ test('强制动作途中取消仍结算已经发生的痛苦，不把负体力�
   projectOutcome(s,{id:'partial-action',type:'labor.step',payload:{parameters:{contractId:c.id,commandId:'partial'}}},{status:'cancelled',evidence:{actionId:'partial-action',kind:'labor.step',confirmed:true,effortSeconds:3,intensity:1}},new Date().toISOString(),'partial-receipt');
   assert.ok(s.humanity.stats.stamina<-10);assert.ok(s.humanity.stats.pain>3);assert.equal(c.done,0);assert.ok(s.life.memories.some(m=>m.content.includes('实际用力 3 秒')));
 });
+test('提速前后完整往返消耗相同，用力时间分别按实际回执保存',async()=>{
+  const f=fixture();await f.site.act('main','force-work');
+  const at=new Date().toISOString();
+  function completeTrip(forced,measured){
+    const s=structuredClone(f.get()),c=s.legacy.labor.contracts[0];c.forced=forced;
+    for(const [leg,x,intensity] of [['load',.22,1],['deliver',.78,1.5]]){
+      s.legacy.world={command:{id:leg,source:'labor',status:'queued',surface:'web',index:0,labor:{id:c.id,trip:0,leg,x}}};
+      for(const index of [0,1]){
+        const id=`${leg}:${index}`,effortSeconds=index===0?(measured?1.4:2.24):.9;
+        const evidence={actionId:id,kind:'labor.step',confirmed:true,commandId:leg,index,surface:'web',played:true,x,effortSeconds,intensity,
+          ...(measured?{actionFraction:1,...(index===0?{travelDistance:.56}:{})}:{})};
+        projectOutcome(s,{id,type:'labor.step',payload:{parameters:{contractId:c.id,commandId:leg}}},{status:'completed',evidence},at,`receipt:${id}`);
+      }
+    }
+    assert.equal(c.done,1);assert.equal(c.status,'unpaid');assert.equal(c.paid,0);
+    return s;
+  }
+  for(const forced of [false,true]){
+    const old=completeTrip(forced,false),measured=completeTrip(forced,true);
+    assert.deepEqual(measured.humanity.stats,old.humanity.stats);
+    assert.deepEqual(measured.humanity.emotions,old.humanity.emotions);
+    assert.equal(measured.humanity.serviceActions['labor-effort:deliver:0'].seconds,1.4);
+    const memories=measured.life.memories.filter(m=>m.id.startsWith('forced-labor-memory:'));
+    assert.equal(memories.length,forced?4:0);
+    if(forced)assert.match(memories[2].content,/实际用力 1\.4 秒/);
+  }
+});
+test('放砖回执入库前若任务已暂停，只记录已经确认的用力',async()=>{
+  const f=fixture();await f.site.act('main','force-work');
+  const s=f.get(),contract=s.legacy.labor.contracts[0];contract.status='paused';contract.carrying=true;
+  s.legacy.world={command:{id:'delivery',source:'labor',status:'interrupted',forcedLabor:true,surface:'web',index:1,labor:{id:contract.id,trip:0,leg:'deliver',x:.78}}};
+  const id='putdown',intent={id,type:'labor.step',payload:{parameters:{contractId:contract.id,commandId:'delivery'}}};
+  const evidence={actionId:id,kind:'labor.step',confirmed:true,commandId:'delivery',index:1,surface:'web',played:true,x:.78,effortSeconds:.9,intensity:1.5,actionFraction:1};
+  const receipt=new CanonicalActionLifecycle(projectBody).validateReceipt(s,intent,{status:'completed',evidence});
+  assert.equal(receipt.status,'cancelled');
+  projectOutcome(s,intent,receipt,new Date().toISOString(),'putdown-receipt');
+  assert.equal(contract.done,0);assert.equal(contract.paid,0);assert.equal(contract.status,'paused');
+  assert.match(s.life.memories.find(m=>m.id==='forced-labor-memory:putdown').content,/实际用力 0\.9 秒/);
+});
 test('休息、零精神、负体力和自主暂停均不拦强制工作，实际回执才增加进度并留下痛苦记忆',async()=>{
   const f=fixture(),s=f.get();s.humanity.sleeping=true;s.humanity.restingUntil=Date.now()+600000;s.humanity.stats.stamina=-10;s.humanity.stats.energy=-10;
   const spirit=ensureSpirit(s.life);spirit.value=0;setSpiritRest(s.life,'sleep');

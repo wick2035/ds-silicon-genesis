@@ -1,18 +1,29 @@
+import {EventEmitter} from 'node:events';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 import {TrustedDesktopBridge} from './domain-executors.js';
 import type {DesktopActionKind} from './domain-executors.js';
 
 type Reader={loadEnvelope(petId:string):Promise<CanonicalEnvelope|null>};
 type Command={actionId:string;petId:string;kind:DesktopActionKind;parameters:Record<string,unknown>};
-type Pending={command:Command;timer:ReturnType<typeof setTimeout>;startedAt?:number;intensity?:number;stage?:number;coin?:{id:string;x:number;y:number};world?:Record<string,any>};
+type Pending={command:Command;timer:ReturnType<typeof setTimeout>;startedAt?:number;intensity?:number;stage?:number;coin?:{id:string;x:number;y:number};world?:Record<string,any>;startX?:number;cancelling?:boolean};
+const sceneX=(x:unknown):x is number=>typeof x==='number'&&Number.isFinite(x)&&x>=0&&x<=1;
 
 /** Matches completed animation observations from the helper main process to the
  * one dispatched action. It never makes a client-provided receipt authoritative. */
 export function createDesktopCommandChannel(store:Reader,sourceCapability:object) {
   const pending=new Map<string,Pending>();
+  const worksiteEvents=new EventEmitter(), revisions=new Map<string,number>();
+  const revision=(id:string)=>revisions.get(id)??0;
+  const notifyWorksite=(id:string)=>{revisions.set(id,revision(id)+1);worksiteEvents.emit(`worksite:${id}`);};
+  function forget(item:Pending){
+    const id=item.command.petId;
+    clearTimeout(item.timer);
+    if(pending.get(id)===item)pending.delete(id);
+  }
   const bridge=new TrustedDesktopBridge(async(command,signal)=>{
     if(signal.aborted || pending.has(command.petId))throw Error('桌宠正在执行其他行动');
     const state=await store.loadEnvelope(command.petId), legacy=state?.legacy as Record<string,any>|undefined;
+    if(signal.aborted || pending.has(command.petId))throw Error('桌宠正在执行其他行动');
     if(!legacy)throw Error('桌宠状态不可用');
     if(command.kind==='labor.step') {
       const world=legacy.world?.command,p=command.parameters;
@@ -28,14 +39,29 @@ export function createDesktopCommandChannel(store:Reader,sourceCapability:object
     const coin=command.kind==='token.pickup'?legacy.tokens.coins.find((c:any)=>c.id===command.parameters.coinId):undefined;
     pending.set(command.petId,{command,timer,...(command.kind==='labor.step'?{world:structuredClone(legacy.world.command),intensity:legacy.world?.command?.labor?.leg==='deliver'?1.5:1}:{}),...(coin?{stage:0,coin:{id:coin.id,x:coin.x,y:coin.y}}:{})});
     signal.addEventListener('abort',()=>{const item=pending.get(command.petId);if(item?.command.actionId===command.actionId){clearTimeout(item.timer);pending.delete(command.petId);}},{once:true});
+    if(command.kind==='labor.step'&&legacy.world.command.surface==='web')notifyWorksite(command.petId);
   },sourceCapability,65000);
   return {bridge,
+    async waitForWorksiteChange(id:string,after:number,signal:AbortSignal){
+      if(revision(id)===after&&!signal.aborted)await new Promise<void>(resolve=>{
+        const event=`worksite:${id}`;
+        const finish=()=>{worksiteEvents.off(event,finish);signal.removeEventListener('abort',finish);resolve();};
+        worksiteEvents.once(event,finish);signal.addEventListener('abort',finish,{once:true});
+      });
+      return revision(id);
+    },
     observation(petId:string) {const item=pending.get(petId);return item?.startedAt===undefined?undefined:{actionId:item.command.actionId,kind:item.command.kind,startedAt:item.startedAt};},
     view(petId:string) {
       const c=pending.get(petId)?.command;
       if(!c)return undefined;
       if(c.kind==='body.activity')return {id:c.actionId,actionId:c.actionId,index:0,surface:'desktop',status:'queued',source:'silicon-walk',expires:Date.now()+30000,steps:[{action:c.parameters.activity,...(c.parameters.target?{target:c.parameters.target}:{})}]};
-      if(c.kind==='labor.step')return structuredClone(pending.get(petId)!.world);
+      if(c.kind==='labor.step'){
+        const item=pending.get(petId)!;
+        if(item.cancelling)return undefined;
+        const world=structuredClone(item.world)!;
+        if(item.startX!==undefined)world.status='running';
+        return world;
+      }
       if(c.kind==='body.sleep'||c.kind==='body.wake')return {id:c.actionId,actionId:c.actionId,index:0,surface:'desktop',status:'queued',source:'silicon-rest',restKind:c.kind==='body.sleep'?'sleep':'wake',expires:Date.now()+30000,steps:[{action:'rest'}]};
       if(c.kind==='token.pickup'){const item=pending.get(petId)!;return {id:c.actionId,actionId:c.actionId,coinId:item.coin!.id,index:item.stage,surface:'desktop',status:'queued',source:'tokens',expires:Date.now()+30000,steps:[{action:'walk'},{action:'pickup'}],coin:item.coin,locomotion:'walk'};}
       if(c.kind!=='service.eat-rice' && !c.kind.startsWith('care.'))return undefined;
@@ -72,17 +98,64 @@ export function createDesktopCommandChannel(store:Reader,sourceCapability:object
         bridge.accept({petId:c.petId,actionId:c.actionId,kind:c.kind,status:value.status,played:value.played===true,itemId:value.itemId,...(reason?{reason}:{})},sourceCapability);
         return {ok:true};
       }
-      if(!c || c.kind!=='labor.step'||value.id!==c.parameters.commandId || value.surface!==item?.world?.surface || !Number.isSafeInteger(value.index) || !['playing','completed','interrupted'].includes(value.status))throw Error('桌宠回执没有对应行动');
+      if(!item||!c||c.kind!=='labor.step'||value.id!==c.parameters.commandId||value.surface!==item.world?.surface||value.index!==item.world?.index||!['playing','completed','interrupted'].includes(value.status))throw Error('桌宠回执没有对应行动');
       const state=await store.loadEnvelope(c.petId), world=(state?.legacy as Record<string,any>|undefined)?.world?.command;
-      if(!world || world.id!==value.id || world.index!==value.index)throw Error('桌宠回执版本已变化');
-      if(value.status==='playing'){item!.startedAt ??= Date.now();return {ok:true};}
-      const effortSeconds=item!.startedAt===undefined?0:Math.max(0,Math.min(30,(Date.now()-item!.startedAt)/1000));
-      clearTimeout(item!.timer);pending.delete(c.petId);
-      bridge.accept({petId:c.petId,actionId:c.actionId,kind:'labor.step',status:value.status==='completed'&&['queued','running'].includes(world.status)?'completed':'interrupted',
-        played:value.played===true,commandId:value.id,index:value.index,surface:value.surface,x:value.x,...(effortSeconds===undefined?{}:{effortSeconds,intensity:item!.intensity})},sourceCapability);
+      if(pending.get(c.petId)!==item)throw Error('桌宠回执版本已变化');
+      const matches=world?.id===value.id&&world.index===value.index;
+      if(!matches&&item.startX===undefined)throw Error('桌宠回执版本已变化');
+      const current=matches&&['queued','running'].includes(world.status);
+      if(value.status==='playing'){
+        if(!current||item.cancelling)throw Error('桌宠回执版本已变化');
+        if(item.startX!==undefined)throw Error('工地动作已经开始');
+        if(item.startedAt===undefined&&value.surface==='web'&&value.worksiteX!==undefined){
+          if(!sceneX(value.worksiteX))throw Error('工地起点无效');
+          item.startX=value.worksiteX;
+        }
+        item.startedAt??=Date.now();return {ok:true};
+      }
+      const completed=value.status==='completed'&&current&&!item.cancelling;
+      let effortSeconds=item.startedAt===undefined?0:Math.max(0,Math.min(30,(Date.now()-item.startedAt)/1000));
+      let travelDistance:number|undefined,actionFraction:number|undefined;
+      if(item.startX!==undefined){
+        if(typeof value.effortSeconds!=='number'||!Number.isFinite(value.effortSeconds)||value.effortSeconds<0||value.effortSeconds>Math.min(30,effortSeconds+0.25)||!sceneX(value.worksiteX))throw Error('工地动作测量无效');
+        const target=item.world?.labor?.x;
+        if(!sceneX(target))throw Error('工地目标位置无效');
+        if(completed&&(value.played!==true||!sceneX(value.x)||Math.abs(value.x-target)>.045||value.effortSeconds<=0))throw Error('工地动作尚未确认完成');
+        effortSeconds=value.effortSeconds;
+        if(value.index===0){
+          const route=Math.abs(target-item.startX),progress=(value.worksiteX-item.startX)*Math.sign(target-item.startX);
+          if(progress < -0.001||progress>route+0.001||(completed&&Math.abs(value.worksiteX-target)>0.001))throw Error('工地位移与动作不符');
+          travelDistance=Math.min(route,Math.max(0,progress));
+          actionFraction=route>0?travelDistance/route:0;
+        }else{
+          if(Math.abs(value.worksiteX-item.startX)>0.001)throw Error('拿放砖的位置已变化');
+          actionFraction=completed?1:Math.min(1,effortSeconds/0.9);
+        }
+      }
+      forget(item);
+      bridge.accept({petId:c.petId,actionId:c.actionId,kind:'labor.step',status:completed?'completed':'interrupted',
+        played:value.played===true,commandId:value.id,index:value.index,surface:value.surface,x:value.x,effortSeconds,intensity:item.intensity,travelDistance,actionFraction,
+        forcedLabor:item.world?.forcedLabor===true||(matches&&world.forcedLabor===true)},sourceCapability);
       return {ok:true};
     },
-    cancelPet(petId:string, reason='桌面活动被中断'){const item=pending.get(petId);if(!item)return;clearTimeout(item.timer);pending.delete(petId);if(item.command.kind==='body.activity'){bridge.accept({petId,actionId:item.command.actionId,kind:'body.activity',status:'interrupted',reason},sourceCapability);}else if(item.command.kind==='token.pickup'){bridge.accept({petId,actionId:item.command.actionId,kind:'token.pickup',status:'interrupted'},sourceCapability);}else if(item.command.kind==='labor.step'){try{bridge.accept({petId,actionId:item.command.actionId,kind:'labor.step',status:'interrupted',effortSeconds:item.startedAt===undefined?0:Math.max(0,Math.min(30,(Date.now()-item.startedAt)/1000)),intensity:item.intensity},sourceCapability);}catch{bridge.interruptPet(petId,sourceCapability);}}else bridge.accept({petId,actionId:item.command.actionId,kind:item.command.kind,status:'interrupted',reason},sourceCapability);},
+    cancelPet(petId:string, reason='桌面活动被中断',canReportMotion=true){
+      const item=pending.get(petId);if(!item)return;
+      const {actionId,kind}=item.command;
+      if(kind==='labor.step'&&item.startX!==undefined){
+        if(!canReportMotion){forget(item);bridge.interruptPet(petId,sourceCapability);return;}
+        if(item.cancelling)return;
+        item.cancelling=true;clearTimeout(item.timer);
+        item.timer=setTimeout(()=>{forget(item);bridge.interruptPet(petId,sourceCapability);},2000);
+        notifyWorksite(petId);return;
+      }
+      forget(item);
+      if(kind==='labor.step'){
+        if(item.world?.surface==='web')notifyWorksite(petId);
+        const effortSeconds=item.startedAt===undefined?0:Math.max(0,Math.min(30,(Date.now()-item.startedAt)/1000));
+        try{bridge.accept({petId,actionId,kind,status:'interrupted',effortSeconds,intensity:item.intensity},sourceCapability);}
+        catch{bridge.interruptPet(petId,sourceCapability);}
+      }else bridge.accept({petId,actionId,kind,status:'interrupted',reason},sourceCapability);
+    },
     cancelToken(petId:string){if(pending.get(petId)?.command.kind==='token.pickup')this.cancelPet(petId);},
     close(){for(const item of pending.values())clearTimeout(item.timer);pending.clear();}
   };

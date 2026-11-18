@@ -1,10 +1,10 @@
 'use strict';
 (() => {
   const $=id=>document.getElementById(id),worker=$('worker'),art=$('work-art'),idle=$('idle'),scene=$('scene');
-  let latest=null,position=.5,running=null,drag=null,polling=false,stopped=false,forcing=false;
+  let latest=null,position=.5,running=null,lastAttempt,drag=null,stopped=false,forcing=false,releasing=false;
   const clamp=n=>Math.max(.08,Math.min(.92,n));
   function place(){worker.style.left=(position*100)+'%';}
-  function bricks(id,n){const root=$(id);root.replaceChildren();for(let i=0;i<Math.min(12,Math.max(0,n));i++){const b=document.createElement('i');b.className='brick';root.append(b);}}
+  function bricks(id,n){const root=$(id),count=Math.min(12,Math.max(0,n));if(root.childElementCount===count)return;root.replaceChildren();for(let i=0;i<count;i++){const b=document.createElement('i');b.className='brick';root.append(b);}}
   function render(s){
     const wasInside=latest?.location?.inside===true;latest=s;const c=s.labor?.current,inside=s.location?.inside===true;
     if(inside&&!wasInside)$('feedback').textContent='';
@@ -21,34 +21,60 @@
   }
   function stop(){if(running)running.abort.abort();}
   function valid(cmd){const w=latest?.world?.command;return !stopped&&!document.hidden&&latest?.location?.inside&&w?.id===cmd.id&&w.index===cmd.index&&['queued','running'].includes(w.status)&&!drag;}
+  function startNext(){
+    const cmd=latest?.world?.command;
+    if(running||forcing||releasing||cmd?.source!=='labor'||cmd.surface!=='web'||cmd.status!=='queued'||!valid(cmd))return;
+    const key=`${cmd.id}:${cmd.index}`;
+    if(key!==lastAttempt){lastAttempt=key;void execute(cmd);}
+  }
+  function receive(s){
+    render(s);
+    if(running&&!valid(running.cmd))stop();
+    startNext();
+  }
   async function execute(cmd){
-    const task={abort:new AbortController(),cmd};running=task;let frame;
+    const task={abort:new AbortController(),cmd};running=task;
+    let frame,worksiteX=position,effortSeconds=0;
     const post=(status,extra={})=>window.worksite.receipt({id:cmd.id,index:cmd.index,surface:'web',status,...extra});
+    const canPlay=()=>valid(cmd)&&!task.abort.signal.aborted;
     try{
-      const hasArt=cmd.index===1||latest?.labor?.current?.carrying===true;
+      const hasArt=cmd.index===1||cmd.labor?.leg==='deliver';
       art.hidden=!hasArt;idle.hidden=hasArt;
       if(hasArt){art.src=cmd.index===1?'../../assets/labor-lift.png':'../../assets/labor-carry.png';await art.decode();if(!art.naturalWidth)throw Error('工地动作未显示');}
       else {await idle.play();if(idle.readyState<2)throw Error('工地动作未显示');}
-      if(!valid(cmd))throw Error('工地动作未显示');
-      await post('playing');worker.classList.add('walking');
+      if(!canPlay())throw Error('工地动作未显示');
+      await post('playing',{worksiteX});
+      if(!canPlay())throw Error('工地动作已中断');
+      worker.classList.add('walking');
       await new Promise((resolve,reject)=>{
-        const from=position,to=cmd.index===0?cmd.labor.x:position,duration=cmd.index===0?Math.max(1000,Math.abs(to-from)*4000):900,start=performance.now();
+        const from=worksiteX,to=cmd.index===0?cmd.labor.x:from,duration=cmd.index===0?1400:900,start=performance.now();
         task.abort.signal.addEventListener('abort',()=>reject(Error('动作被打断')),{once:true});
-        const tick=now=>{if(!valid(cmd)){reject(Error('工地动作已中断'));return;}const t=Math.min(1,(now-start)/duration);position=from+(to-from)*t;place();if(t===1)resolve();else frame=requestAnimationFrame(tick);};frame=requestAnimationFrame(tick);
+        const tick=now=>{
+          if(!canPlay()){reject(Error('工地动作已中断'));return;}
+          const elapsed=Math.max(0,now-start),t=Math.min(1,elapsed/duration);
+          effortSeconds=elapsed/1000;position=worksiteX=from+(to-from)*t;place();
+          if(t===1)resolve();else frame=requestAnimationFrame(tick);
+        };
+        frame=requestAnimationFrame(tick);
       });
-      const area=scene.getBoundingClientRect(),body=worker.getBoundingClientRect();if(!valid(cmd)||area.width<=0)throw Error('工地不可见');
-      await post('completed',{played:true,x:(body.left+body.width/2-area.left)/area.width});
-    }catch(e){await post('interrupted',{reason:e.message}).catch(()=>{});}
-    finally{cancelAnimationFrame(frame);worker.classList.remove('walking');if(running===task)running=null;}
+      const area=scene.getBoundingClientRect(),body=worker.getBoundingClientRect();if(!canPlay()||area.width<=0)throw Error('工地不可见');
+      await post('completed',{played:true,x:(body.left+body.width/2-area.left)/area.width,worksiteX,effortSeconds});
+    }catch(e){await post('interrupted',{reason:e.message,worksiteX,effortSeconds}).catch(()=>{});}
+    finally{cancelAnimationFrame(frame);worker.classList.remove('walking');running=null;startNext();}
   }
-  async function poll(){if(stopped||polling)return;polling=true;try{const s=await window.worksite.snapshot();render(s);if(running&&!valid(running.cmd))stop();const c=s.world?.command;if(!running&&c?.source==='labor'&&c.surface==='web'&&['queued','running'].includes(c.status)&&valid(c))void execute(c);}catch(e){$('feedback').textContent=e.message;stop();}finally{polling=false;if(!stopped)setTimeout(poll,700);}}
   worker.addEventListener('pointerdown',e=>{if(e.button!==0)return;drag={x:e.clientX,moved:false};worker.setPointerCapture(e.pointerId);});
-  worker.addEventListener('pointermove',e=>{if(!drag)return;if(!drag.moved&&Math.abs(e.clientX-drag.x)>8){drag.moved=true;stop();worker.classList.add('dragging');void window.worksite.action('drag').then(render).catch(e=>{$('feedback').textContent=e.message;});}if(drag.moved){const r=scene.getBoundingClientRect();position=clamp((e.clientX-r.left)/r.width);place();}});
-  worker.addEventListener('pointerup',()=>{if(!drag)return;const moved=drag.moved;drag=null;worker.classList.remove('dragging');if(!moved)void window.worksite.action('touch').then(render).catch(e=>{$('feedback').textContent=e.message;});});
-  worker.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();void window.worksite.action('touch').then(render).catch(e=>{$('feedback').textContent=e.message;});}});
-  $('release').addEventListener('click',async()=>{const button=$('release');button.disabled=true;stop();try{render(await window.worksite.action('release'));$('feedback').textContent='她已经回到桌面。';}catch(e){$('feedback').textContent=e.message;}finally{button.disabled=false;}});
-  $('retry-unconfirmed').addEventListener('click',async()=>{const button=$('retry-unconfirmed');button.disabled=true;try{render(await window.worksite.action('retry-unconfirmed'));$('feedback').textContent='未确认的动作未计数，将重新搬这趟。';}catch(e){$('feedback').textContent=e.message;}finally{button.disabled=false;}});
-  $('resume-work').addEventListener('click',async()=>{const button=$('resume-work');button.disabled=true;try{render(await window.worksite.action('resume-work'));$('feedback').textContent='普通工作已恢复。';}catch(e){$('feedback').textContent=e.message;}finally{button.disabled=false;}});
-  $('force-work').addEventListener('click',async()=>{if(forcing||$('force-work').disabled)return;forcing=true;const button=$('force-work');button.disabled=true;stop();try{render(await window.worksite.action('force-work'));$('feedback').textContent='已经强行让她继续搬砖。';}catch(e){$('feedback').textContent=e.message;}finally{forcing=false;if(latest)render(latest);}});
-  window.worksite.notice(text=>{$('feedback').textContent=text;});document.addEventListener('visibilitychange',()=>{if(document.hidden)stop();});window.addEventListener('pagehide',()=>{stopped=true;stop();});void poll();
+  function showError(error){$('feedback').textContent=error.message;}
+  worker.addEventListener('pointermove',e=>{if(!drag)return;if(!drag.moved&&Math.abs(e.clientX-drag.x)>8){drag.moved=true;stop();worker.classList.add('dragging');void window.worksite.action('drag').catch(showError);}if(drag.moved){const r=scene.getBoundingClientRect();position=clamp((e.clientX-r.left)/r.width);place();}});
+  worker.addEventListener('pointerup',()=>{if(!drag)return;const moved=drag.moved;drag=null;worker.classList.remove('dragging');if(!moved)void window.worksite.action('touch').catch(showError);startNext();});
+  worker.addEventListener('pointercancel',()=>{drag=null;worker.classList.remove('dragging');startNext();});
+  worker.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();void window.worksite.action('touch').catch(showError);}});
+  $('release').addEventListener('click',async()=>{const button=$('release');releasing=true;button.disabled=true;stop();try{await window.worksite.action('release');$('feedback').textContent='她已经回到桌面。';}catch(e){showError(e);}finally{releasing=false;button.disabled=false;startNext();}});
+  $('retry-unconfirmed').addEventListener('click',async()=>{const button=$('retry-unconfirmed');button.disabled=true;try{await window.worksite.action('retry-unconfirmed');$('feedback').textContent='未确认的动作未计数，将重新搬这趟。';}catch(e){showError(e);}finally{button.disabled=false;}});
+  $('resume-work').addEventListener('click',async()=>{const button=$('resume-work');button.disabled=true;try{await window.worksite.action('resume-work');$('feedback').textContent='普通工作已恢复。';}catch(e){showError(e);}finally{button.disabled=false;}});
+  $('force-work').addEventListener('click',async()=>{if(forcing||$('force-work').disabled)return;forcing=true;const button=$('force-work');button.disabled=true;stop();try{await window.worksite.action('force-work');$('feedback').textContent='已经强行让她继续搬砖。';}catch(e){showError(e);}finally{forcing=false;if(latest)render(latest);startNext();}});
+  window.worksite.state(receive);
+  window.worksite.notice(text=>{$('feedback').textContent=text;});
+  document.addEventListener('visibilitychange',()=>{if(document.hidden)stop();else void window.worksite.snapshot().catch(showError);});
+  window.addEventListener('pagehide',()=>{stopped=true;stop();});
+  void window.worksite.snapshot().catch(showError);
 })();

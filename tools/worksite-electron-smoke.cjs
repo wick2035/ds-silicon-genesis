@@ -11,7 +11,10 @@ const {pathToFileURL}=require('node:url');
 const root=path.resolve(__dirname,'..');
 app.setPath('userData',fs.mkdtempSync(path.join(os.tmpdir(),'worksite-ipc-smoke-')));
 class HiddenWindow extends BrowserWindow {
-  constructor(options){super({...options,show:false});this.show=()=>{};this.showInactive=()=>{};this.focus=()=>{};}
+  constructor(options){
+    super({...options,show:false,webPreferences:{...options.webPreferences,offscreen:true}});
+    this.show=()=>{};this.showInactive=()=>{};this.focus=()=>{};
+  }
 }
 let server;
 const deadline=setTimeout(()=>{console.error('worksite Electron smoke timed out');app.exit(1);},20000);
@@ -19,18 +22,26 @@ app.whenReady().then(async()=>{
   const load=rel=>import(pathToFileURL(path.join(root,rel)).href);
   const {createWorksite}=await load('dist/host/worksite.js');
   const {createHelperChannel}=await load('dist/host/helper-channel.js');
+  const {createDesktopCommandChannel}=await load('dist/host/desktop-command-channel.js');
+  const {projectOutcome}=await load('dist/host/outcome-projector.js');
   const {createHumanity}=await load('vendor/dsh-pet/src/host/humanity.mjs');
   let state={petId:'main',version:0,legacy:{events:[],labor:{contracts:[]},world:{},wallet:{balance:100},config:{costs:{}}},humanity:createHumanity(),life:{actions:[],events:[],memories:[],invalidSources:{},constraints:{paused:false}}};
   const store={loadEnvelope:async()=>structuredClone(state)},gate={run:async(_id,fn)=>fn()};
   const uow={apply:async(_id,version,fn)=>{assert.equal(version,state.version);const d=structuredClone(state);fn(d);d.version++;state=d;}};
-  let command=null;const receipts=[];
-  const site=createWorksite(store,gate,uow,()=>command,()=>{});
-  const channel=createHelperChannel({observeRestraint:async()=>{}},{},['main'],{},{},{cancelPet(){}},undefined,undefined,undefined,undefined,(id,action)=>action==='snapshot'?site.snapshot(id):site.act(id,action));
-  const epoch='b'.repeat(32);channel.opened(epoch);
+  const capability={},commands=createDesktopCommandChannel(store,capability),receipts=[];
+  const site=createWorksite(store,gate,uow,id=>commands.view(id),id=>commands.cancelPet(id));
+  const channel=createHelperChannel({observeRestraint:async()=>{}},commands.bridge,['main'],{},capability,commands,undefined,undefined,undefined,undefined,(id,action)=>action==='snapshot'?site.snapshot(id):site.act(id,action));
+  const epoch='b'.repeat(32);process.env.SILICON_HELPER_EPOCH=epoch;channel.opened(epoch);
   const requests=[];
   server=http.createServer(async(req,res)=>{
     let raw='';for await(const part of req)raw+=part;
-    try{if(req.url==='/__silicon/action-receipt'){const receipt=JSON.parse(raw);receipts.push(receipt);if(receipt.status==='completed')command=null;res.writeHead(200,{'content-type':'application/json'});res.end('{}');return;}assert.equal(req.url,'/__silicon/worksite');assert.equal(req.method,'POST');const input=JSON.parse(raw);requests.push(input.action);const result=await channel.worksite(epoch,input);res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(result));}
+    try{
+      assert.equal(req.method,'POST');const input=JSON.parse(raw);
+      let result;
+      if(req.url==='/__silicon/action-receipt'){receipts.push(input);result=await channel.receipt(epoch,input);}
+      else{assert.equal(req.url,'/__silicon/worksite');requests.push(input.action);result=await channel.worksite(epoch,input);}
+      res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(result));
+    }
     catch(error){res.writeHead(409);res.end(JSON.stringify({message:error.message}));}
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -39,6 +50,8 @@ app.whenReady().then(async()=>{
   let siteWindow;const TrackingWindow=class extends HiddenWindow {constructor(options){super(options);siteWindow=this;}};
   require('../vendor/dsh-pet/runtime/electron-helper/main/worksite.js').register({ipcMain,petWindows:{state:{windows}},hostRequest,BrowserWindow:TrackingWindow,screen,app});
   ipcMain.emit('pet:open-worksite',{sender:desktop.webContents});
+  // Remove the desktop from the periodic sync so every step has to arrive via dispatch notification.
+  windows.delete('main');
   await new Promise((resolve,reject)=>{siteWindow.webContents.once('did-finish-load',resolve);siteWindow.webContents.once('did-fail-load',(_e,code,description)=>reject(Error(code+': '+description)));});
   await siteWindow.webContents.executeJavaScript('document.getElementById("force-work").click()');
   for(let i=0;i<500&&!state.legacy.labor.contracts.length;i++)await new Promise(r=>setTimeout(r,10));
@@ -48,14 +61,46 @@ app.whenReady().then(async()=>{
   // Exercise the real renderer's animation and native receipt path as well.
   // Keep this isolated test window hidden; production uses its visible window.
   await siteWindow.webContents.executeJavaScript('Object.defineProperty(document,"hidden",{get:()=>false,configurable:true});true');
-  const before=await siteWindow.webContents.executeJavaScript('document.getElementById("worker").style.left');
-  command={id:'forced-animation',source:'labor',forcedLabor:true,surface:'web',status:'queued',index:0,labor:{x:.22}};
-  for(let i=0;i<600&&!receipts.some(r=>r.status==='completed');i++)await new Promise(r=>setTimeout(r,10));
-  const after=await siteWindow.webContents.executeJavaScript('document.getElementById("worker").style.left');
-  assert.ok(receipts.some(r=>r.status==='playing'),'actual renderer must start moving');
-  assert.ok(receipts.some(r=>r.status==='completed'&&r.played===true),'actual animation must finish and report its receipt');
-  assert.notEqual(after,before,'worker position must actually change');
+  const started=performance.now(),contract=state.legacy.labor.contracts[0],actualSeconds=[];
+  for(const [leg,x] of [['load',.22],['deliver',.78]]){
+    const id=`forced-${leg}`;
+    state.legacy.world.command={id,source:'labor',forcedLabor:true,surface:'web',status:'queued',index:0,labor:{id:contract.id,trip:0,leg,x}};
+    for(const index of [0,1]){
+      const actionId=`${id}:${index}`;
+      const intent={id:actionId,type:'labor.step',payload:{petId:'main',actionId,parameters:{commandId:id,contractId:contract.id}}};
+      const result=await commands.bridge.execute('main',intent,AbortSignal.timeout(5000));
+      assert.equal(result.status,'completed');
+      actualSeconds.push(result.evidence.effortSeconds);
+      const expected=index===0?1.4:.9;
+      assert.ok(result.evidence.effortSeconds>=expected&&result.evidence.effortSeconds<expected+.25,`${actionId} played for ${result.evidence.effortSeconds}s, expected about ${expected}s`);
+      if(index===0)assert.ok(Math.abs(result.evidence.travelDistance-(leg==='load'?.28:.56))<.001);
+      projectOutcome(state,intent,result,new Date().toISOString(),`receipt:${actionId}`);
+    }
+  }
+  assert.deepEqual(receipts.map(r=>r.status),['playing','completed','playing','completed','playing','completed','playing','completed']);
+  assert.equal(contract.done,1);assert.equal(contract.status,'unpaid');
+  assert.equal(state.life.memories.filter(m=>m.id.startsWith('forced-labor-memory:')).length,4);
+  assert.equal(await siteWindow.webContents.executeJavaScript('document.getElementById("worker").style.left'),'78%');
+  const elapsed=Math.round(performance.now()-started);
   await assert.rejects(siteWindow.webContents.executeJavaScript('window.worksite.action("invalid-action")'),/工地操作无效/);
+  await siteWindow.webContents.executeJavaScript('window.worksite.action("force-work")');
+  const interrupted=state.legacy.labor.contracts[0],id='partial-walk';
+  state.legacy.world.command={id,source:'labor',forcedLabor:true,surface:'web',status:'queued',index:0,labor:{id:interrupted.id,trip:0,leg:'load',x:.22}};
+  const intent={id,type:'labor.step',payload:{petId:'main',actionId:id,parameters:{commandId:id,contractId:interrupted.id}}};
+  const walking=commands.bridge.execute('main',intent,AbortSignal.timeout(5000));
+  for(let i=0;i<200;i++){
+    const x=await siteWindow.webContents.executeJavaScript('parseFloat(document.getElementById("worker").style.left)');
+    if(x<68)break;
+    await new Promise(resolve=>setTimeout(resolve,10));
+  }
   await siteWindow.webContents.executeJavaScript('window.worksite.action("release")');assert.equal(state.legacy.worksite.inside,false);
-  channel.closed(epoch);console.log('PASS: real Electron click → preload → IPC → HTTP → helper channel → canonical worksite → real movement → completed receipt; invalid action rejected; release succeeds');
+  const partial=await walking;
+  assert.equal(partial.status,'cancelled');
+  assert.ok(partial.evidence.travelDistance>0&&partial.evidence.travelDistance<.56);
+  assert.ok(partial.evidence.effortSeconds>0&&partial.evidence.effortSeconds<1.4);
+  projectOutcome(state,intent,partial,new Date().toISOString(),`receipt:${id}`);
+  assert.equal(state.legacy.labor.contracts[0].done,0);
+  assert.ok(state.life.memories.some(m=>m.id===`forced-labor-memory:${id}`));
+  channel.closed(epoch);commands.close();
+  console.log(`PASS: dispatch notifications alone ran the four steps in ${elapsed} ms; measured animation ${actualSeconds.map(s=>s.toFixed(3)).join(', ')} s, and an interrupted route preserved partial effort`);
 }).then(()=>{clearTimeout(deadline);server?.close();app.exit(0);}).catch(error=>{console.error(error);clearTimeout(deadline);server?.close();app.exit(1);});

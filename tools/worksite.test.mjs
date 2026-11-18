@@ -90,3 +90,40 @@ test('中断之后迟到的完成回执结算为取消，不留下永远派发�
     const receipt=await result;assert.equal(receipt.status,'cancelled');assert.equal(receipt.evidence.confirmed,true);assert.equal(channel.view('main'),undefined);
   }finally{controller.abort();channel.close();if(result)await result;}
 });
+
+test('工地通知唤醒已订阅的窗口，中断只确认实际位移且不重播旧动作',async()=>{
+  const world={id:'cmd',source:'labor',surface:'web',status:'queued',index:0,labor:{id:'job',trip:0,leg:'deliver',x:.78}};
+  const channel=createDesktopCommandChannel({loadEnvelope:async()=>({legacy:{world:{command:structuredClone(world)}}})},{});
+  const controller=new AbortController();let result;
+  try{
+    const initial=await channel.waitForWorksiteChange('main',-1,controller.signal);
+    const dispatched=channel.waitForWorksiteChange('main',initial,controller.signal);
+    const intent={id:'step',type:'labor.step',payload:{actionId:'step',petId:'main',parameters:{commandId:'cmd',contractId:'job'}}};
+    result=channel.bridge.execute('main',intent,controller.signal);
+    const revision=await dispatched;
+    assert.equal(revision,initial+1);
+    assert.equal(channel.view('main').status,'queued');
+    assert.equal(await channel.waitForWorksiteChange('main',initial,controller.signal),revision);
+
+    const base={petId:'main',id:'cmd',surface:'web',index:0};
+    const playing={...base,status:'playing',worksiteX:.22};
+    await channel.receipt(playing);
+    assert.equal(channel.view('main').status,'running');
+    await assert.rejects(channel.receipt(playing),/已经开始/);
+    const cancelled=channel.waitForWorksiteChange('main',revision,controller.signal);
+    channel.cancelPet('main');
+    assert.equal(await cancelled,revision+1);
+    assert.equal(channel.view('main'),undefined);
+    world.status='interrupted';
+    const partial={...base,status:'interrupted',worksiteX:.36,effortSeconds:.2};
+    await assert.rejects(channel.receipt({...partial,worksiteX:.1}),/位移/);
+    await channel.receipt(partial);
+    const receipt=await result;
+    assert.equal(receipt.status,'cancelled');
+    assert.equal(receipt.evidence.effortSeconds,.2);
+    assert.equal(receipt.evidence.intensity,1.5);
+    assert.ok(Math.abs(receipt.evidence.travelDistance-.14)<1e-9);
+    assert.ok(Math.abs(receipt.evidence.actionFraction-.25)<1e-9);
+    await assert.rejects(channel.receipt(partial),/没有对应行动/);
+  }finally{controller.abort();channel.close();if(result)await result;}
+});

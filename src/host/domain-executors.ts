@@ -5,7 +5,7 @@ type Sender = (command: {actionId:string;petId:string;kind:DesktopActionKind;par
 export interface DesktopReceipt {
   petId:string; actionId:string; kind:DesktopActionKind; status:'completed'|'failed'|'interrupted';
   played?:boolean; itemId?:string; commandId?:string; index?:number; surface?:string; x?:number; y?:number; coinId?:string;
-  effortSeconds?:number; intensity?:number;
+  effortSeconds?:number; intensity?:number; travelDistance?:number; actionFraction?:number; forcedLabor?:boolean;
   reason?:string; distance?:number; activity?:string;
 }
 interface Pending { petId:string; kind:DesktopReceipt['kind']; resolve:(receipt:DesktopReceipt)=>void; reject:(error:Error)=>void }
@@ -51,13 +51,18 @@ export class TrustedDesktopBridge {
       // Start listening before dispatch, so a fast helper cannot race the waiter.
       await this.send({actionId:intent.id,petId,kind,parameters:structuredClone(intent.payload.parameters as Record<string,unknown>)},signal);
       const result = await response;
-      if (result.status !== 'completed') return {status:result.status === 'failed' ? 'failed' : 'cancelled',evidence:{actionId:intent.id,kind,reason:result.reason||result.status,...(kind==='labor.step' && result.effortSeconds!==undefined?{confirmed:true,effortSeconds:result.effortSeconds,intensity:result.intensity}:{})}};
+      const laborEffort=kind==='labor.step'&&result.effortSeconds!==undefined?{
+        effortSeconds:result.effortSeconds,intensity:result.intensity,
+        ...(result.travelDistance===undefined?{}:{travelDistance:result.travelDistance}),
+        ...(result.actionFraction===undefined?{}:{actionFraction:result.actionFraction,index:result.index,forcedLabor:result.forcedLabor}),
+      }:undefined;
+      if (result.status !== 'completed') return {status:result.status === 'failed' ? 'failed' : 'cancelled',evidence:{actionId:intent.id,kind,reason:result.reason||result.status,...(laborEffort?{confirmed:true,...laborEffort}:{})}};
       const evidence: Record<string,unknown> = {actionId:intent.id,kind,confirmed:true,played:true};
       if(kind==='body.activity')Object.assign(evidence,{distance:result.distance,surface:result.surface,activity:result.activity});
       else if (kind === 'service.eat-rice'||kind.startsWith('care.')) evidence.itemId = result.itemId;
       else if(kind==='body.sleep'||kind==='body.wake')Object.assign(evidence,{restKind:kind==='body.sleep'?'sleep':'wake'});
       else if(kind==='token.pickup')Object.assign(evidence,{coinId:result.coinId,x:result.x,y:result.y,surface:result.surface});
-      else Object.assign(evidence,{commandId:result.commandId,index:result.index,surface:result.surface,x:result.x,...(result.effortSeconds === undefined ? {} : {effortSeconds:result.effortSeconds,intensity:result.intensity})});
+      else Object.assign(evidence,{commandId:result.commandId,index:result.index,surface:result.surface,x:result.x,...laborEffort});
       return {status:'completed',evidence};
     } catch {
       // Once dispatch was attempted its outcome can be uncertain; never retry blindly.

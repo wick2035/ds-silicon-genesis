@@ -13,16 +13,27 @@ function assert(value: unknown, message: string): asserts value { if (!value) th
 const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n);
 const clamp = (n: number) => Math.max(0, Math.min(100, n));
 
+function laborEffort(e:Obj):number {
+  assert(finite(e.effortSeconds)&&e.effortSeconds>=0&&e.effortSeconds<=30&&finite(e.intensity)&&e.intensity>=1&&e.intensity<=1.7,'体力回执无效');
+  if(e.actionFraction===undefined)return e.effortSeconds*e.intensity; // Receipts from earlier helpers.
+  assert(finite(e.actionFraction)&&e.actionFraction>=0&&e.actionFraction<=1,'工地动作完成比例无效');
+  if(e.travelDistance===undefined)return 0.9*e.actionFraction*e.intensity;
+  assert(finite(e.travelDistance)&&e.travelDistance>=0&&e.travelDistance<=1,'工地移动距离无效');
+  // The old speed charged four seconds of effort per scene width.
+  return e.travelDistance*4*e.intensity;
+}
+
 function forcedEffort(draft:CanonicalEnvelope,contract:Obj,next:Obj,human:Obj,effort:number,e:Obj,intent:OutboxIntent,occurredAt:string,sourceEventId:string){
-  if(effort<=0)return;
+  if(effort<=0&&e.effortSeconds<=0)return;
+  const fraction=e.actionFraction??1;
   next.stats.stamina = Math.max(-100, next.stats.stamina - effort * .12);
   next.stats.energy = Math.max(-100, next.stats.energy - effort * .08);
   next.stats.satiety = clamp(next.stats.satiety - effort * .015);
-  next.stats.pain = clamp(next.stats.pain + effort * .25 + 3);
-  next.stats.stress = clamp(next.stats.stress + effort * .2 + 2);
-  next.stats.security=clamp(next.stats.security-effort*.12-1);
-  next.emotions.fear=clamp(next.emotions.fear+effort*.3+2);
-  next.emotions.sadness=clamp(next.emotions.sadness+effort*.15+1);
+  next.stats.pain = clamp(next.stats.pain + effort * .25 + 3*fraction);
+  next.stats.stress = clamp(next.stats.stress + effort * .2 + 2*fraction);
+  next.stats.security=clamp(next.stats.security-effort*.12-fraction);
+  next.emotions.fear=clamp(next.emotions.fear+effort*.3+2*fraction);
+  next.emotions.sadness=clamp(next.emotions.sadness+effort*.15+fraction);
   const eventId='forced-labor-sensation:'+intent.id;
   const content=`我被强迫搬运，实际用力 ${e.effortSeconds} 秒；疼痛 ${human.stats.pain} → ${next.stats.pain}，压力 ${human.stats.stress} → ${next.stats.stress}，恐惧 ${human.emotions.fear} → ${next.emotions.fear}。`;
   draft.life.events.push({eventId,petId:draft.petId,type:'body.forced-labor',source:'executor',occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'observed',payload:{contractId:contract.id,description:content,sourceIds:[sourceEventId,...(contract.forcedSource?[contract.forcedSource]:[])]}});
@@ -40,7 +51,7 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
   if(intent.type==='labor.step' && (receipt.status==='cancelled'||receipt.status==='failed')) {
     const pet=draft.legacy as Obj, params=intent.payload.parameters as Obj;
     const command=pet.world?.command, contract=pet.labor?.contracts?.find((c:Obj)=>c.id===params?.contractId);
-    if(command?.id===params?.commandId && ['queued','running'].includes(command.status)) {
+    if(command?.id===params?.commandId && (receipt.evidence.index===undefined||receipt.evidence.index===command.index) && ['queued','running'].includes(command.status)) {
       command.status='interrupted'; command.interruptedReason='execution-'+receipt.status;
       if(contract && command.labor?.id===contract.id){contract.workPermit=false;contract.batchRemaining=0;contract.behavior='动作中断，等待新的工作决定';if(!contract.forced&&pet.worksite?.inside){pet.worksite.workState='stopped';pet.worksite.stopReason='interrupted';pet.worksite.sessionId='interrupted:'+intent.id;}}
     }
@@ -108,10 +119,10 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
   }
   if (intent.type === 'labor.step') {
     if(receipt.status==='cancelled') {
-      assert(finite(e.effortSeconds) && e.effortSeconds>=0 && e.effortSeconds<=30 && finite(e.intensity) && e.intensity>=1 && e.intensity<=1.7 && human.stats && human.emotions,'体力回执无效');
-      const interrupted=pet.world?.command;if(interrupted?.id===params.commandId&&['queued','running'].includes(interrupted.status)){interrupted.status='interrupted';interrupted.interruptedReason='execution-interrupted';}
-      const next=advanceHumanity(human,at),effort=e.effortSeconds*e.intensity,contract=pet.labor?.contracts?.find((c:Obj)=>c.id===params.contractId);
-      if(contract&&(interrupted?.forcedLabor===true||contract.forced))forcedEffort(draft,contract,next,human,effort,e,intent,occurredAt,sourceEventId);
+      assert(human.stats&&human.emotions,'身体状态无效');
+      const interrupted=pet.world?.command;
+      const next=advanceHumanity(human,at),effort=laborEffort(e),contract=pet.labor?.contracts?.find((c:Obj)=>c.id===params.contractId);
+      if(contract&&(e.forcedLabor===true||(interrupted?.id===params.commandId&&interrupted?.forcedLabor===true)||contract.forced))forcedEffort(draft,contract,next,human,effort,e,intent,occurredAt,sourceEventId);
       else {next.stats.stamina=Math.max(-100,next.stats.stamina-effort*.08);next.stats.energy=Math.max(-100,next.stats.energy-effort*.045);next.stats.satiety=clamp(next.stats.satiety-effort*.015);}
       draft.humanity=next;return;
     }
@@ -137,8 +148,8 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
       }
     }
     if (finite(e.effortSeconds)) {
-      assert(e.effortSeconds >= 0 && e.effortSeconds <= 30 && finite(e.intensity) && e.intensity >= 1 && e.intensity <= 1.7 && human.stats && human.emotions, '体力回执无效');
-      const next = advanceHumanity(human,at), effort = e.effortSeconds * e.intensity;
+      assert(human.stats&&human.emotions,'身体状态无效');
+      const next = advanceHumanity(human,at), effort = laborEffort(e);
       if (contract.forced) {
         // A forced batch drains the body past its floor: stamina and energy may
         // go negative, and pain climbs as the overdraft becomes real distress.

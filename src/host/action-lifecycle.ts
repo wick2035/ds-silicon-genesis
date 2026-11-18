@@ -146,7 +146,17 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
   }
 
   validateReceipt(draft:CanonicalEnvelope,intent:OutboxIntent,receipt:ExecutionReceipt):ExecutionReceipt {
-    return intent.type==='farm.tend' ? checkFarmReceipt(draft,intent,receipt,this.clock().valueOf()) : receipt;
+    if(intent.type==='farm.tend')return checkFarmReceipt(draft,intent,receipt,this.clock().valueOf());
+    if(intent.type==='labor.step'&&receipt.status==='completed'&&receipt.evidence.actionFraction!==undefined){
+      const pet=draft.legacy as Record<string,any>,command=pet.world?.command;
+      const contract=pet.labor?.contracts?.find((c:any)=>c.id===command?.labor?.id);
+      // The contract can change after the helper responds and before the
+      // dispatcher's transaction locks the envelope. Preserve effort only.
+      if(!command||command.id!==receipt.evidence.commandId||command.index!==receipt.evidence.index||!['queued','running'].includes(command.status)||contract?.status!=='working'||contract.done!==command.labor?.trip||contract.done>=contract.trips){
+        return {status:'cancelled',evidence:{...receipt.evidence,reason:'搬砖状态在回执入库前变化'}};
+      }
+    }
+    return receipt;
   }
 
   complete(draft: CanonicalEnvelope, intent: OutboxIntent, receipt: ExecutionReceipt): void {

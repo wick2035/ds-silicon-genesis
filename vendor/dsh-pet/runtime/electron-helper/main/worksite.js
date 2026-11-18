@@ -12,25 +12,44 @@ function register({ipcMain,petWindows,hostRequest,BrowserWindow,screen,app}) {
     const next=(queues.get(petId)||Promise.resolve()).catch(()=>{}).then(operation);
     queues.set(petId,next);return next;
   }
-  async function request(petId,surface,action,requestId){
-    const res=await hostRequest('POST',`/__silicon/${surface}`,JSON.stringify({petId,action,...(requestId?{requestId}:{})}));
+  async function request(petId,surface,action,details){
+    const res=await hostRequest('POST',`/__silicon/${surface}`,JSON.stringify({petId,action,...details}));
     let body;try{body=JSON.parse(res.body||'{}');}catch{throw Error('场景状态不可用');}
     if(res.status!==200)throw Error(body.message||'场景状态未保存');
     return body;
   }
   function call(petId,action,requestId){
     return enqueue(petId,async()=>{
-      const body=await request(petId,'worksite',action,requestId);
-      if(body.location){last.set(petId,body);locations.set(petId,{work:body.location.inside===true,farm:body.farmInside===true});showBody(petId);}
+      const body=await request(petId,'worksite',action,{requestId});
+      if(body.location){
+        last.set(petId,body);locations.set(petId,{work:body.location.inside===true,farm:body.farmInside===true});showBody(petId);
+        const win=sites.get(petId);
+        if(win&&!win.isDestroyed())win.webContents.send('worksite:state',body);
+      }
       return body;
     });
   }
   function showBody(petId, disconnected=false){const win=petWindows.state.windows.get(petId);if(!win||win.isDestroyed())return;const location=locations.get(petId);if(location?.work||(!disconnected&&location?.farm)){if(win.isVisible())win.hide();}else if(!win.isVisible())win.showInactive();}
   const farm=require('./farm.js').registerFarm({ipcMain,petWindows,BrowserWindow,app,showBody:id=>showBody(id,true),call:(id,action,requestId)=>enqueue(id,async()=>{
-    const body=await request(id,'farm',action,requestId);
+    const body=await request(id,'farm',action,{requestId});
     if(typeof body.inside==='boolean'){locations.set(id,{work:body.worksiteInside===true,farm:body.inside});showBody(id);}
     return body;
   })});
+  async function watchDispatch(petId,win){
+    let after=-1;
+    while(!shuttingDown&&sites.get(petId)===win&&!win.isDestroyed()){
+      try{
+        // Keep this wait outside the scene's request queue so actions and
+        // receipts can reach the host while no new step is ready.
+        const {revision}=await request(petId,'worksite','watch',{after});
+        if(win.isDestroyed()||sites.get(petId)!==win)return;
+        if(!Number.isSafeInteger(revision)||revision<0)throw Error('工地通知无效');
+        if(revision!==after){await call(petId,'snapshot');after=revision;}
+      }catch{
+        await new Promise(resolve=>setTimeout(resolve,1000).unref());
+      }
+    }
+  }
   function open(petId,focus=true){
     let win=sites.get(petId);
     if(win&&!win.isDestroyed()){if(focus){win.show();win.focus();}return win;}
@@ -44,6 +63,7 @@ function register({ipcMain,petWindows,hostRequest,BrowserWindow,screen,app}) {
     win.once('ready-to-show',()=>{if(!win.isDestroyed())win.show();});
     win.webContents.once('did-finish-load',()=>{setTimeout(()=>{if(!win.isDestroyed()&&!win.isVisible())win.show();},400);});
     win.loadFile(path.join(__dirname,'..','worksite.html')).catch(()=>{if(!win.isDestroyed())win.destroy();});
+    void watchDispatch(petId,win);
     return win;
   }
   ipcMain.on('pet:open-worksite',event=>{const id=petFor(event.sender);if(id)open(id);});
@@ -60,7 +80,7 @@ function register({ipcMain,petWindows,hostRequest,BrowserWindow,screen,app}) {
   });
   ipcMain.handle('worksite:receipt',async(event,receipt)=>{
     const id=siteFor(event.sender),state=id&&last.get(id);
-    if(!id||!state?.location?.inside||receipt?.surface!=='web'||!['playing','completed','interrupted'].includes(receipt.status)||typeof receipt.id!=='string'||!Number.isSafeInteger(receipt.index))throw Error('工地回执无效');
+    if(!id||receipt?.surface!=='web'||!['playing','completed','interrupted'].includes(receipt.status)||typeof receipt.id!=='string'||!Number.isSafeInteger(receipt.index)||(receipt.status==='playing'&&!state?.location?.inside))throw Error('工地回执无效');
     const response=await hostRequest('POST','/__silicon/action-receipt',JSON.stringify({...receipt,petId:id,processEpoch:process.env.SILICON_HELPER_EPOCH||''}));
     if(response.status!==200)throw Error('工地动作未保存');return JSON.parse(response.body||'{}');
   });
