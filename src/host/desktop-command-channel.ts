@@ -3,7 +3,8 @@ import type {CanonicalEnvelope} from '../storage/postgres.js';
 import {TrustedDesktopBridge} from './domain-executors.js';
 import type {DesktopActionKind} from './domain-executors.js';
 
-type Reader={loadEnvelope(petId:string):Promise<CanonicalEnvelope|null>};
+type Reader={loadEnvelope(petId:string):Promise<CanonicalEnvelope|null>;
+  loadWorksiteCommand?(petId:string):Promise<Record<string,any>|null>};
 type Command={actionId:string;petId:string;kind:DesktopActionKind;parameters:Record<string,unknown>};
 type Pending={command:Command;timer:ReturnType<typeof setTimeout>;startedAt?:number;intensity?:number;stage?:number;coin?:{id:string;x:number;y:number};world?:Record<string,any>;startX?:number;cancelling?:boolean};
 const sceneX=(x:unknown):x is number=>typeof x==='number'&&Number.isFinite(x)&&x>=0&&x<=1;
@@ -20,26 +21,33 @@ export function createDesktopCommandChannel(store:Reader,sourceCapability:object
     clearTimeout(item.timer);
     if(pending.get(id)===item)pending.delete(id);
   }
+  async function loadWorksiteCommand(petId:string) {
+    if(store.loadWorksiteCommand)return store.loadWorksiteCommand(petId);
+    const state=await store.loadEnvelope(petId);
+    return (state?.legacy as Record<string,any>|undefined)?.world?.command;
+  }
   const bridge=new TrustedDesktopBridge(async(command,signal)=>{
     if(signal.aborted || pending.has(command.petId))throw Error('桌宠正在执行其他行动');
-    const state=await store.loadEnvelope(command.petId), legacy=state?.legacy as Record<string,any>|undefined;
+    const labor=command.kind==='labor.step';
+    const world=labor?await loadWorksiteCommand(command.petId):undefined;
+    const legacy=labor?undefined:(await store.loadEnvelope(command.petId))?.legacy as Record<string,any>|undefined;
     if(signal.aborted || pending.has(command.petId))throw Error('桌宠正在执行其他行动');
-    if(!legacy)throw Error('桌宠状态不可用');
-    if(command.kind==='labor.step') {
-      const world=legacy.world?.command,p=command.parameters;
+    if(!labor&&!legacy)throw Error('桌宠状态不可用');
+    if(labor) {
+      const p=command.parameters;
       if(!world || world.id!==p.commandId || world.labor?.id!==p.contractId || !Number.isSafeInteger(world.index) || !['desktop','web'].includes(world.surface))throw Error('桌宠工作命令已变化');
     } else if(command.kind==='token.pickup') {
-      const coin=legacy.tokens?.coins?.find((c:any)=>c.id===command.parameters.coinId && c.status==='floor' && c.surface==='desktop');
+      const coin=legacy?.tokens?.coins?.find((c:any)=>c.id===command.parameters.coinId && c.status==='floor' && c.surface==='desktop');
       if(!coin || !Number.isFinite(coin.x) || !Number.isFinite(coin.y))throw Error('桌面碎片不可用');
     } else if(command.kind==='service.eat-rice') {
-      const id=command.parameters.itemId, items=legacy.services?.inventory;
+      const id=command.parameters.itemId, items=legacy?.services?.inventory;
       if(typeof id!=='string' || !Array.isArray(items) || !items.some((item:any)=>item.id===id && ['available','reserved'].includes(item.status)))throw Error('食物不在可食用库存中');
     }
     const timer=setTimeout(()=>pending.delete(command.petId),70000);
-    const coin=command.kind==='token.pickup'?legacy.tokens.coins.find((c:any)=>c.id===command.parameters.coinId):undefined;
-    pending.set(command.petId,{command,timer,...(command.kind==='labor.step'?{world:structuredClone(legacy.world.command),intensity:legacy.world?.command?.labor?.leg==='deliver'?1.5:1}:{}),...(coin?{stage:0,coin:{id:coin.id,x:coin.x,y:coin.y}}:{})});
+    const coin=command.kind==='token.pickup'?legacy?.tokens.coins.find((c:any)=>c.id===command.parameters.coinId):undefined;
+    pending.set(command.petId,{command,timer,...(world?{world:structuredClone(world),intensity:world.labor?.leg==='deliver'?1.5:1}:{}),...(coin?{stage:0,coin:{id:coin.id,x:coin.x,y:coin.y}}:{})});
     signal.addEventListener('abort',()=>{const item=pending.get(command.petId);if(item?.command.actionId===command.actionId){clearTimeout(item.timer);pending.delete(command.petId);}},{once:true});
-    if(command.kind==='labor.step'&&legacy.world.command.surface==='web')notifyWorksite(command.petId);
+    if(world?.surface==='web')notifyWorksite(command.petId);
   },sourceCapability,65000);
   return {bridge,
     async waitForWorksiteChange(id:string,after:number,signal:AbortSignal){
@@ -99,11 +107,11 @@ export function createDesktopCommandChannel(store:Reader,sourceCapability:object
         return {ok:true};
       }
       if(!item||!c||c.kind!=='labor.step'||value.id!==c.parameters.commandId||value.surface!==item.world?.surface||value.index!==item.world?.index||!['playing','completed','interrupted'].includes(value.status))throw Error('桌宠回执没有对应行动');
-      const state=await store.loadEnvelope(c.petId), world=(state?.legacy as Record<string,any>|undefined)?.world?.command;
+      const world=await loadWorksiteCommand(c.petId);
       if(pending.get(c.petId)!==item)throw Error('桌宠回执版本已变化');
       const matches=world?.id===value.id&&world.index===value.index;
       if(!matches&&item.startX===undefined)throw Error('桌宠回执版本已变化');
-      const current=matches&&['queued','running'].includes(world.status);
+      const current=matches&&['queued','running'].includes(world?.status);
       if(value.status==='playing'){
         if(!current||item.cancelling)throw Error('桌宠回执版本已变化');
         if(item.startX!==undefined)throw Error('工地动作已经开始');
@@ -135,7 +143,7 @@ export function createDesktopCommandChannel(store:Reader,sourceCapability:object
       forget(item);
       bridge.accept({petId:c.petId,actionId:c.actionId,kind:'labor.step',status:completed?'completed':'interrupted',
         played:value.played===true,commandId:value.id,index:value.index,surface:value.surface,x:value.x,effortSeconds,intensity:item.intensity,travelDistance,actionFraction,
-        forcedLabor:item.world?.forcedLabor===true||(matches&&world.forcedLabor===true)},sourceCapability);
+        forcedLabor:item.world?.forcedLabor===true||(matches&&world?.forcedLabor===true)},sourceCapability);
       return {ok:true};
     },
     cancelPet(petId:string, reason='桌面活动被中断',canReportMotion=true){

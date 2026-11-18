@@ -2,7 +2,7 @@ import type {CanonicalEnvelope} from '../storage/postgres.js';
 
 /** An unresolved result for the current trip cannot be replayed implicitly.
  * A deliberate retry records the action id without altering its UNKNOWN receipt. */
-export function uncertainLabor(draft:CanonicalEnvelope):string[] {
+export function uncertainLabor(draft:{legacy:CanonicalEnvelope['legacy'];life:Pick<CanonicalEnvelope['life'],'actions'>}):string[] {
   const pet=draft.legacy as Record<string,any>,command=pet.world?.command;
   const active=pet.labor?.contracts?.find((c:any)=>['working','paused','queued'].includes(c.status)&&c.done<c.trips);
   const acknowledged=new Set<string>(pet.worksite?.acknowledgedUncertainActions??[]);

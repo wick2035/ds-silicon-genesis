@@ -17,13 +17,17 @@ class HiddenWindow extends BrowserWindow {
   }
 }
 let server;
-const deadline=setTimeout(()=>{console.error('worksite Electron smoke timed out');app.exit(1);},20000);
+const deadline=setTimeout(()=>{console.error('worksite Electron smoke timed out');app.exit(1);},25000);
 app.whenReady().then(async()=>{
   const load=rel=>import(pathToFileURL(path.join(root,rel)).href);
   const {createWorksite}=await load('dist/host/worksite.js');
   const {createHelperChannel}=await load('dist/host/helper-channel.js');
   const {createDesktopCommandChannel}=await load('dist/host/desktop-command-channel.js');
   const {projectOutcome}=await load('dist/host/outcome-projector.js');
+  const {createDeterministicLife}=await load('dist/host/deterministic-life.js');
+  const {ActionCoordinator}=await load('dist/host/action-coordinator.js');
+  const {CanonicalActionLifecycle}=await load('dist/host/action-lifecycle.js');
+  const {projectBody}=await load('dist/host/body-projection.js');
   const {createHumanity}=await load('vendor/dsh-pet/src/host/humanity.mjs');
   let state={petId:'main',version:0,legacy:{events:[],labor:{contracts:[]},world:{},wallet:{balance:100},config:{costs:{}}},humanity:createHumanity(),life:{actions:[],events:[],memories:[],invalidSources:{},constraints:{paused:false}}};
   const store={loadEnvelope:async()=>structuredClone(state)},gate={run:async(_id,fn)=>fn()};
@@ -101,6 +105,42 @@ app.whenReady().then(async()=>{
   projectOutcome(state,intent,partial,new Date().toISOString(),`receipt:${id}`);
   assert.equal(state.legacy.labor.contracts[0].done,0);
   assert.ok(state.life.memories.some(m=>m.id===`forced-labor-memory:${id}`));
+
+  // Let the host build and dispatch an ordinary contract one receipt at a
+  // time through the same renderer and transport, with polling still off.
+  state.legacy.labor.contracts=[{id:'ordinary',status:'queued',trips:1,done:0,wage:50,paid:0,carrying:false}];
+  state.humanity.helperReady=true;state.humanity.restrained=false;
+  state.life.actions=[];state.life.receipts=[];
+  Object.assign(state.life,{beliefs:[],observations:[],relationships:[],goals:[],commitments:[]});
+  state.life.constraints={paused:false,permissions:[],capabilities:[{name:'labor.step',enabled:true,physical:true}]};
+  await site.act('main','request-entry');
+  await site.act('main','enter-voluntary');
+  await siteWindow.webContents.executeJavaScript('window.worksite.snapshot()');
+  const actionCoordinator=new ActionCoordinator(uow,projectBody),lifecycle=new CanonicalActionLifecycle(projectBody);
+  const normal=new AbortController(),forcedCount=state.life.memories.length;
+  const normalStart=performance.now(),beforeVersion=state.version;
+  const dispatcher={async dispatch(actionId){
+    const action=state.life.actions.find(a=>a.id===actionId);
+    const step={id:actionId,type:action.actionType,payload:{actionId,petId:'main',actionType:action.actionType,parameters:action.parameters}};
+    await uow.apply('main',state.version,draft=>assert.equal(lifecycle.prepare(draft,step).allowed,true));
+    const receipt=await commands.bridge.execute('main',step,AbortSignal.any([normal.signal,AbortSignal.timeout(5000)]));
+    await uow.apply('main',state.version,draft=>lifecycle.complete(draft,step,lifecycle.validateReceipt(draft,step,receipt)));
+    return receipt;
+  }};
+  const life=createDeterministicLife({},store,async()=>{},gate,uow,actionCoordinator,dispatcher,async()=>{throw Error('工地衔接不应刷新通用预算');});
+  try{
+    await life.runWorksite('main',normal.signal,true);
+    for(let i=0;i<650&&state.life.receipts.length<4;i++)await new Promise(resolve=>setTimeout(resolve,10));
+    assert.equal(state.life.receipts.length,4);
+    assert.ok(state.life.receipts.every(r=>r.status==='COMPLETED'));
+    assert.equal(state.version-beforeVersion,12,'one enqueue, one dispatch and one settlement per step');
+    assert.equal(state.legacy.labor.contracts[0].done,1);
+    assert.equal(state.legacy.labor.contracts[0].status,'unpaid');
+    assert.equal(state.legacy.labor.contracts[0].wage,50);
+    assert.equal(state.legacy.worksite.completedInSession,1);
+    assert.equal(state.life.memories.length,forcedCount);
+    console.log(`PASS: ordinary host progression completed four confirmed steps in ${Math.round(performance.now()-normalStart)} ms with durable-step boundaries simulated`);
+  }finally{normal.abort();}
   channel.closed(epoch);commands.close();
   console.log(`PASS: dispatch notifications alone ran the four steps in ${elapsed} ms; measured animation ${actualSeconds.map(s=>s.toFixed(3)).join(', ')} s, and an interrupted route preserved partial effort`);
 }).then(()=>{clearTimeout(deadline);server?.close();app.exit(0);}).catch(error=>{console.error(error);clearTimeout(deadline);server?.close();app.exit(1);});

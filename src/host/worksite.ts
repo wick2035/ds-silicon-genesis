@@ -6,18 +6,19 @@ import type {CanonicalEnvelope} from '../storage/postgres.js';
 import type {PetGate,UnitOfWork} from '../storage/uow.js';
 import {hasForcedWork} from './forced-labor.js';
 import {uncertainLabor} from './labor-pending.js';
-import {projectLegacySnapshot} from './legacy-snapshot.js';
+import {projectLabor} from './legacy-snapshot.js';
 
-type Reader={loadEnvelope(id:string):Promise<CanonicalEnvelope|null>};
+type Reader={loadEnvelope(id:string):Promise<CanonicalEnvelope|null>;
+  loadWorksite?(id:string):Promise<{legacy:CanonicalEnvelope['legacy'];life:Pick<CanonicalEnvelope['life'],'actions'>}|null>};
 type Action='enter-forced'|'enter-voluntary'|'release'|'leave-voluntary'|'touch'|'drag'|'force-work'|'request-entry'|'stop-work'|'resume-work'|'retry-unconfirmed';
 
 /** The helper is the sole caller. A location is committed before either body
  * changes visibility; the forced-entry lock survives window and host restarts. */
 export function createWorksite(store:Reader,gate:PetGate,uow:UnitOfWork,view:(id:string)=>unknown,cancel:(id:string)=>void,wake?:(id:string)=>void) {
   const snapshot=async(id:string)=>{
-    const state=await store.loadEnvelope(id);if(!state)throw Error('生命状态不可用');
-    const pet=state.legacy as Record<string,any>,projected=projectLegacySnapshot(state);
-    return {farmInside:!!farmVisit(state),location:pet.worksite||{inside:false,forced:false},waitingForReceipt:uncertainLabor(state).length>0,labor:projected.labor,world:{...projected.world,command:view(id)??null}};
+    const state=await (store.loadWorksite?store.loadWorksite(id):store.loadEnvelope(id));if(!state)throw Error('生命状态不可用');
+    const pet=state.legacy as Record<string,any>;
+    return {farmInside:!!farmVisit(state),location:pet.worksite||{inside:false,forced:false},waitingForReceipt:uncertainLabor(state).length>0,labor:projectLabor(pet),world:{command:view(id)??null}};
   };
   return {snapshot,async act(id:string,action:Action,expected?:{sessionId:string;contractId:string}){
     if(!['enter-forced','enter-voluntary','release','leave-voluntary','touch','drag','force-work','request-entry','stop-work','resume-work','retry-unconfirmed'].includes(action))throw Error('工地操作无效');

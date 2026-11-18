@@ -27,7 +27,7 @@ type FarmCrop = {id:string; growth:number; loss:number; waters:number; rain:numb
 type FarmDay = {date:string; weather:FarmWeather; eventId:string};
 type Farm = {seed:string; day:FarmDay; crop:FarmCrop|null; rawBowls:number; lastHarvest:number|null};
 type FarmStorage = {farm?:Farm; farmVisit?:FarmVisit; farmSeedBundles?:number};
-const storage = (draft:CanonicalEnvelope) => draft.legacy as FarmStorage;
+const storage = (draft:Pick<CanonicalEnvelope,'legacy'>) => draft.legacy as FarmStorage;
 
 export function farmSeedShop(legacy:CanonicalEnvelope['legacy']) {
   const pet = legacy as Record<string,any>;
@@ -59,7 +59,7 @@ export function purchaseFarmSeeds(draft:Pick<CanonicalEnvelope,'legacy'|'life'|'
 
 export const farmDay = (at:number) => hongKongDate.format(at);
 const dayStart = (date:string) => Date.parse(`${date}T00:00:00+08:00`);
-export const farmVisit = (draft:CanonicalEnvelope) => storage(draft).farmVisit;
+export const farmVisit = (draft:Pick<CanonicalEnvelope,'legacy'>) => storage(draft).farmVisit;
 export function setFarmVisit(draft:CanonicalEnvelope, visit?:FarmVisit) {
   if (visit) storage(draft).farmVisit = visit;
   else delete storage(draft).farmVisit;

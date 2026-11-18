@@ -218,7 +218,9 @@ export async function main():Promise<void> {
     const reactionBaseline=await store.loadEnvelope(petId);if(!reactionBaseline)throw Error('生命状态不可用');
     const todos=createCanonicalTodos(store,lease,unitOfWork),todoRoute=createTodoRoute(todos,petId);
     const deterministic=createDeterministicLife(humanity,store,service,lease,unitOfWork,actions,dispatcher,id=>budget.refresh(id),id=>tokens.held(id));
-    worksiteWake=id=>{void deterministic.run(id,lease.signal,{allowAutonomous:true}).catch(()=>{});};
+    worksiteWake=id=>{void (async()=>{
+      if(!await deterministic.runWorksite(id,lease.signal,true))await deterministic.run(id,lease.signal,{allowAutonomous:true});
+    })().catch(()=>{});};
     const pickupRuns=new Set<string>();
     wakeTokenPickup=id=>{if(pickupRuns.has(id)||lease.signal.aborted)return;pickupRuns.add(id);
       void (async()=>{try{

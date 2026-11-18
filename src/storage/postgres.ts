@@ -22,7 +22,29 @@ const equal = (left: unknown, right: unknown) => JSON.stringify(canonical(left))
 /** Host mutations and kernel mutations must both use this envelope and CAS. */
 export class PostgresKernelStore implements KernelStore {
   constructor(private readonly db: Queryable, private readonly projectBody: BodyProjection, private readonly gate: PetGate,
-    private readonly projectLegacy: LegacyProjection) {}
+    private readonly projectLegacy: LegacyProjection, private readonly reads:Queryable=db) {}
+
+  // These read-only projections are safe on a separate connection and avoid
+  // transferring the archive on every scene refresh and animation receipt.
+  async loadWorksiteCommand(petId:string):Promise<Record<string,any>|null> {
+    const {rows}=await this.reads.query(
+      "SELECT payload#>'{legacy,world,command}' AS command FROM silicon_genesis.life_state WHERE pet_id=$1",[petId]);
+    return rows[0]?.command??null;
+  }
+
+  async loadWorksite(petId:string):Promise<{legacy:CanonicalEnvelope['legacy'];life:Pick<CognitiveState,'actions'>}|null> {
+    const {rows}=await this.reads.query(`
+      WITH subject AS MATERIALIZED (
+        SELECT payload->'legacy' AS legacy,payload#>'{life,actions}' AS actions
+        FROM silicon_genesis.life_state WHERE pet_id=$1
+      )
+      SELECT jsonb_build_object('worksite',legacy->'worksite','farmVisit',legacy->'farmVisit',
+        'labor',legacy->'labor','wallet',jsonb_build_object('balance',legacy#>'{wallet,balance}'),
+        'world',jsonb_build_object('command',legacy#>'{world,command}','commandHistory',legacy#>'{world,commandHistory}')) AS legacy,
+        jsonb_path_query_array(actions,'$[*] ? (@.actionType == "labor.step" && @.status == "UNKNOWN")') AS actions
+      FROM subject`,[petId]);
+    return rows.length?{legacy:rows[0].legacy,life:{actions:rows[0].actions??[]}}:null;
+  }
 
   async loadEnvelope(petId: string): Promise<CanonicalEnvelope | null> {
     const result = await this.db.query(

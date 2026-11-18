@@ -97,7 +97,7 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
     const action = this.action(draft, intent);
     assert(action.status === 'PENDING', '行动不处于待执行状态');
     const projection = projectActionBody(draft,this.projectBody(draft),action.actionType);
-    const state: LifeState = {...structuredClone(draft.life), petId:draft.petId, version:draft.version, ...projection};
+    const state: LifeState = {...draft.life, petId:draft.petId, version:draft.version, ...projection};
     try {
       // A proposal was accepted earlier. Revalidate it against the locked latest
       // state, not against its historical proposal version.

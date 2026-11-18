@@ -5,6 +5,18 @@ import { SOFT_SCENES } from '../../vendor/pet-plugins/behavior/soft-tantrum.mjs'
 import { describeHumanity } from '../../vendor/dsh-pet/src/host/humanity.mjs';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 type Obj=Record<string,any>;
+
+export function projectLabor(pet:Obj) {
+  const labor=pet.labor||{},contracts=labor.contracts||[];
+  const open=contracts.filter((c:Obj)=>['offered','working','paused','queued'].includes(c.status) && (!Number.isFinite(c.done)||!Number.isFinite(c.trips)||c.done<c.trips));
+  const active=open[0];
+  // Old thoughts lack the body state and time at which they were generated.
+  const current=active?{...active,thought:''}:null;
+  return {current,draft:labor.draft||null,execution:labor.execution||null,error:labor.error||null,
+    message:labor.lastSpeech?.contractId===current?.id?labor.lastSpeech:null,awaitingReply:labor.awaitingReply===true,
+    queue:open.slice(1),history:contracts.filter((c:Obj)=>['paid','declined','cancelled','unpaid'].includes(c.status)).slice(-12).reverse(),balance:pet.wallet?.balance};
+}
+
 /** Projects only the committed envelope. In particular it does not run the old
  * snapshot's recovery, command advancement or labor settlement side effects. */
 export function projectLegacySnapshot(envelope:CanonicalEnvelope, providers:Record<string,boolean>={}, now=Date.now()) {
@@ -13,12 +25,7 @@ export function projectLegacySnapshot(envelope:CanonicalEnvelope, providers:Reco
   const abilities=Object.fromEntries(Object.entries(p.abilities||{}).map(([key,value])=>[key,{...(value as Obj),title:(ABILITIES as Obj)[key]||key}]));
   const config=p.config||{},wallet=p.wallet||{},services=p.services||{},inventory=Array.isArray(services.inventory)?services.inventory:[],costs=config.costs||{};
   const service={menu:[{id:'rice',name:'大白饭',price:costs.feed,effects:{satiety:12,joy:12,stamina:2,comfort:3,love:3}}],inventory:inventory.filter((i:Obj)=>i.status!=='eaten'),eating:services.eating??null,balance:wallet.balance,frozen:wallet.frozen,phone:{price:0,spiritCost:4,networkOpen:!!config.networkLearning,searchGranted:p.abilities?.search?.status==='granted',dailyRuns:config.exploration?.dailyRuns},purchasing:{price:costs.feed,shortfall:wallet.frozen?0:Math.max(0,(costs.feed||0)-(wallet.balance||0)),canAfford:!!wallet.frozen||wallet.balance>=costs.feed},foodNeed:{satiety:h.stats?.satiety??null,desire:h.desires?.food??null,lastFedAt:h.lastFedAt??null,resting:!!h.resting,body:h.body??null,feedCooldownUntil:h.cooldowns?.feed??0},recent:Object.values(services.receipts||{}).sort((a:any,b:any)=>(a.at||0)-(b.at||0)).slice(-5)};
-  const contracts=p.labor?.contracts||[],active=contracts.find((c:Obj)=>['offered','working','paused','queued'].includes(c.status) && (!Number.isFinite(c.done)||!Number.isFinite(c.trips)||c.done<c.trips))||null,l=p.labor||{};
-  // Old labor thoughts are persisted without the body state or time at which
-  // they were generated. They cannot describe the current body reliably and
-  // must not be replayed as a fresh desktop bubble after recovery or restart.
-  const current=active?{...active,thought:''}:null;
-  const labor={current,draft:l.draft||null,execution:l.execution||null,error:l.error||null,message:l.lastSpeech?.contractId===current?.id?l.lastSpeech:null,awaitingReply:l.awaitingReply===true,queue:contracts.filter((c:Obj)=>['offered','working','paused','queued'].includes(c.status) && (!Number.isFinite(c.done)||!Number.isFinite(c.trips)||c.done<c.trips) && c!==active),history:contracts.filter((c:Obj)=>['paid','declined','cancelled','unpaid'].includes(c.status)).slice(-12).reverse(),balance:wallet.balance};
+  const labor=projectLabor(p);
   const soft={scenes:Object.entries(SOFT_SCENES).map(([id,s])=>({id,label:s.label,pose:s.pose})),current:p.world?.soft?.current?.expires>now?p.world.soft.current:null};
   const world={...(p.world||{}),command:null,soft,activity:null,body:h.body||null,sleeping:!!(h.sleeping||h.resting),confirmedSleep:envelope.humanity.sleeping===true,space:p.space||null,paused:envelope.life.constraints.paused,actions:{...BODY_ACTIONS,drink:['喝水','喝水'],pet:['点击回应-挠痒咯咯笑','被摸摸'],soothe:['点击回应-害羞惊讶','被安慰'],accompany:['待机呼吸休闲','安静陪伴']},affect:deriveAffect(h),services:service,labor};
   const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now));

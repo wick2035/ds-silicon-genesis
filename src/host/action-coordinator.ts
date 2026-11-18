@@ -9,8 +9,8 @@ import {checkSpirit} from '../kernel/spirit.js';
 import {validateManualService} from './manual-service-validation.js';
 import { validateProposal } from '../kernel/index.js';
 import type { LifeState } from '../kernel/types.js';
-import type { BodyProjection } from '../storage/postgres.js';
-import type { UnitOfWork } from '../storage/uow.js';
+import type { BodyProjection, CanonicalEnvelope } from '../storage/postgres.js';
+import type { OutboxIntent, UnitOfWork } from '../storage/uow.js';
 import { validateActionParameters } from './action-parameters.js';
 import {projectActionBody} from './body-projection.js';
 
@@ -20,7 +20,11 @@ export class ActionCoordinator {
     private readonly now: () => Date = () => new Date()) {}
 
   async queue(petId: string, actionId: string, expectedVersion: number): Promise<void> {
-    await this.unitOfWork.apply(petId, expectedVersion, draft => {
+    await this.unitOfWork.apply(petId, expectedVersion, draft => this.queueDraft(draft,actionId));
+  }
+
+  queueDraft(draft:CanonicalEnvelope,actionId:string):{intents:OutboxIntent[]} {
+      const petId=draft.petId;
       const matches = draft.life.actions.filter(action => action.id === actionId);
       if (matches.length !== 1 || matches[0].status !== 'PROPOSED') throw new Error('行动不处于可排队状态');
       const action = matches[0];
@@ -32,7 +36,7 @@ export class ActionCoordinator {
       if(action.actionType==='service.buy-rice')validateRicePurchase(draft);
       if(action.actionType!=='labor.step')checkSpirit(draft.life,action.actionType,this.now().valueOf());
       validateActionParameters(action.actionType,action.parameters);
-      const state: LifeState = {...structuredClone(draft.life), petId, version:draft.version, ...projectActionBody(draft,this.body(draft),action.actionType)};
+      const state: LifeState = {...draft.life, petId, version:draft.version, ...projectActionBody(draft,this.body(draft),action.actionType)};
       const proposal={...action, expectedStateVersion:draft.version};
       if(action.actionType.startsWith('care.') && action.actionType!=='care.water' && !(draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])throw Error('照料须由用户手动发起');
 
@@ -57,6 +61,5 @@ export class ActionCoordinator {
         occurredAt:action.updatedAt,receivedAt:action.updatedAt,payload:{actionId},evidenceLevel:'observed'});
       return {intents:[{id:actionId,type:action.actionType,
         payload:{actionId,petId,actionType:action.actionType,parameters:structuredClone(action.parameters)}}]};
-    });
   }
 }

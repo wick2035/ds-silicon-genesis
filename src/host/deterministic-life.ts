@@ -5,7 +5,6 @@ import {riceMotivation} from './companion-personality.js';
 import {hasForcedWork,canChooseLabor,hasLaborResources} from './forced-labor.js';
 import {advanceSpirit} from '../kernel/spirit.js';
 import {expireCommitments} from '../kernel/goal-lifecycle.js';
-import {projectBody} from './body-projection.js';
 import {blocksNewLabor} from './labor-pending.js';
 import type {CanonicalHumanityAdapter} from './humanity-adapter.js';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
@@ -49,22 +48,15 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     });
     if(signal.aborted)return;
     const human=await humanity.get(petId);
-    const forceState=await reader.loadEnvelope(petId),forced=!!forceState&&hasForcedWork(forceState);
-    // Exhaustion is a work-state transition even when the helper is offline or
-    // the pet is asleep; those conditions must not hide an exhausted session.
-    if(forceState && !forced && (forceState.legacy as Record<string,any>).worksite?.inside && (forceState.legacy as Record<string,any>).worksite?.workState!=='stopped' && !hasLaborResources(forceState)){
-      await gate.run(petId,async()=>{const current=await reader.loadEnvelope(petId),site=(current?.legacy as Record<string,any>)?.worksite;
-        if(current&&site?.inside&&site.workState!=='stopped'&&!hasForcedWork(current)&&!hasLaborResources(current))await uow.apply(petId,current.version,draft=>{const s=(draft.legacy as Record<string,any>).worksite;s.workState='stopped';s.stopReason='exhausted';s.sessionId=randomUUID();return {};});
-      });return;
-    }
-    if(signal.aborted || !forced&&(!allowAutonomous || human.restrained) || human.helperReady!==true)return;
+    if(signal.aborted||await runWorksite(petId,signal,allowAutonomous))return;
+    if(signal.aborted || !allowAutonomous || human.restrained || human.helperReady!==true)return;
     const resting=await reader.loadEnvelope(petId);
-    if(!resting||farmVisit(resting))return;if(hasActiveConversation(resting)&&!(resting.legacy as any).worksite?.inside&&!forced&&!resting.life.actions.some(a=>a.actionType==='labor.step'&&a.status==='PENDING'))return;const spirit=advanceSpirit(resting.life);
-    if(human.sleeping&&!forced){if(spirit.mode==='sleep' && spirit.value>=100 || spirit.mode==='nap' && Date.now()-spirit.sleepStartedAt!>=1200000)await service(petId,{key:'auto-wake:'+spirit.sleepStartedAt,command:'/醒来'},'autonomous');return;}
+    if(!resting||farmVisit(resting))return;if(hasActiveConversation(resting)&&!(resting.legacy as any).worksite?.inside&&!resting.life.actions.some(a=>a.actionType==='labor.step'&&a.status==='PENDING'))return;const spirit=advanceSpirit(resting.life);
+    if(human.sleeping){if(spirit.mode==='sleep' && spirit.value>=100 || spirit.mode==='nap' && Date.now()-spirit.sleepStartedAt!>=1200000)await service(petId,{key:'auto-wake:'+spirit.sleepStartedAt,command:'/醒来'},'autonomous');return;}
     if(!needsManaged && spirit.value<=2 && !(resting.legacy as any).worksite?.inside && !(resting.legacy as any).labor?.contracts?.some((c:any)=>c.status==='working'&&c.workPermit)){await service(petId,{key:'auto-sleep:'+Math.floor(Date.now()/3600000),command:'/休息'},'autonomous');return;}
-    if(Number.isFinite(human.restingUntil) && human.restingUntil>Date.now()&&!forced&&!(resting.legacy as any).labor?.contracts?.some((c:any)=>c.status==='working'&&c.workPermit))return;
+    if(Number.isFinite(human.restingUntil) && human.restingUntil>Date.now()&&!(resting.legacy as any).labor?.contracts?.some((c:any)=>c.status==='working'&&c.workPermit))return;
     const state=await reader.loadEnvelope(petId);
-    if(signal.aborted || !state || state.life.constraints.paused&&!forced)return;
+    if(signal.aborted || !state || state.life.constraints.paused)return;
     const legacy=state.legacy as Record<string,any>, inventory=legacy.services?.inventory;
     // Only the worksite body may perform physical work while she is inside.
     // Desktop-only meals and coin pickup wait until she returns.
@@ -87,73 +79,88 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     if(!inWorksite && legacy.tokens?.coins?.some((c:any)=>c.status==='floor' && c.surface==='desktop')) {
       await pickup(petId,signal);return;
     }
-    // A confirmed work permit authorizes a bounded physical step, not a
-    // fabricated trip. Actual progress only comes from the helper receipt.
+    if(inWorksite){await runWorksite(petId,signal,allowAutonomous);return;}
     await gate.run(petId,async()=>{
-      let current=await reader.loadEnvelope(petId);if(!current||signal.aborted||current.life.constraints.paused&&!hasForcedWork(current))return;
-      if(farmVisit(current))return;
-      let site=(current.legacy as Record<string,any>).worksite;
-      if(site?.inside && !hasForcedWork(current) && site.workState!=='stopped' && !hasLaborResources(current)){
-        await uow.apply(petId,current.version,draft=>{const s=(draft.legacy as Record<string,any>).worksite;s.workState='stopped';s.stopReason='exhausted';s.sessionId=randomUUID();return {};});return;
-      }
-      if(site?.inside && site.workState==='stopped' && !hasForcedWork(current))return;
-      // Finish an already dispatched step, but don't start another while a
-      // chat is generating. The chat completion callback wakes work again.
-      if(site?.inside&&hasRunningChat(current))return;
-      const pendingLabor=current.life.actions.find(a=>a.actionType==='labor.step'&&a.status==='PENDING');
-      if(pendingLabor){
-        const receipt=await dispatcher.dispatch(pendingLabor.id);
-        if(receipt.status==='completed'&&!signal.aborted){const timer=setTimeout(()=>{if(!signal.aborted)void run(petId,signal,{allowAutonomous}).catch(()=>{});},0);timer.unref?.();}
-        return;
-      }
+      const current=await reader.loadEnvelope(petId);if(!current||signal.aborted||current.life.constraints.paused||farmVisit(current))return;
+      const pet=current.legacy as Record<string,any>;
+      if(pet.worksite?.inside)return;
+      const pending=current.life.actions.find(a=>a.actionType==='labor.step'&&a.status==='PENDING');
+      if(pending){await dispatcher.dispatch(pending.id);return;}
+      if(!canChooseLabor(current))return;
       if(blocksNewLabor(current) || current.life.actions.some(a=>a.actionType==='service.eat-rice' && ['PENDING','DISPATCHED'].includes(a.status)))return;
-      let pet=current.legacy as Record<string,any>, contract=pet.labor?.contracts?.find((c:any)=>['working','paused','queued'].includes(c.status) && c.done<c.trips);
-      if(!contract || contract.status==='paused' || !Number.isFinite(contract.done) || contract.done>=contract.trips)return;
+      const contract=activeContract(pet);
+      if(!contract || contract.status!=='working' || !contract.workPermit)return;
       if(contract.workDecisionEvent && Object.hasOwn(current.life.invalidSources,contract.workDecisionEvent))return;
-      if(pet.worksite?.inside && pet.worksite.workState!=='stopped' && !hasForcedWork(current) && (contract.status==='queued'||!contract.workPermit)){
-        await uow.apply(petId,current.version,draft=>{const c=(draft.legacy as Record<string,any>).labor?.contracts?.find((x:any)=>x.id===contract.id);if(c&&['working','queued'].includes(c.status)){c.status='working';c.workPermit=true;c.batchRemaining=c.trips-c.done;}return {};});
-        current=await reader.loadEnvelope(petId);if(!current)return;pet=current.legacy as Record<string,any>;contract=pet.labor?.contracts?.find((c:any)=>c.id===contract.id);
-      }
-      if(!contract || contract.status!=='working')return;
-      if(contract.workPermit && contract.workDecisionEvent && Object.hasOwn(current.life.invalidSources,contract.workDecisionEvent)){await uow.apply(petId,current.version,draft=>{const c=(draft.legacy as Record<string,any>).labor?.contracts?.find((x:any)=>x.id===contract.id);if(c){c.workPermit=false;c.batchRemaining=0;c.nextDecision=0;}return {};});current=await reader.loadEnvelope(petId);if(!current)return;pet=current.legacy as Record<string,any>;contract=pet.labor?.contracts?.find((c:any)=>c.id===contract.id);if(!contract)return;}
-      if(!hasForcedWork(current)&&!canChooseLabor(current))return;
-      // Voluntary work requires her decision. Existing forced batches retain their original authority.
-      if(!contract.workPermit){
-        if(!hasForcedWork(current))return;
-        await uow.apply(petId,current.version,draft=>{const c=(draft.legacy as Record<string,any>).labor?.contracts?.find((x:any)=>x.id===contract.id);if(c&&c.status==='working'&&c.forced){c.workPermit=true;c.batchRemaining=c.trips-c.done;}return {};});
-        current=await reader.loadEnvelope(petId);if(!current)return;pet=current.legacy as Record<string,any>;contract=pet.labor?.contracts?.find((c:any)=>c.id===contract.id);if(!contract?.workPermit)return;
-      }
-      if(!pet.worksite?.inside){
-        if(!pet.worksite?.requested && !pet.worksite?.suppressUntilDecision)await uow.apply(petId,current.version,draft=>{const site=(draft.legacy as Record<string,any>).worksite||={inside:false,forced:false};if(!site.inside)site.requested=true;return {};});
-        return;
-      }
-      let command=pet.world?.command;
-      if(command && ['queued','running'].includes(command.status) && Number.isFinite(command.expires) && command.expires<=Date.now()) {
-        await uow.apply(petId,current.version,draft=>{const world=(draft.legacy as Record<string,any>).world,old=world?.command;if(old?.id===command.id&&['queued','running'].includes(old.status)){(world.commandHistory||=[]).push({...structuredClone(old),status:'interrupted',interruptedReason:'expired'});world.commandHistory=world.commandHistory.slice(-50);old.status='interrupted';old.interruptedReason='expired';}return {};});
-        current=await reader.loadEnvelope(petId);if(!current)return;pet=current.legacy as Record<string,any>;command=pet.world?.command;
-      }
-      if(command && ['queued','running'].includes(command.status) && (command.source!=='labor' || command.labor?.id!==contract.id))return;
-      if(!command || !['queued','running'].includes(command.status) || command.source!=='labor' || command.labor?.id!==contract.id) {
-        const now=Date.now(),id=randomUUID(),target=contract.carrying?'right':'left';
-        await uow.apply(petId,current.version,draft=>{const p=draft.legacy as Record<string,any>,c=p.labor?.contracts?.find((x:any)=>x.id===contract.id);
-          if(!c || c.status!=='working' || !c.workPermit || draft.life.constraints.paused&&!hasForcedWork(draft))throw Error('工作状态已变化');
-          if(!p.worksite?.inside)throw Error('她不在工地里');
-          p.world ||= {};p.world.command={id,epoch:id,source:'labor',forcedLabor:!!c.forced,surface:'web',issued:now,expires:now+90000,status:'queued',index:0,
-            steps:[{action:'walk',target},{action:c.carrying?'putdown':'lift',target}],labor:{id:c.id,trip:c.done,leg:c.carrying?'deliver':'load',x:c.carrying?.78:.22}};return {};});
-        current=await reader.loadEnvelope(petId);command=(current?.legacy as Record<string,any>)?.world?.command;
-      }
-      if(!current || !command || command.status!=='queued')return;
-      const id=`labor-step:${command.id}:${command.index}`;
-      if(current.life.actions.some(a=>a.id===id))return;
-      const at=new Date().toISOString();
-      await uow.apply(petId,current.version,draft=>{const live=(draft.legacy as Record<string,any>).world?.command;
-        if(!live||live.id!==command.id||live.index!==command.index||live.status!=='queued')throw Error('工作步骤已变化');
-        draft.life.actions.push({id,petId,actionType:'labor.step',parameters:{contractId:contract.id,commandId:command.id},priority:55,
-          interruptPolicy:'safe-point',requiredCapabilities:['labor.step'],expectedStateVersion:draft.version,sourceIds:contract.workDecisionEvent?[contract.workDecisionEvent]:[],status:'PROPOSED',createdAt:at,updatedAt:at});return {};});
-      current=await reader.loadEnvelope(petId);if(!current||signal.aborted)return;
-      await actions.queue(petId,id,current.version);
-      if(!signal.aborted){const receipt=await dispatcher.dispatch(id);if(receipt.status==='completed'&&!signal.aborted){const timer=setTimeout(()=>{if(!signal.aborted)void run(petId,signal,{allowAutonomous}).catch(()=>{});},0);timer.unref?.();}}
+      if(!pet.worksite?.requested && !pet.worksite?.suppressUntilDecision)await uow.apply(petId,current.version,draft=>{const site=(draft.legacy as Record<string,any>).worksite||={inside:false,forced:false};if(!site.inside)site.requested=true;return {};});
     });
   }
-  return {pickup,run};
+
+  function activeContract(pet:Record<string,any>) {
+    return pet.labor?.contracts?.find((c:any)=>['working','paused','queued'].includes(c.status)&&Number.isFinite(c.done)&&c.done<c.trips);
+  }
+
+  async function runWorksite(petId:string,signal:AbortSignal,allowAutonomous:boolean):Promise<boolean> {
+    return gate.run(petId,async()=>{
+      const current=await reader.loadEnvelope(petId),pet=current?.legacy as Record<string,any>|undefined;
+      if(!current||!pet?.worksite?.inside)return false;
+      if(signal.aborted||farmVisit(current))return true;
+      const forced=hasForcedWork(current);
+      if(!forced && pet.worksite.workState!=='stopped' && !hasLaborResources(current)){
+        await uow.apply(petId,current.version,draft=>{
+          const site=(draft.legacy as Record<string,any>).worksite;
+          site.workState='stopped';site.stopReason='exhausted';site.sessionId=randomUUID();
+          return {};
+        });
+        return true;
+      }
+      const human=current.humanity as Record<string,any>;
+      if(human.helperReady!==true || !forced&&(!allowAutonomous||human.restrained||human.sleeping||current.life.constraints.paused||pet.worksite.workState==='stopped'))return true;
+      if(hasRunningChat(current))return true;
+      let id=current.life.actions.find(a=>a.actionType==='labor.step'&&a.status==='PENDING')?.id;
+      if(!id){
+        if(blocksNewLabor(current)||current.life.actions.some(a=>a.actionType==='service.eat-rice'&&['PENDING','DISPATCHED'].includes(a.status)))return true;
+        const contract=activeContract(pet);
+        if(!contract||contract.status==='paused'||contract.workDecisionEvent&&Object.hasOwn(current.life.invalidSources,contract.workDecisionEvent))return true;
+        if(forced ? contract.status!=='working'||!contract.workPermit&&!contract.forced : !canChooseLabor(current))return true;
+        if(!forced&&human.restingUntil>Date.now()&&!contract.workPermit)return true;
+        const command=pet.world?.command,now=Date.now();
+        const live=command&&['queued','running'].includes(command.status);
+        const expired=live&&Number.isFinite(command.expires)&&command.expires<=now;
+        if(live&&!expired&&(command.source!=='labor'||command.labor?.id!==contract.id||command.status!=='queued'))return true;
+        const commandId=live&&!expired?command.id:randomUUID(),index=live&&!expired?command.index:0;
+        const actionId=`labor-step:${commandId}:${index}`;
+        const previous=current.life.actions.find(a=>a.id===actionId);
+        if(previous&&previous.status!=='PROPOSED')return true;
+
+        await uow.apply(petId,current.version,draft=>{
+          const p=draft.legacy as Record<string,any>,c=activeContract(p),world=p.world||={};
+          if(!c.workPermit||c.status==='queued'){
+            c.status='working';c.workPermit=true;c.batchRemaining=c.trips-c.done;
+          }
+          if(expired){
+            (world.commandHistory||=[]).push({...world.command,status:'interrupted',interruptedReason:'expired'});
+            world.commandHistory=world.commandHistory.slice(-50);
+          }
+          if(!live||expired){
+            const target=c.carrying?'right':'left';
+            world.command={id:commandId,epoch:commandId,source:'labor',forcedLabor:!!c.forced,surface:'web',issued:now,expires:now+90000,status:'queued',index,
+              steps:[{action:'walk',target},{action:c.carrying?'putdown':'lift',target}],labor:{id:c.id,trip:c.done,leg:c.carrying?'deliver':'load',x:c.carrying?.78:.22}};
+          }
+          if(!previous){
+            const at=new Date(now).toISOString();
+            draft.life.actions.push({id:actionId,petId,actionType:'labor.step',parameters:{contractId:c.id,commandId},priority:55,
+              interruptPolicy:'safe-point',requiredCapabilities:['labor.step'],expectedStateVersion:draft.version,sourceIds:c.workDecisionEvent?[c.workDecisionEvent]:[],status:'PROPOSED',createdAt:at,updatedAt:at});
+          }
+          return actions.queueDraft(draft,actionId);
+        });
+        id=actionId;
+      }
+      if(!signal.aborted&&(await dispatcher.dispatch(id)).status==='completed'&&!signal.aborted){
+        const timer=setImmediate(()=>{if(!signal.aborted)void runWorksite(petId,signal,allowAutonomous).catch(()=>{});});
+        timer.unref();
+      }
+      return true;
+    });
+  }
+  return {pickup,run,runWorksite};
 }
