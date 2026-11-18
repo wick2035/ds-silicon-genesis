@@ -6,7 +6,7 @@ export type GroupPerson={actorId:string;names:NameEvidence[]};
 
 /** Names are source-backed descriptions, never identity or authority. Rebuild
  * from the event log so old conversations work without changing the archive. */
-export function groupPeople(state:RecordState):GroupPerson[] {
+export function groupPeople(state:RecordState,groupId?:string):GroupPerson[] {
   const people=new Map<string,NameEvidence[]>();
   const events=[...state.events].sort((a,b)=>Date.parse(a.occurredAt)-Date.parse(b.occurredAt));
   const add=(actorId:string,name:unknown,event:typeof events[number],kind:NameEvidence['kind'])=>{
@@ -19,7 +19,7 @@ export function groupPeople(state:RecordState):GroupPerson[] {
   for(const e of events){
     if(Object.hasOwn(state.invalidSources,e.eventId))continue;
     const p=e.payload as Record<string,unknown>|undefined;
-    if(e.type==='social.message'&&e.source==='qq'&&p?.scene==='group'&&e.actorId?.startsWith('qq-member:')){
+    if(e.type==='social.message'&&e.source==='qq'&&p?.scene==='group'&&(!groupId||p.groupId===groupId)&&e.actorId?.startsWith('qq-member:')){
       add(e.actorId,p.nickname,e,'platform');
       const text=typeof p.text==='string'?p.text.trim():'';
       const self=/^(?:我(?:现在)?(?:叫|的名字是|的昵称是)|(?:我的)?昵称(?:改成|叫|是))\s*[：:]?\s*([^\s，。！？,!?.]{1,40})[。！!？?]?$/u.exec(text);
@@ -27,7 +27,7 @@ export function groupPeople(state:RecordState):GroupPerson[] {
     }
     if(e.type==='conversation.user'&&e.actorId==='dad'&&['desktop','qq-c2c'].includes(e.source)&&typeof p?.text==='string'){
       const match=/\b(qq-member:[a-zA-Z0-9_-]{1,100})\s*(?:就是|叫|的(?:名字|昵称)是|的名字叫)\s*([^\s，。！？,!?.]{1,40})/u.exec(p.text);
-      if(match)add(match[1],match[2].replace(/[啊呀啦]$/u,''),e,'dad');
+      if(match&&(!groupId||people.has(match[1])))add(match[1],match[2].replace(/[啊呀啦]$/u,''),e,'dad');
     }
   }
   return [...people].map(([actorId,names])=>({actorId,names}));

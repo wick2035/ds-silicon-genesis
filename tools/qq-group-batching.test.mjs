@@ -34,6 +34,14 @@ test('quiet group gets a turn after four seconds without filling a batch',async 
   await f.tick(1);assert.equal(f.turns[0].length,1);
 });
 
+test('send uses the chosen eligible batch message as the QQ reply anchor',async t=>{
+  const f=fixture(t,input=>{input.selectReplyTo('not-in-this-batch');input.selectReplyTo('m2');return '在这儿';});
+  for(let i=0;i<4;i++)await f.receive();
+  await f.tick(0);
+  assert.equal(f.sent.length,1);
+  assert.deepEqual(f.sent[0].slice(1,6),['reply:m2','group','在这儿','m2','m2']);
+});
+
 test('new messages wait for the current generation and its send cooldown',async t=>{
   let release;
   const pending=new Promise(resolve=>{release=resolve;});

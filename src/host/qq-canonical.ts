@@ -29,7 +29,8 @@ function nextReplySeq(draft:CanonicalEnvelope,replyTo:string,scene:string):numbe
   return Math.max(0,...draft.life.actions.filter(a=>a.actionType==='qq.send' && (a.parameters as Obj).replyTo===replyTo && (a.parameters as Obj).scene===scene).map(a=>Number((a.parameters as Obj).replySeq)||1))+1;
 }
 export interface QQIdentity { appId:string; ownerOpenid?:string; groupOpenid?:string; groupOwnerOpenid?:string; groupEnabled:boolean; groupMode:'owner'|'mentions'|'all' }
-export interface QQIncoming { messageId:string; scene:'c2c'|'group'; actorOpenid:string; groupOpenid?:string; text:string; occurredAt:string; mentioned?:boolean; nickname?:string }
+export interface QQIncoming { messageId:string; scene:'c2c'|'group'; actorOpenid:string; groupOpenid?:string; text:string; occurredAt:string; mentioned?:boolean; nickname?:string; mentionsPet?:boolean; mentionOpenids?:string[]; replyToMessageId?:string }
+const groupActorId=(identity:QQIdentity,openid:string)=>openid===identity.groupOwnerOpenid?'dad':'qq-member:'+hash(identity.appId+':'+openid).slice(0,24);
 
 /** Canonical storage for one already authenticated QQ account. It never opens
  * a socket, reads old files, stores appSecret, or invokes the old QQ bridge. */
@@ -125,7 +126,13 @@ export class CanonicalQQ {
       const eventId='qq-in:'+receiptKey;
       if(Object.hasOwn(draft.life.invalidSources,eventId)) throw new Error('已删除事件不可重新导入');
       const now=new Date().toISOString(); qq.seen[receiptKey]={at:Date.now(),eventId};
-      draft.life.events.push({eventId,petId,type:'social.message',source:'qq',actorId:isOwner?'dad':'qq-member:'+hash(identity.appId+':'+message.actorOpenid).slice(0,24),occurredAt:message.occurredAt,receivedAt:now,evidenceLevel:'observed',payload:{scene:message.scene,...(message.scene==='group'?{groupId:hash(identity.appId+':'+message.groupOpenid)}:{}),messageId:message.messageId,text:redactDadNames(message.text),isOwner,...(message.scene==='group' && typeof message.nickname==='string' && message.nickname.trim() && message.nickname.trim().length<=40 && !/[\x00-\x1f<>]/u.test(message.nickname) ? {nickname:message.nickname.trim()} : {})}});
+      const mentionedActors=Array.isArray(message.mentionOpenids)?[...new Set(message.mentionOpenids.slice(0,16).filter(key).map(id=>groupActorId(identity,id)))]:[];
+      const addressing=message.scene==='group'?{
+        ...((message.mentionsPet??message.mentioned)===true?{mentionsPet:true}:{}),
+        ...(mentionedActors.length?{mentionedActors}:{}),
+        ...(key(message.replyToMessageId)&&message.replyToMessageId!==message.messageId?{replyToMessageId:message.replyToMessageId}:{})
+      }:undefined;
+      draft.life.events.push({eventId,petId,type:'social.message',source:'qq',actorId:message.scene==='group'?groupActorId(identity,message.actorOpenid):'dad',occurredAt:message.occurredAt,receivedAt:now,evidenceLevel:'observed',payload:{scene:message.scene,...(message.scene==='group'?{groupId:hash(identity.appId+':'+message.groupOpenid)}:{}),messageId:message.messageId,text:redactDadNames(message.text),isOwner,...(addressing&&Object.keys(addressing).length?{addressing}:{}),...(message.scene==='group' && typeof message.nickname==='string' && message.nickname.trim() && message.nickname.trim().length<=40 && !/[\x00-\x1f<>]/u.test(message.nickname) ? {nickname:message.nickname.trim()} : {})}});
       rebuildRelationships(draft.life);
       return {value:{accepted:true,isOwner,eventId}};
     });

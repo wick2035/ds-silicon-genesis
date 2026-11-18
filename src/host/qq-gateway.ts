@@ -13,7 +13,8 @@ export async function readQQConfig(path:string):Promise<QQConfig> {
 export interface QQGatewayOptions {
   config:QQConfig; canonical:CanonicalQQ; ingressAuthority:object; signal:AbortSignal;
   /** Uses the same authenticated conversation/model boundary as desktop. */
-  onTurn(input:{petId:string;scene:'c2c'|'group';messages:Array<{text:string;isOwner:boolean;eventId:string}>},signal:AbortSignal):Promise<string|null>;
+  onTurn(input:{petId:string;scene:'c2c'|'group';messages:Array<{text:string;isOwner:boolean;eventId:string}>;
+    selectReplyTo?:(eventId:string)=>void},signal:AbortSignal):Promise<string|null>;
   /** Dispatches an already persisted outbox row, never directly sends. */
   dispatch(actionId:string):Promise<unknown>;
   onStatus?:(state:string)=>void;
@@ -31,6 +32,7 @@ function diagnostics(path?:string) {
   };
 }
 type Item={text:string;isOwner:boolean;eventId:string;messageId:string;receivedAt:number};
+const qqId=(value:unknown):value is string=>typeof value==='string'&&value.length>0&&value.length<=200&&!/[\s<>\x00-\x1f]/u.test(value);
 /** Reuses only original QQ gateway handshake, heartbeat and reconnection. All
  * application input, pairing and outbound delivery are overridden below. */
 export class CanonicalQQGateway extends QQPetBridge {
@@ -99,14 +101,29 @@ export class CanonicalQQGateway extends QQPetBridge {
     const actor=scene==='group'?message?.author?.member_openid:message?.author?.user_openid;
     if(typeof actor!=='string'||typeof message?.id!=='string'||typeof message?.content!=='string'||message.author?.bot===true || (scene==='group'&&this.botId===actor)) {this.#diagnostic('inbound',{scene,eventType,result:'invalid-or-self-message'});return;}
     const age=Date.now()-Date.parse(message.timestamp); if(!Number.isFinite(age)||age>240000||age < -60000){this.#diagnostic('inbound',{scene,eventType,result:'invalid-or-stale-timestamp'});return;}
-    let text=message.content.trim();
-    // Some group deliveries retain a leading bot mention. Strip only our own
-    // structured mention; mentions of other members must remain ordinary text.
+    const text:string=message.content.trim();
+    const platformAt=eventType==='GROUP_AT_MESSAGE_CREATE';
+    let mentionsPet=false,mentionOpenids:string[]=[];
     if(scene==='group') {
-      const mention=/^<@!?([^>]+)>\s*/u.exec(text);
-      if(mention && [this.botId,this.#options.config.appId].includes(mention[1]))text=text.slice(mention[0].length).trim();
+      const isPet=(id:string)=>id===this.botId||id===this.#options.config.appId;
+      const inline=[...text.matchAll(/<@!?([^>\s]+)>/gu)];
+      const leading=[...(text.match(/^(?:<@!?[^>\s]+>\s*)+/u)?.[0]??'').matchAll(/<@!?([^>\s]+)>/gu)].map(m=>m[1]);
+      const metadata=(message.mentions as unknown[]|undefined);
+      const known=(Array.isArray(metadata)?metadata.slice(0,16):[]).map((value):unknown=>{
+        const m=value as Record<string,unknown>|null;
+        return m?.member_openid??m?.user_openid??m?.id;
+      }).filter(qqId);
+      // The gateway event says the bot was mentioned somewhere. When markup
+      // survives, a mention inside the sentence can simply be its subject.
+      mentionsPet=inline.length===0?(platformAt||known.some(isPet)):
+        leading.some(isPet)||platformAt&&leading.length>0&&!inline.some(m=>isPet(m[1]));
+      mentionOpenids=[...new Set((inline.length?leading:known).filter(qqId).filter(id=>!isPet(id)))].slice(0,16);
     }
-    const input:QQIncoming={messageId:message.id,scene,actorOpenid:actor,...(scene==='group'?{groupOpenid:message.group_openid,mentioned:eventType==='GROUP_AT_MESSAGE_CREATE'}:{}),text,occurredAt:message.timestamp,...(scene==='group' && typeof message.author?.nickname==='string'?{nickname:message.author.nickname}:{})};
+    const reference=message.message_reference?.message_id;
+    const input:QQIncoming={messageId:message.id,scene,actorOpenid:actor,text,occurredAt:message.timestamp,...(scene==='group'?{
+      groupOpenid:message.group_openid,mentioned:platformAt,mentionsPet,mentionOpenids,...(qqId(reference)?{replyToMessageId:reference}:{}),
+      nickname:message.author?.nickname??message.author?.username
+    }:{})};
     this.#diagnostic('inbound',{scene,eventType,characters:text.length,
       hasBindingWord:text.includes('绑定群'),commandOffset:text.indexOf('/绑定群'),
       startsWithAt:text.startsWith('@'),startsWithStructuredMention:text.startsWith('<@'),
@@ -123,6 +140,9 @@ export class CanonicalQQGateway extends QQPetBridge {
     const paired=await this.#options.canonical.pair(petId,{...input,text:pairingText},this.#options.ingressAuthority);
     if(/^\/绑定(?:群)?\s/u.test(pairingText))this.#diagnostic('pairing',{scene,paired:paired.paired});
     if(paired.paired && paired.eventId) { await this.respond(scene,[{text:'',isOwner:true,eventId:paired.eventId,messageId:message.id,receivedAt:Date.now()}],scene==='group'?'群绑定好啦。':'绑定好啦。'); return; }
+    if(scene==='group')input.text=text.replace(/<@!?([^>\s]+)>/gu,(_tag,id,offset)=>
+      offset===0&&[this.botId,this.#options.config.appId].includes(id)?'':[this.botId,this.#options.config.appId].includes(id)?'@大肥鱼':'@群友').trim();
+    if(!input.text)return;
     const result=await this.#options.canonical.receive(petId,input,this.#options.ingressAuthority);
     if(!result.accepted||!result.eventId||this.#closed) return;
     const item={text:input.text,isOwner:result.isOwner,eventId:result.eventId,messageId:input.messageId,receivedAt:Date.now()};
@@ -169,20 +189,21 @@ export class CanonicalQQGateway extends QQPetBridge {
     if(scene==='group'&&(this.#groupBlocked||epoch!==this.#groupEpoch))return;
     items=items.filter(item=>Date.now()-item.receivedAt<=240000);
     if(!items.length||this.#closed||this.#options.signal.aborted)return;
-    let text:string|null;
+    let text:string|null,anchor=items.at(-1)!;
     // Bound a single turn so a stalled model/gateway can never wedge the whole
     // serial queue; the next owner message is then free to proceed.
     const turnAbort=new AbortController();
     const turnSignal=AbortSignal.any([this.#options.signal,turnAbort.signal,AbortSignal.timeout(90000),...(scene==='group'?[this.#groupAbort.signal]:[])]);
     try {
-      text=await this.#options.onTurn({petId:this.#options.config.petId||'main',scene,messages:items.map(({text,isOwner,eventId})=>({text,isOwner,eventId}))},turnSignal);
+      text=await this.#options.onTurn({petId:this.#options.config.petId||'main',scene,messages:items.map(({text,isOwner,eventId})=>({text,isOwner,eventId})),
+        ...(scene==='group'?{selectReplyTo:(eventId:string)=>{anchor=items.find(item=>item.eventId===eventId)??anchor;}}:{})},turnSignal);
     } catch(error) {
       this.statusSafe('message-failed');
       if(this.#closed||this.#options.signal.aborted || scene==='group'&&(this.#groupBlocked||epoch!==this.#groupEpoch))return;
       const walletEmpty=error instanceof Error && error.message==='模拟饭钱已用完，请先添加饭钱';
       text=scene==='c2c'&&walletEmpty?'我的饭钱用完啦，请先加一点。':'我暂时没接上，请稍后再试。';
     }
-    if(text?.trim()&&!this.#closed&&!this.#options.signal.aborted && (scene!=='group'||!this.#groupBlocked&&epoch===this.#groupEpoch)) await this.respond(scene,items,text);
+    if(text?.trim()&&!this.#closed&&!this.#options.signal.aborted && (scene!=='group'||!this.#groupBlocked&&epoch===this.#groupEpoch)) await this.respond(scene,[anchor],text);
   }
   private async respond(scene:'c2c'|'group',items:Item[],text:string):Promise<void> {
     const epoch=this.#groupEpoch;if(scene==='group'&&this.#groupBlocked)return;

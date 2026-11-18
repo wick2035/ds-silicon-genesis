@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {CompanionStore} from '../vendor/pet-plugins/behavior/core.mjs';
 import {CanonicalChat} from '../dist/host/chat-service.js';
 import {isOwnerPrivateConversation} from '../dist/host/chat-identity.js';
@@ -77,6 +78,62 @@ test('group turns identify each speaker from trusted source events',async()=>{
   assert.equal(stored.actorId,undefined);
   assert.deepEqual(stored.payload.sourceIds,['q1','q2','q3']);
   assert.deepEqual(JSON.parse(content).map(item=>item.actorId),['dad','qq-member:abcdef123456','qq-member:999999999999']);
+});
+
+test('messages explicitly aimed at someone else stay silent, including a nearby follow-up',async()=>{
+  const friend='qq-member:abcdef123456',room={scene:'group',groupId:'g1'};
+  const events=[event('prior','social.message','qq','我在',friend,{...room,nickname:'小鲸',messageId:'quoted'}),
+    event('quote','social.message','qq','帮我看看','dad',{...room,addressing:{replyToMessageId:'quoted'}}),
+    event('name','social.message','qq','小鲸，帮我看看','dad',room),
+    event('follow','social.message','qq','你觉得怎么样？','dad',room)];
+  const f=fixture(events),signal=new AbortController().signal;
+  const input=ids=>({petId:'main',scene:'group',messages:ids.map(eventId=>({eventId,text:'无关',isOwner:true}))});
+  assert.equal(await f.chat.qqTurn(input(['quote']),signal),null);
+  assert.equal(await f.chat.qqTurn(input(['name','follow']),signal),null);
+  assert.equal(f.calls.length,0);
+  assert.equal(f.state().life.events.length,events.length);
+});
+
+test('a direct address to the pet wins over the last speaker in a mixed batch',async()=>{
+  const room={scene:'group',groupId:'g1'},friend='qq-member:abcdef123456';
+  const events=[event('fish','social.message','qq','你吃饭了吗','dad',{...room,addressing:{mentionsPet:true}}),
+    event('other','social.message','qq','你去拿吧','dad',{...room,addressing:{mentionedActors:[friend]}})];
+  const f=fixture(events),anchors=[];
+  const reply=await f.chat.qqTurn({petId:'main',scene:'group',messages:events.map(({eventId})=>({eventId,text:'无关',isOwner:true})),
+    selectReplyTo:id=>anchors.push(id)},new AbortController().signal);
+  assert.equal(reply,'好呀');
+  assert.deepEqual(anchors,['fish']);
+  const lines=JSON.parse(f.calls[0].messages.at(-1).content);
+  assert.deepEqual(lines.map(line=>[line.addressedTo,line.replyTarget]),[['pet',true],['others',false]]);
+  assert.match(f.calls[0].system,/收话人依据/);
+});
+
+test('ambiguous aliases and references from another group do not invent a recipient',async()=>{
+  const room={scene:'group',groupId:'g1'},elsewhere={scene:'group',groupId:'g2'};
+  const events=[event('a','social.message','qq','你好','qq-member:AAA',{...room,nickname:'小鲸'}),
+    event('b','social.message','qq','我也叫小鲸','qq-member:BBB',{...room,nickname:'小鲸'}),
+    event('off-room','social.message','qq','不应看见','qq-member:CCC',{...elsewhere,messageId:'off-room-id'}),
+    event('query','social.message','qq','小鲸，看到没','dad',room),
+    event('quote','social.message','qq','看到了吗','dad',{...room,addressing:{replyToMessageId:'off-room-id'}})];
+  const f=fixture(events,'<qq-silent/>');
+  assert.equal(await f.chat.qqTurn({petId:'main',scene:'group',messages:[{eventId:'query',isOwner:true,text:''}]},new AbortController().signal),null);
+  assert.match(f.calls[0].system,/"addressedTo":"unspecified"/);
+  assert.doesNotMatch(f.calls[0].system,/不应看见/);
+  assert.equal(await f.chat.qqTurn({petId:'main',scene:'group',messages:[{eventId:'quote',isOwner:true,text:''}]},new AbortController().signal),null);
+  assert.equal(f.calls.length,1);
+});
+
+test('quoting the pet uses a confirmed delivery to the same QQ group',async()=>{
+  const identity={appId:'test-app',groupOpenid:'test-group'};
+  const groupId=createHash('sha256').update(identity.appId+':'+identity.groupOpenid).digest('hex');
+  const source=event('quote','social.message','qq','真的？','dad',{scene:'group',groupId,addressing:{replyToMessageId:'sent'}});
+  const action={id:'send',actionType:'qq.send',status:'COMPLETED',receiptId:'receipt',parameters:{scene:'group',destination:'test-group'}};
+  const receipt={actionId:'send',receiptId:'receipt',status:'COMPLETED',details:{kind:'qq.send',messageId:'sent'}};
+  const f=fixture([source],'嗯嗯',{actions:[action],receipts:[receipt]});
+  f.state().legacy.qq={identity};
+  assert.equal(await f.chat.qqTurn({petId:'main',scene:'group',messages:[{eventId:'quote',isOwner:true,text:'真的？'}]},new AbortController().signal),'嗯嗯');
+  assert.match(f.calls[0].system,/"addressedTo":"pet"/);
+  assert.match(f.calls[0].system,/"quotedSpeaker":"大肥鱼"/);
 });
 
 test('owner group commands stay executable and other members are rejected',async()=>{

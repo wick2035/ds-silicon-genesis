@@ -76,3 +76,20 @@ test('gateway persists available group nickname without changing actor identity'
  assert.deepEqual(messages.map(e=>e.payload.nickname),['小鲸','蓝鲸']);
  assert.equal(messages[0].actorId,messages[1].actorId);
 });
+
+test('authenticated group ingress records @ targets and reply references without member OpenIDs in the text',async t=>{
+ const f=await fixture(t);
+ f.state.life.invalidSources={};f.state.life.relationships=[];
+ await f.gateway.receive(f.message('/绑定群 private-code'),'group','GROUP_MESSAGE_CREATE');
+ await f.gateway.receive({...f.message('我在'),id:'prior',author:{member_openid:'private-friend',nickname:'小鲸'}},'group','GROUP_MESSAGE_CREATE');
+ await f.gateway.receive({...f.message('<@!private-friend> 你来看看'),id:'other',message_reference:{message_id:'prior'}},'group','GROUP_MESSAGE_CREATE');
+ await f.gateway.receive({...f.message('<@!bot-id> 你也看看'),id:'pet'},'group','GROUP_AT_MESSAGE_CREATE');
+ await f.gateway.receive({...f.message('<@!private-friend> 你看到<@!bot-id>了吗？'),id:'subject'},'group','GROUP_AT_MESSAGE_CREATE');
+ const [prior,other,pet,subject]=f.state.life.events.filter(e=>e.type==='social.message');
+ assert.deepEqual(other.payload.addressing,{mentionedActors:[prior.actorId],replyToMessageId:'prior'});
+ assert.doesNotMatch(other.payload.text,/private-friend/);
+ assert.equal(pet.payload.text,'你也看看');
+ assert.deepEqual(pet.payload.addressing,{mentionsPet:true});
+ assert.deepEqual(subject.payload.addressing,{mentionedActors:[prior.actorId]});
+ assert.match(subject.payload.text,/@大肥鱼/);
+});
