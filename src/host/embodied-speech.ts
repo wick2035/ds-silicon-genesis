@@ -138,10 +138,10 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
       const {近期真实经历:recentExperiences,...currentContext}=decision.context;
       const field=currentContext.生活.farm;
       const liveFarm=field?'\n稻田实况：'+JSON.stringify(field)+'。'+FARM_WEATHER_AWARENESS+'米缸只存生米。'+
-        'seedling、heading 或 ripe 表示田里已有一季水稻；种子库存只算未使用的种子。waterNeeded 是今天还差的浇水次数，rain 已计入 watered。'+
+        'seedling、heading 或 ripe 表示田里已有一季水稻；种子库存只算未使用的种子。careCompleted / careTarget 是当天实际农活进度，nextCareAt 是最早可继续的时间。雨水补给只影响水量。weatherBlocked 为 true 时等天气好转再去。'+
         '解释已发生的农活时，以完成回执为准；已有水稻时，不能再次播种。对方只问状态时，就按实况回答。'+
         (enterFarm?'想先进去看看或等爸爸教时，调用 enter_farm。inside 为 true 就已经在田边。':'')+
-        '决定立刻播种、浇水或收割时才调用 act 的 farm.tend，operation 用实况给出的值；播种缺种子时须决定是否接受 seedPurchase 报价，接受时原样传入。根据进场确认和农活回执说实际结果。':'';
+        '决定立刻播种、浇水、施肥或收割时才调用 act 的 farm.tend，operation 用实况给出的值；播种缺种子时须决定是否接受 seedPurchase 报价，接受时原样传入。根据进场确认和农活回执说实际结果。':'';
       const liveSystem=system+'\n此刻实况：'+promptData(currentContext,1600)+'\n近期真实经历：'+promptData(recentExperiences,800)+timeFor(decision.envelope)+liveWorkFor(decision.envelope)+updatesFor(decision.envelope)+liveFarm+'\n当前身体与食物（优先于旧对话和历史摘要）：'+JSON.stringify(liveFoodFor(decision.envelope));
       let text='';const calls=new Map<number,{id:string;name:string;arguments:string}>();
       for await(const part of model.stream({...options,embodied:undefined,embodiedSnapshot:undefined,signal,system:liveSystem,messages,tools:round<4?tools:undefined})){

@@ -3,11 +3,13 @@ const get = id => document.getElementById(id);
 const bridge = window.farmBridge;
 const media = '../../assets/farm/';
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
-const labels = {empty:'待播种',seedling:'育秧中',heading:'抽穗中',ripe:'可收割'};
-const activity = {plant:'大肥鱼正在播种',water:'大肥鱼正在浇水',harvest:'大肥鱼正在收割'};
+const labels = {empty:'待播种',seedling:'育秧中',heading:'抽穗中',ripe:'已成熟'};
+const activity = {plant:'大肥鱼正在播种',water:'大肥鱼正在浇水',fertilize:'大肥鱼正在施肥',harvest:'大肥鱼正在收割'};
+const careLabels = {water:'浇水',fertilize:'施肥'};
 const clock = new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Hong_Kong',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
 const growthSteps = [...get('growth').children];
 const scene = get('scene'), farmer = get('farmer'), crop = get('crop'), visit = get('visit'), feedback = get('feedback');
+const careDetail = get('care-detail'), rainDetail = get('rain-detail');
 let inside = false, working = false, polling = false, changing = false, connected = false, poseKey = '';
 let renderedStage, renderingCommand;
 
@@ -44,11 +46,16 @@ function grow(stage) {
   crop.append(plants);
 }
 
+function poseAsset(pose,still) {
+  const sprite = pose==='fertilize'?'idle':pose;
+  return media+sprite+(sprite==='idle'||still?'.webp':'.gif');
+}
+
 function showPose(pose,key=pose) {
   if (poseKey===key) return;
   poseKey=key;
   farmer.dataset.pose=pose;
-  farmer.src=media+pose+(pose==='idle'||reducedMotion.matches?'.webp':'.gif')+'?v='+encodeURIComponent(key);
+  farmer.src=poseAsset(pose,reducedMotion.matches)+'?v='+encodeURIComponent(key);
 }
 
 function showFeedback(text='') {
@@ -56,11 +63,27 @@ function showFeedback(text='') {
   feedback.hidden=!text;
 }
 
+function renderCare(field) {
+  const growing = field.stage==='seedling'||field.stage==='heading';
+  get('care-progress').textContent=growing?`${field.careCompleted} / ${field.careTarget} 次`:'—';
+  let detail='每日零点结算';
+  if (field.weatherBlocked) detail='天气恶劣 · 暂停进田';
+  else if (growing && field.careCompleted>=field.careTarget) detail='今日已达标';
+  else if (growing && careLabels[field.operation]) detail=`现在可以${careLabels[field.operation]}`;
+  else if (growing && field.nextCareAt>Date.now()) {
+    const tomorrow=field.nextCareAt>=Date.parse(`${field.date}T00:00:00+08:00`)+86400000;
+    detail=`${tomorrow?'明天 ':''}${clock.format(field.nextCareAt)} 后可继续`;
+  } else if (growing) detail='等待田况同步';
+  if (careDetail.textContent!==detail) careDetail.textContent=detail;
+  rainDetail.hidden=!growing||!field.rain;
+  if (!rainDetail.hidden) rainDetail.textContent=`雨水补给 ${field.rain} 次`;
+}
+
 function render(state) {
   const field=state.field;
   connected=!!field;
   inside=state.inside;
-  visit.disabled=!connected||changing||(!inside && state.worksiteInside);
+  visit.disabled=!connected||changing||(!inside && (state.worksiteInside||field.weatherBlocked));
   visit.textContent=inside?'接她回来':'带她进田';
   farmer.hidden=!inside;
   if (!field) return;
@@ -71,21 +94,15 @@ function render(state) {
   grow(field.stage);
   get('stage').textContent=labels[field.stage];
   growthSteps.forEach((step,index)=>step.toggleAttribute('data-done',index<field.growth));
-  get('growth-detail').textContent=field.stage==='empty'?(field.operation?'等大肥鱼播种':'待补种子'):field.stage==='ripe'?`可收 ${field.expectedBowls} 碗生米`:`已达标 ${field.growth} / 3 日 · 预计 ${field.expectedBowls} 碗`;
+  get('growth-detail').textContent=field.stage==='empty'?(field.weatherBlocked?'天气转好后可播种':field.operation?'等大肥鱼播种':'待补种子'):field.stage==='ripe'?`成熟 · 预计收 ${field.expectedBowls} 碗生米`:`已达标 ${field.growth} / 3 日 · 预计 ${field.expectedBowls} 碗`;
   const seeds=field.seeds;
   get('seed-stock').textContent=`${seeds.stock} / ${seeds.limit} 束`;
-  const seedHelp=field.stage==='empty'&&seeds.missing?(field.seedPurchase?`还需买 ${seeds.missing} 束`:'种子和饭钱不足 · 可在「饭钱」页购买'):`每季用 ${seeds.perSeason} 束`;
+  const seedHelp=field.stage==='empty'&&seeds.missing?(seeds.maxPurchase>=seeds.missing?`还需买 ${seeds.missing} 束`:'种子和饭钱不足 · 可在「饭钱」页购买'):`每季用 ${seeds.perSeason} 束`;
   get('seed-detail').textContent=seedHelp;
-  get('water').textContent=field.stage==='empty'||field.stage==='ripe'?'—':`${field.watered} / 2 次`;
-  if (field.stage==='empty'||field.stage==='ripe') get('water-detail').textContent='每日零点结算';
-  else if (field.watered===2) get('water-detail').textContent=field.rain?'今日达标 · 含雨水补给':'今日达标 · 零点结算';
-  else if (field.nextWaterAt && field.nextWaterAt>Date.now()) {
-    const tomorrow=field.nextWaterAt>=Date.parse(`${field.date}T00:00:00+08:00`)+86400000;
-    get('water-detail').textContent=`${tomorrow?'明天 ':''}${clock.format(field.nextWaterAt)} 可再浇`;
-  } else get('water-detail').textContent=field.rain?'可以再浇 · 含雨水补给':'现在可以浇水';
+  renderCare(field);
   get('rice').textContent=field.rawBowls;
   get('harvest').textContent=field.lastHarvest===null?'生米需煮熟后才能吃':field.lastHarvest?`上季收成 ${field.lastHarvest} 碗`:'上一季颗粒无收';
-  const caption=renderingCommand?activity[renderingCommand.operation]:inside?'大肥鱼在田边':state.worksiteInside?'大肥鱼在搬砖工地':'大肥鱼还没来稻田';
+  const caption=renderingCommand?activity[renderingCommand.operation]:inside?(field.weatherBlocked?'大肥鱼在避雨处':'大肥鱼在田边'):state.worksiteInside?'大肥鱼在搬砖工地':'大肥鱼还没来稻田';
   if (get('scene-caption').textContent!==caption) get('scene-caption').textContent=caption;
   if (!renderingCommand && inside) {
     if (/hail|typhoon|heavy-rain/.test(field.weather)) {
@@ -100,7 +117,7 @@ async function playCommand(command) {
   working=true;
   try {
     const preload=new Image();
-    preload.src=media+command.operation+(reducedMotion.matches?'.webp':'.gif');
+    preload.src=poseAsset(command.operation,reducedMotion.matches);
     await preload.decode();
     render(await bridge.action('start',command.id));
     showPose(command.operation,command.id);
@@ -115,6 +132,7 @@ async function playCommand(command) {
   } finally {
     renderingCommand=null;
     working=false;
+    void refresh();
   }
 }
 

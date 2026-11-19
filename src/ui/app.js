@@ -130,13 +130,13 @@ function growth(d){d=d||{};const diaryDates=new Map(Object.entries(d.diaryDates|
 function groupChatControl(d){const blocked=d.groupChatBlocked===true,available=typeof d.groupChatBlocked==='boolean';return card('QQ 群聊',`<div class="form-row group-chat-control"><div><strong>${available?(blocked?'群聊已禁止':'可以看群消息'):'群聊状态暂不可用'}</strong><p class="card-sub" id="group-chat-description">${blocked?'她暂时看不到新群消息，也不能参与群聊。':'禁止后，她将看不到新群消息，也不能参与群聊。'}她会知道这是爸爸的决定。</p><p class="card-sub">私聊照常，恢复后只接收新消息。</p></div><button type="button" class="secondary" data-command="group-chat" data-value="${!blocked}" aria-describedby="group-chat-description" ${available?'':'disabled'}>${blocked?'恢复群聊':'禁止群聊'}</button></div>`,'full');}
 function farmWeatherControl(){
   return card('稻田天气', `<form id="farm-weather-form" class="form-row">
-    <div><label for="farm-weather">触发天气</label>
+    <div><label for="farm-weather">天气</label>
       <select id="farm-weather" name="weather" required>
-        <option value="">选择天气</option><option value="light-rain">小雨</option><option value="heavy-rain">大雨</option>
+        <option value="">选择天气</option><option value="sunny">晴天</option><option value="light-rain">小雨</option><option value="heavy-rain">大雨</option>
         <option value="light-hail">轻度冰雹</option><option value="heavy-hail">重度冰雹</option>
         <option value="light-typhoon">轻度台风</option><option value="heavy-typhoon">重度台风</option>
-      </select><p class="card-sub" id="farm-weather-result" role="status">天气立即生效，冰雹或台风可能影响本季收成。</p>
-    </div><button class="secondary" type="submit">触发天气</button>
+      </select><p class="card-sub" id="farm-weather-result" role="status">冰雹和台风期间暂停进田，并可能减产。</p>
+    </div><button class="secondary" type="submit">应用天气</button>
   </form>`,'full');
 }
 function settings(d){if(typeof d?.paused!=='boolean')return `<div class="grid">${card('自主行为',empty('设置暂不可用。'),'full')}</div>`;const permissions=rows(d.permissions,p=>`<article class="row"><strong>${esc(readable(p))}</strong><button class="secondary" data-command="revoke" data-id="${esc(p)}">撤销权限</button></article>`,'当前没有已授权的权限。');return `<div class="grid">${card('自主行为',`<div class="form-row"><div><strong>自主行为${d.paused?'已暂停':'运行中'}</strong><p class="card-sub">暂停会阻止发起新的自主行动。</p></div><button class="secondary" data-command="pause" data-value="${!d.paused}">${d.paused?'恢复自主行为':'暂停自主行为'}</button></div>`,'full')}${groupChatControl(d)}${farmWeatherControl()}${card('权限',permissions,'full','撤销后，相关行动会在执行前重新校验')}</div>`}
@@ -248,7 +248,9 @@ view.addEventListener('submit',async event=>{
   button.disabled=true;
   try {
     const response=await window.lifeApi.setFarmWeather(weather);
-    result.textContent='稻田当前天气 · '+response.field.weatherLabel;
+    const field=response.field;
+    const detail=field.weatherBlocked?' · 暂停进田':field.operation==='fertilize'?' · 现在可以施肥':field.operation==='water'?' · 现在可以浇水':'';
+    result.textContent=`稻田天气已改为${field.weatherLabel}${detail}`;
   } catch(error) {
     result.textContent=error.message||'天气暂时无法更新，请重试。';
   } finally {button.disabled=false;}

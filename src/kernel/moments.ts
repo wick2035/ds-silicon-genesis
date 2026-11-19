@@ -22,7 +22,7 @@ function sourceLabel(event: LifeEvent): string | null {
   if (event.type === 'conversation.assistant' && !data?.silent && ['desktop', 'qq-c2c', 'legacy'].includes(event.source)) return '和爸爸聊了一会儿';
   if (!['observed', 'verified'].includes(event.evidenceLevel)) return null;
   if (event.type === 'farm.weather' && typeof data?.weather === 'string' && data.weather !== 'sunny') return '稻田的天气有了变化';
-  if (event.type === 'farm.tended') return ({plant:'在稻田播了种', water:'给稻田浇了水', harvest:'收割了水稻'} as Record<string, string>)[String(data?.operation)] ?? '在稻田干了活';
+  if (event.type === 'farm.tended') return ({plant:'在稻田播了种', water:'给稻田浇了水', fertilize:'给水稻施了肥', harvest:'收割了水稻'} as Record<string, string>)[String(data?.operation)] ?? '在稻田干了活';
   if (event.type === 'body.meal') return '吃了饭';
   if (event.type === 'interaction.worksite' && ['touch', 'drag', 'release', 'enter-forced', 'enter-voluntary', 'leave-voluntary'].includes(String(data?.action))) return '在搬砖工地的一次互动';
   if (event.type === 'action.receipt' && data?.status === 'COMPLETED') {

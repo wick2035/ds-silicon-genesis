@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 import type {ExecutionReceipt, OutboxIntent, PetGate, UnitOfWork} from '../storage/uow.js';
-import {advanceFarm, changeFarmWeather, farmActionTarget, farmFacts, farmVisit, farmWeather, needsFarmAdvance, setFarmVisit, type FarmAction, type FarmWeather} from './farm.js';
+import {advanceFarm, changeFarmWeather, checkFarmWeatherForEntry, farmActionTarget, farmFacts, farmVisit, farmWeather, needsFarmAdvance, setFarmVisit, type FarmAction, type FarmWeather} from './farm.js';
 
 const CLIP_MS = 1600;
 type Reader = {loadEnvelope(id:string):Promise<CanonicalEnvelope|null>};
@@ -9,7 +9,13 @@ type OpenRequest = {id:string; owner:string; signal?:AbortSignal; promise:Promis
 type ActiveCommand = {id:string; action:FarmAction; epoch:string; target:ReturnType<typeof farmActionTarget>;
   started?:{at:number; visitId:string}; finish:(receipt:ExecutionReceipt)=>void};
 
+function checkFarmTarget(expected:ActiveCommand['target'], current:ActiveCommand['target']) {
+  if (current.weatherEventId !== expected.weatherEventId) throw Error('稻田天气已变化，请重新选择农活');
+  if (current.cropId !== expected.cropId || current.date !== expected.date) throw Error('稻田状态已变化');
+}
+
 export function checkFarmBody(state:CanonicalEnvelope, now:number, autonomous:boolean) {
+  checkFarmWeatherForEntry(state);
   const pet = state.legacy as Record<string,any>, human = state.humanity;
   if (pet.worksite?.inside || pet.worksite?.requested || pet.labor?.contracts?.some((c:any)=>c.status==='working' && c.workPermit)) throw Error('她现在在工地或正在忙搬砖');
   if (human.helperReady !== true || human.restrained !== false || human.sleeping || (typeof human.restingUntil === 'number' && human.restingUntil > now)) throw Error('她正在休息或身体暂时无法移动');
@@ -23,7 +29,8 @@ export function checkFarmReceipt(state:CanonicalEnvelope, intent:OutboxIntent, r
     checkFarmBody(state,now,true);
     const target = farmActionTarget(state,intent.payload.parameters as FarmAction,now);
     if (evidence.confirmed !== true || evidence.actionId !== intent.id || evidence.kind !== intent.type ||
-      evidence.date !== target.date || evidence.cropId !== target.cropId || !evidence.visitId || evidence.visitId !== farmVisit(state)?.id) throw Error('稻田动作回执已失效');
+      evidence.date !== target.date || evidence.cropId !== target.cropId || evidence.weatherEventId !== target.weatherEventId ||
+      !evidence.visitId || evidence.visitId !== farmVisit(state)?.id) throw Error('稻田动作回执已失效');
     return {...receipt,evidence:{...evidence,settledAt:now}};
   } catch (error) {
     return {status:'cancelled',evidence:{reason:error instanceof Error ? error.message : '稻田动作已中断'}};
@@ -116,7 +123,7 @@ export function createFarmScene(store:Reader, gate:PetGate, uow:UnitOfWork, cloc
       return {status:'COMPLETED',inside:true};
     },
     async weather(id:string, value:unknown) {
-      if (typeof value !== 'string' || value === 'sunny' || !Object.hasOwn(farmWeather,value)) throw Error('请选择有效的天气');
+      if (typeof value !== 'string' || !Object.hasOwn(farmWeather,value)) throw Error('请选择有效的天气');
       await uow.applyCurrent(id,draft=>{changeFarmWeather(draft,value as FarmWeather,clock());return {};});
       return {field:(await snapshot(id)).field};
     },
@@ -186,7 +193,7 @@ export function createFarmScene(store:Reader, gate:PetGate, uow:UnitOfWork, cloc
             const now = clock();
             checkFarmBody(draft,now,true);
             const target = farmActionTarget(draft,cmd.action,now);
-            if (target.cropId !== cmd.target.cropId || target.date !== cmd.target.date) throw Error('稻田状态已变化');
+            checkFarmTarget(cmd.target,target);
             if (farmVisit(draft)?.epoch !== owner) setFarmVisit(draft,{id:randomUUID(),epoch:owner,actionId:cmd.id});
             return {};
           });
@@ -196,6 +203,15 @@ export function createFarmScene(store:Reader, gate:PetGate, uow:UnitOfWork, cloc
           throw error;
         }
       } else if (input.action === 'complete' && cmd && cmd.id === input.requestId && cmd.epoch === owner && cmd.started && clock() - cmd.started.at >= CLIP_MS) {
+        try {
+          const state = await load(id), now = clock();
+          if (epoch !== owner || active.get(id) !== cmd || farmVisit(state)?.id !== cmd.started.visitId) throw Error('稻田动作已中断');
+          checkFarmBody(state,now,true);
+          checkFarmTarget(cmd.target,farmActionTarget(state,cmd.action,now));
+        } catch (error) {
+          if (active.get(id) === cmd) cancel(id,error instanceof Error ? error.message : '稻田动作已中断');
+          throw error;
+        }
         cmd.finish({status:'completed',evidence:{actionId:cmd.id,kind:'farm.tend',confirmed:true,...cmd.target,visitId:cmd.started.visitId}});
       } else if (input.action === 'interrupt' && cmd?.id === input.requestId) {
         cancel(id,'稻田动作播放中断');

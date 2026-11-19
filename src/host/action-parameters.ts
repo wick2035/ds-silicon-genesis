@@ -1,4 +1,4 @@
-export const actionCatalog = {'self.express':'{text:string,meme?:string}','service.sweet':'{}','care.water':'{}','service.buy-rice':'{}','service.cook-rice':'{bowls:integer}','service.eat-rice':'{itemId:string}','labor.step':'{contractId:string,commandId:string}','token.pickup':'{coinId:string}','farm.tend':'{operation:"plant"|"water"|"harvest",seedPurchase?:{count:number,unitCharge:number}}','body.activity':'{activity:"walk"|"run"|"play"|"cube"|"juggle"|"dance"|"hum"|"stretch"|"bubble"|"look",target?:"left"|"right"|"center"}','body.sleep':'{mode?:"nap"}','body.wake':'{}','image.observe':'{query:string,attachmentId:string,attachmentSourceId:string}','learning.observe':'{kind:"search"|"fetch"|"bili",query:string,url?:string,followUpQuestion?:string}'} as const;
+export const actionCatalog = {'self.express':'{text:string,meme?:string}','service.sweet':'{}','care.water':'{}','service.buy-rice':'{}','service.cook-rice':'{bowls:integer}','service.eat-rice':'{itemId:string}','labor.step':'{contractId:string,commandId:string}','token.pickup':'{coinId:string}','farm.tend':'{operation:"plant"|"water"|"fertilize"|"harvest",seedPurchase?:{count:number,unitCharge:number}}','body.activity':'{activity:"walk"|"run"|"play"|"cube"|"juggle"|"dance"|"hum"|"stretch"|"bubble"|"look",target?:"left"|"right"|"center"}','body.sleep':'{mode?:"nap"}','body.wake':'{}','image.observe':'{query:string,attachmentId:string,attachmentSourceId:string}','learning.observe':'{kind:"search"|"fetch"|"bili",query:string,url?:string,followUpQuestion?:string}'} as const;
 export function validateActionParameters(type:string,p:Record<string,unknown>):void {
   const str=(v:unknown,max:number)=>typeof v==='string'&&v.trim().length>0&&v.length<=max;
   if(!p||typeof p!=='object'||Array.isArray(p))throw Error('行动参数无效');
@@ -15,7 +15,7 @@ export function validateActionParameters(type:string,p:Record<string,unknown>):v
   if(type==='service.cook-rice'&&typeof p.bowls==='number'&&Number.isSafeInteger(p.bowls)&&p.bowls>0)return;
   if(type==='body.sleep' && p.mode!==undefined && p.mode!=='nap')throw Error('睡眠模式无效');
   if(['service.buy-rice','care.feed','care.water','care.pet','care.play','care.soothe','care.accompany','body.sleep','body.wake'].includes(type))return;
-  if(type==='farm.tend' && ['plant','water','harvest'].includes(String(p.operation))) {
+  if(type==='farm.tend' && ['plant','water','fertilize','harvest'].includes(String(p.operation))) {
     if(p.seedPurchase===undefined)return;
     if(p.operation==='plant' && p.seedPurchase && typeof p.seedPurchase==='object' && !Array.isArray(p.seedPurchase)) {
       const {count,unitCharge}=p.seedPurchase as Record<string,unknown>;

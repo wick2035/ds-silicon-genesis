@@ -1,8 +1,10 @@
 import {createHash, randomUUID} from 'node:crypto';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 
-export const FARM_WATER_GAP = 4 * 60 * 60 * 1000;
+const FARM_CARE_GAP = 4 * 60 * 60 * 1000;
+const DAILY_CARE_TARGET = 2;
 export const FARM_WEATHER_AWARENESS = '稻田天气是全局环境实况，你在桌面、工地或稻田都能知道当前天气。inside 只表示你是否在稻田。天气起因未知。';
+export const FARM_WEATHER_BLOCKED = '冰雹或台风期间暂停进田，请等天气转好';
 const SEEDS_PER_SEASON = 24;
 const SEED_LIMIT = SEEDS_PER_SEASON * 3;
 const DEFAULT_SEED_PRICE = 1;
@@ -20,15 +22,23 @@ export const farmWeather = {
 } as const;
 
 export type FarmWeather = keyof typeof farmWeather;
-export type FarmOperation = 'plant'|'water'|'harvest';
+export type FarmOperation = 'plant'|'water'|'fertilize'|'harvest';
 type SeedQuote = {count:number; unitCharge:number};
 export type FarmAction = {operation:FarmOperation; seedPurchase?:SeedQuote};
 export type FarmVisit = {id:string; epoch:string; actionId?:string};
-type FarmCrop = {id:string; growth:number; loss:number; waters:number; rain:number; dayLoss:number; lastWaterAt?:number; daySources?:string[]};
+type FarmCrop = {id:string; growth:number; loss:number; waters:number; rain:number; dayLoss:number;
+  careCompleted?:number; lastCareAt?:number; lastWaterAt?:number; daySources?:string[]};
 type FarmDay = {date:string; weather:FarmWeather; eventId:string};
 type Farm = {seed:string; day:FarmDay; crop:FarmCrop|null; rawBowls:number; lastHarvest:number|null};
 type FarmStorage = {farm?:Farm; farmVisit?:FarmVisit; farmSeedBundles?:number};
 const storage = (draft:Pick<CanonicalEnvelope,'legacy'>) => draft.legacy as FarmStorage;
+const careCompleted = (crop:FarmCrop) => crop.careCompleted ?? crop.waters;
+const severeWeather = (weather:FarmWeather) => weather.endsWith('-hail') || weather.endsWith('-typhoon');
+
+export function checkFarmWeatherForEntry(draft:Pick<CanonicalEnvelope,'legacy'>) {
+  const farm = storage(draft).farm;
+  if (farm && severeWeather(farm.day.weather)) throw Error(FARM_WEATHER_BLOCKED);
+}
 
 export function farmSeedShop(legacy:CanonicalEnvelope['legacy']) {
   const pet = legacy as Record<string,any>;
@@ -134,9 +144,10 @@ export function advanceFarm(draft:CanonicalEnvelope, at:number, seed?:string) {
     const crop = farm.crop;
     const next = dayStart(farm.day.date) + DAY;
     if (crop && crop.growth < 3) {
-      const qualified=crop.waters+crop.rain>=2;
-      const facts={date:farm.day.date,seasonId:crop.id,weather:farm.day.weather,watered:Math.min(2,crop.waters+crop.rain),qualified,loss:crop.dayLoss};
-      record(draft,'farm.settled',qualified?'当天水量达标，水稻推进一个生长日。':'当天水量不足，水稻未推进生长。',next,facts,
+      const completed = careCompleted(crop);
+      const qualified = completed >= DAILY_CARE_TARGET;
+      const facts={date:farm.day.date,seasonId:crop.id,weather:farm.day.weather,watered:Math.min(2,crop.waters+crop.rain),careCompleted:completed,qualified,loss:crop.dayLoss};
+      record(draft,'farm.settled',qualified?'当天完成了两次农活，水稻推进一个生长日。':'当天农活未达标，水稻未推进生长。',next,facts,
         `farm-settled:${crop.id}:${farm.day.date}`,false);
       const resolution=draft.life.worldModel!.facts.at(-1)!;
       resolution.sourceIds=[...new Set([...resolution.sourceIds,farm.day.eventId,...(crop.daySources??[])])];
@@ -145,6 +156,7 @@ export function advanceFarm(draft:CanonicalEnvelope, at:number, seed?:string) {
       crop.daySources=[];
       crop.loss = Math.min(6,crop.loss + crop.dayLoss);
       if (qualified) crop.growth++;
+      crop.careCompleted = 0;
       crop.waters = 0;
       crop.rain = 0;
       crop.dayLoss = 0;
@@ -168,24 +180,34 @@ export function farmFacts(draft:CanonicalEnvelope, at = Date.now()) {
   const stage = !crop ? 'empty' : growth === 3 ? 'ripe' : growth === 2 ? 'heading' : 'seedling';
   const growing = crop && growth < 3;
   const watered = growing ? Math.min(2,crop.waters + crop.rain) : 0;
-  const nextWater = growing && watered < 2 ? Math.max(dayStart(day.date),(crop.lastWaterAt ?? 0) + FARM_WATER_GAP) : null;
+  const completed = growing ? careCompleted(crop) : 0;
+  const weatherBlocked = severeWeather(day.weather);
+  const nextCareAt = growing && completed < DAILY_CARE_TARGET && !weatherBlocked
+    ? Math.max(dayStart(day.date),(crop.lastCareAt ?? crop.lastWaterAt ?? 0) + FARM_CARE_GAP) : null;
   const seeds = farmSeedShop(draft.legacy);
-  const operation:FarmOperation|null = day.date !== farmDay(at) || Object.hasOwn(draft.life.invalidSources,day.eventId) ? null : !crop ? (seeds.maxPurchase >= seeds.missing ? 'plant' : null) : stage === 'ripe' ? 'harvest' : nextWater !== null && nextWater <= at ? 'water' : null;
+  let operation:FarmOperation|null = null;
+  if (!weatherBlocked && day.date === farmDay(at) && !Object.hasOwn(draft.life.invalidSources,day.eventId)) {
+    if (stage === 'empty' && seeds.maxPurchase >= seeds.missing) operation = 'plant';
+    if (stage === 'ripe') operation = 'harvest';
+    if (nextCareAt !== null && nextCareAt <= at) operation = day.weather === 'sunny' && watered < 2 ? 'water' : 'fertilize';
+  }
   const seedPurchase = operation === 'plant' && seeds.missing > 0 ? {count:seeds.missing,unitCharge:seeds.charge} : null;
   return {date:day.date,weather:day.weather,weatherLabel:farmWeather[day.weather].label, weatherEventId:day.eventId,stage,growth,
-    watered,waterNeeded:growing?2-watered:0,rain:growing ? crop.rain : 0,nextWaterAt:nextWater,rawBowls,lastHarvest,seeds,seedPurchase,
+    weatherBlocked,careCompleted:completed,careTarget:DAILY_CARE_TARGET,nextCareAt,
+    watered,waterNeeded:growing?2-watered:0,rain:growing ? crop.rain : 0,rawBowls,lastHarvest,seeds,seedPurchase,
     expectedBowls:crop ? Math.max(0,6 - crop.loss - crop.dayLoss) : null,operation};
 }
 
 export function farmActionTarget(draft:CanonicalEnvelope, {operation,seedPurchase}:FarmAction, at:number) {
   const facts = farmFacts(draft,at);
+  if (facts?.weatherBlocked) throw Error(FARM_WEATHER_BLOCKED);
   if (operation === 'plant' && facts?.stage === 'empty') {
     const seeds = facts.seeds;
     if (seeds.missing > 0 && (seeds.maxPurchase < seeds.missing || seedPurchase?.count !== seeds.missing || seedPurchase.unitCharge !== seeds.charge)) throw Error('种子或饭钱不足，或购买报价已变化');
     if (seeds.missing === 0 && seedPurchase !== undefined) throw Error('已有足够种子，可直接播种');
   }
-  if (facts?.operation !== operation) throw Error('稻田状态已变化或还没到浇水时间');
-  return {date:facts.date,cropId:storage(draft).farm?.crop?.id ?? null};
+  if (!facts?.operation || facts.operation !== operation) throw Error('稻田状态已变化或还没到下次农活时间');
+  return {date:facts.date,cropId:storage(draft).farm?.crop?.id ?? null,weatherEventId:facts.weatherEventId};
 }
 
 export function completeFarmOperation(draft:CanonicalEnvelope, action:FarmAction, actionId:string, at:number, receiptEventId?:string) {
@@ -199,16 +221,20 @@ export function completeFarmOperation(draft:CanonicalEnvelope, action:FarmAction
       if (seedPurchase) purchaseFarmSeeds(draft,seedPurchase.count,seedPurchase.unitCharge,actionId,at);
       storage(draft).farmSeedBundles = (storage(draft).farmSeedBundles ?? 0) - SEEDS_PER_SEASON;
       const weather = farmWeather[farm.day.weather];
-      farm.crop = {id:actionId,growth:0,loss:0,waters:0,rain:weather.water,dayLoss:weather.loss,daySources:[farm.day.eventId]};
+      farm.crop = {id:actionId,growth:0,loss:0,waters:0,rain:weather.water,dayLoss:weather.loss,careCompleted:0,daySources:[farm.day.eventId]};
       description = `我用 ${SEEDS_PER_SEASON} 束种子种下了一季水稻。`;
       break;
     }
     case 'water':
-      farm.crop!.waters++;
-      farm.crop!.lastWaterAt = at;
-      (farm.crop!.daySources??=[]).push(`farm-tended:${actionId}`);
-      description = '我给田里的水稻浇了一次水。';
+    case 'fertilize': {
+      const crop = farm.crop!;
+      crop.careCompleted = careCompleted(crop) + 1;
+      crop.lastCareAt = at;
+      if (operation === 'water') crop.waters++;
+      (crop.daySources??=[]).push(`farm-tended:${actionId}`,farm.day.eventId);
+      description = operation === 'water' ? '我给田里的水稻浇了一次水。' : '我给田里的水稻施了一次肥。';
       break;
+    }
     case 'harvest':
       bowls = farmFacts(draft,at)!.expectedBowls!;
       farm.rawBowls += bowls;
@@ -217,7 +243,7 @@ export function completeFarmOperation(draft:CanonicalEnvelope, action:FarmAction
       description = bowls ? `我收割了水稻，往米缸存了${bowls}碗生米。` : '我收割了水稻，这一季颗粒无收。';
       break;
   }
-  record(draft,'farm.tended',description,at,{date:farm.day.date,seasonId,operation,...(bowls === undefined ? {} : {bowls})},`farm-tended:${actionId}`,operation !== 'water');
+  record(draft,'farm.tended',description,at,{date:farm.day.date,seasonId,operation,...(bowls === undefined ? {} : {bowls})},`farm-tended:${actionId}`,operation === 'plant' || operation === 'harvest');
   if(receiptEventId){
     draft.life.worldModel!.facts.at(-1)!.sourceIds.push(receiptEventId);
     Object.assign(draft.life.events.at(-1)!.payload as object,{sourceIds:[receiptEventId]});

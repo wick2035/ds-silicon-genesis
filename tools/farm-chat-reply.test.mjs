@@ -28,7 +28,7 @@ function fixture(weather='light-rain') {
     await applyCurrent(id,change);
   }};
   const lifecycle=new CanonicalActionLifecycle(projectBody);
-  function finishPlant(draft,id,sourceIds,status='completed'){
+  function finishFarm(draft,id,sourceIds,status='completed'){
     const action=draft.life.actions.find(action=>action.id===id)??{
       id,petId:'main',actionType:'farm.tend',status:'DISPATCHED',sourceIds,requiredCapabilities:['farm.tend'],
       parameters:{operation:'plant',seedPurchase:farmFacts(draft).seedPurchase}
@@ -40,11 +40,11 @@ function fixture(weather='light-rain') {
   }
   const speech=createEmbodiedSpeech(reader,gate,uow,
     {queue:async(id,actionId)=>applyCurrent(id,draft=>{draft.life.actions.find(a=>a.id===actionId).status='PENDING';})},
-    {dispatch:async id=>applyCurrent('main',draft=>finishPlant(draft,id))},
+    {dispatch:async id=>applyCurrent('main',draft=>finishFarm(draft,id))},
     async()=>{},async()=>{});
   const chat=llm=>new CanonicalChat(reader,gate,uow,{runAs:async(_id,_kind,fn)=>fn()},
     {agentDefaultModel:{currentSelection:()=>({provider:'fixture',model:'fixture'})},llm},async()=>[]);
-  return {get:()=>state,gate,chat,speech,finishPlant};
+  return {get:()=>state,gate,chat,speech,finishFarm};
 }
 
 const input=(id,text)=>({requestId:id,petId:'main',channel:'desktop',actorId:'dad',text});
@@ -70,7 +70,7 @@ test('a confirmed plant receipt produces a persisted SSE reply without a second 
   assert.match(reply.payload.text,/用 24 束种子种下了一季水稻/);
   assert.match(reply.payload.text,/237\.6 token/);
   assert.match(reply.payload.text,/库存还剩 0 束/);
-  assert.match(reply.payload.text,/今天还差 1 次浇水/);
+  assert.match(reply.payload.text,/雨水已补 1 次。今天还差 2 次农活，现在可以施肥/);
   assert.match(wire,/用 24 束种子种下了一季水稻/);
   assert.ok(reply.payload.sourceIds.some(id=>id.startsWith('action-result:')));
   assert.equal(await chat.turn(message,f.gate.signal),reply.payload.text);
@@ -84,14 +84,14 @@ test('failure after accounting still saves and returns the confirmed result exac
     let generated=0;
     const chat=f.chat({async *stream(o){
       generated++;
-      f.finishPlant(f.get(),'already-planted',o.embodied.sourceIds);
+      f.finishFarm(f.get(),'already-planted',o.embodied.sourceIds);
       if(cancelled)request.abort();
       throw Error('模型请求已取消或超时');
     }});
     const message=input('plant-recovery','先去买点种子');
     const reply=await chat.turn(message,request.signal);
     assert.match(reply,/种下了一季水稻/);
-    assert.match(reply,/今天还差 1 次浇水/);
+    assert.match(reply,/今天还差 2 次农活，现在可以施肥/);
     const [turn]=Object.values(f.get().legacy.chatTurns);
     assert.deepEqual(turn.failure,{phase:'generate',reason:cancelled?'cancelled':'timeout'});
     assert.equal(turn.status,'completed');
@@ -104,13 +104,13 @@ test('failure after accounting still saves and returns the confirmed result exac
 
 test('the reported draft cannot deny an earlier successful planting or count light rain as enough',async()=>{
   const f=fixture();
-  f.finishPlant(f.get(),'old-plant',[]);
+  f.finishFarm(f.get(),'old-plant',[]);
   const partials=[];
   const chat=f.chat({async *stream(){
     yield {type:'text',text:'本鱼进稻田了，可要播种时它说这会儿不能种。眼下还下着小雨，水是够的。'};
   }});
   const reply=await chat.turn({...input('farm-followup','自己进去稻田里，我教你种地\n先去买点种子'),onPartial:text=>partials.push(text)},f.gate.signal);
-  assert.match(reply,/种下了一季水稻.*幼苗期.*库存还剩 0 束.*今天还差 1 次浇水/);
+  assert.match(reply,/种下了一季水稻.*幼苗期.*库存还剩 0 束.*今天还差 2 次农活，现在可以施肥/);
   assert.doesNotMatch(reply,/不能种|水是够的|买了 24/);
   assert.deepEqual(partials,[]);
   assert.equal(f.get().life.events.filter(e=>e.type==='wallet.spend').length,1);
@@ -118,13 +118,13 @@ test('the reported draft cannot deny an earlier successful planting or count lig
 
 test('current field distinguishes full watering from missing receipts and an empty field',async()=>{
   const watered=fixture('heavy-rain');
-  watered.finishPlant(watered.get(),'old-plant',[]);
+  watered.finishFarm(watered.get(),'old-plant',[]);
   const chat=watered.chat({async *stream(){throw Error('模型请求已取消或超时');}});
-  assert.match(await chat.turn(input('rain-status','稻田的水够了吗？'),watered.gate.signal),/雨水已补 2 次，今天的水够了/);
+  assert.match(await chat.turn(input('rain-status','稻田的水够了吗？'),watered.gate.signal),/雨水已补 2 次，今天的水够了。今天还差 2 次农活，现在可以施肥/);
 
   const empty=fixture();
   const failed=empty.chat({async *stream(o){
-    empty.finishPlant(empty.get(),'cancelled-plant',o.embodied.sourceIds,'cancelled');
+    empty.finishFarm(empty.get(),'cancelled-plant',o.embodied.sourceIds,'cancelled');
     throw Error('没拿到确认');
   }});
   await assert.rejects(failed.turn(input('plant-unconfirmed','先去买点种子'),empty.gate.signal),/没拿到确认/);
@@ -132,4 +132,23 @@ test('current field distinguishes full watering from missing receipts and an emp
   assert.equal(empty.get().legacy.wallet.balance,663.6);
   const wrong=empty.chat({async *stream(){yield {type:'text',text:'我已经成功播种了。'};}});
   assert.equal(await wrong.turn(input('ask-empty','稻田播种成功了吗？'),empty.gate.signal),'田里现在是空的。');
+});
+
+test('chat can request fertilizer and only reports completion from a confirmed action',async()=>{
+  const f=fixture('heavy-rain');
+  f.finishFarm(f.get(),'old-plant',[]);
+  const invented=f.chat({async *stream(){yield {type:'text',text:'本鱼已经施了一次肥，农活达标了。'};}});
+  const status=await invented.turn(input('invented-fertilizer','稻田农活做了几次？'),f.gate.signal);
+  assert.match(status,/还差 2 次农活，现在可以施肥/);
+  assert.doesNotMatch(status,/施了一次肥|农活已达标/);
+
+  const chat=f.chat({...f.speech.wrap({async *stream(){
+    yield {type:'tool-call-delta',index:1,id:'fertilizer',name:'act',argumentsDelta:JSON.stringify({
+      actionType:'farm.tend',parameters:{operation:'fertilize'}
+    })};
+  }}),embodiedTools:true});
+  const reply=await chat.turn(input('fertilizer-request','去给水稻施肥吧'),f.gate.signal);
+  assert.match(reply,/给水稻施了一次肥/);
+  assert.match(reply,/还差 1 次农活/);
+  assert.equal(farmFacts(f.get()).careCompleted,1);
 });

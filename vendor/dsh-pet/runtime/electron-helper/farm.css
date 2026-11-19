@@ -24,6 +24,16 @@ button:disabled{opacity:.6;cursor:default}
 .scene[data-weather$='typhoon'] .weather-light{background:#2a46597d}
 .farmer{position:absolute;left:45%;top:81%;width:20%;transform:translate(-50%,-97%);pointer-events:none;filter:drop-shadow(0 6px 4px #2a382f57)}
 .farmer[data-pose='shelter']{left:87%;top:53%}
+.fertilizer{display:none;position:absolute;left:46%;top:70%;width:18%;height:12%;pointer-events:none}
+.farmer[data-pose='fertilize']:not([hidden]) + .fertilizer{display:block}
+.fertilizer i{position:absolute;left:0;top:2%;width:clamp(3px,.55vw,6px);aspect-ratio:1.25;border-radius:42%;background:#f0d29a;box-shadow:0 2px 2px #4a39277d;animation:scatter .8s cubic-bezier(.18,.62,.49,1) var(--delay) 2 both}
+.fertilizer i:nth-child(1){--x:1vw;--y:.8vw;--delay:0s}
+.fertilizer i:nth-child(2){--x:2vw;--y:2vw;--delay:.07s}
+.fertilizer i:nth-child(3){--x:3vw;--y:1vw;--delay:.02s}
+.fertilizer i:nth-child(4){--x:4vw;--y:2.5vw;--delay:.13s}
+.fertilizer i:nth-child(5){--x:5vw;--y:1.6vw;--delay:.09s}
+.fertilizer i:nth-child(6){--x:6vw;--y:2.8vw;--delay:.16s}
+@keyframes scatter{0%{opacity:0}20%{opacity:1;transform:translate(calc(var(--x) * .24),-1.4vw)}75%{opacity:1;transform:translate(var(--x),var(--y))}100%{opacity:0;transform:translate(var(--x),var(--y))}}
 .particles{overflow:hidden}
 .particles i{position:absolute;left:var(--x);top:-20%;animation-delay:var(--delay);animation-duration:var(--speed);animation-iteration-count:infinite;animation-timing-function:linear;display:none}
 .scene[data-weather$='rain'] .drop,.scene[data-weather$='typhoon'] .drop{display:block;height:16%;width:1px;background:#d7eef5b8;animation-name:rain}
@@ -59,7 +69,10 @@ h2{font-size:15px;font-weight:650}
 .growth-steps{padding:0;display:grid;grid-template-columns:repeat(3,1fr);gap:5px;list-style:none}
 .growth-steps li{border-top:3px solid #c7cebc;text-align:center;padding:6px 0 0;font-size:12px;color:var(--muted)}
 .growth-steps li[data-done]{border-color:#3d7255;color:#234736;font-weight:650}
-#growth-detail,#seed-detail{margin-bottom:9px}
+#growth-detail{margin-bottom:6px}
+.care-status{display:grid;gap:6px;border-block-start:1px solid var(--rule);padding-block-start:12px;margin-block-end:8px}
+#care-progress{font-weight:650}
+#rain-detail{margin-top:-2px}
 .granary{position:relative;padding:17px 0 0;color:var(--warm)}
 .granary::before{top:0}
 .granary h2{color:var(--ink)}
@@ -69,4 +82,4 @@ h2{font-size:15px;font-weight:650}
 .feedback{margin-top:16px;color:#7b3929;font-size:13px;line-height:1.5}
 @media(max-width:790px){.farm-layout{grid-template-columns:minmax(0,1fr)}.field-notes{grid-template-columns:minmax(110px,.75fr) minmax(168px,1.25fr);column-gap:22px;row-gap:9px}.weather-reading,.granary{grid-column:1;padding:0;align-self:start}.weather-reading::after,.granary::before{display:none}.growing{grid-column:2;grid-row:1/4;align-self:start}.harvest{margin-top:0}}
 @media(max-width:430px){.farm{padding:16px}.farm-header{align-items:center}.farm-header button{padding-inline:10px}.field-notes{column-gap:15px}.scene-caption{bottom:9px;left:9px}}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}.particles .drop{visibility:hidden}.particles .ripple{opacity:.55}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}.particles .drop{visibility:hidden}.particles .ripple{opacity:.55}.fertilizer i{transform:translate(var(--x),var(--y))}}

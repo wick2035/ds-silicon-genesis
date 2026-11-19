@@ -137,6 +137,10 @@ test('七天轨迹中自主念想跨重启继续，受阻改计划，读到资�
     advanceFarm(run.read(),start+3*DAY,'fixed');
     changeFarmWeather(run.read(),index?'sunny':'heavy-rain',start+3*DAY);
     completeFarmOperation(run.read(),{operation:'plant'},'season',start+3*DAY);
+    if(!index){
+      completeFarmOperation(run.read(),{operation:'fertilize'},'rain-care-1',start+3*DAY);
+      completeFarmOperation(run.read(),{operation:'fertilize'},'rain-care-2',start+3*DAY+4*60*60_000);
+    }
     advanceFarm(run.read(),start+4*DAY,'fixed');
     assert.ok(run.read().life.worldModel.facts.some(f=>f.topic==='farm.settled'&&f.data.qualified===!index));
     const wages=run.read().life.events;
