@@ -5,7 +5,7 @@ import {CompanionStore} from '../vendor/pet-plugins/behavior/core.mjs';
 import {CanonicalChat} from '../dist/host/chat-service.js';
 import {isOwnerPrivateConversation} from '../dist/host/chat-identity.js';
 
-function fixture(events,reply='好呀',extra={}) {
+function fixture(events,reply='好呀',extra={},search=async()=>[]) {
   const old=Object.create(CompanionStore.prototype);old.data={version:2,pets:{}};old.loaded=true;old.clock=Date.now;old.save=()=>{};old.load=()=>{};
   const legacy=old.read('main');legacy.wallet.balance=500;
   let envelope={petId:'main',version:0,legacy,humanity:{},life:{events,actions:[],receipts:[],invalidSources:{},relationships:[],constraints:{permissions:[]},memories:[],commitments:[],legacyContext:{personaDescription:'test'},body:{},emotions:{},...extra}};
@@ -14,7 +14,7 @@ function fixture(events,reply='好呀',extra={}) {
   const uow={apply:async(_id,version,change)=>{assert.equal(version,envelope.version);const draft=structuredClone(envelope);change(draft);draft.version++;envelope=draft;}};
   const calls=[];
   const model={agentDefaultModel:{currentSelection:()=>({provider:'test',model:'test'})},llm:{async *stream(options){calls.push(options);yield {type:'text',text:Array.isArray(reply)?reply[Math.min(calls.length-1,reply.length-1)]:reply};}}};
-  const chat=new CanonicalChat(store,gate,uow,{runAs:async(_id,_kind,fn)=>fn()},model,async()=>[],undefined,async()=>({message:'ok'}));
+  const chat=new CanonicalChat(store,gate,uow,{runAs:async(_id,_kind,fn)=>fn()},model,search,undefined,async()=>({message:'ok'}));
   return {chat,calls,model,state:()=>envelope};
 }
 function event(id,type,source,text,actorId,extra={}) {
@@ -73,7 +73,8 @@ test('group turns identify each speaker from trusted source events',async()=>{
   const prompt=f.calls[0],content=prompt.messages.at(-1).content;
   assert.match(content,/爸爸/);assert.match(content,/群友-abcdef123456/);assert.match(content,/群友-999999999999/);
   assert.doesNotMatch(JSON.stringify(prompt.messages),/owner-private/);
-  assert.doesNotMatch(prompt.system,/owner-private/);
+  assert.match(prompt.system,/owner-private/);
+  assert.match(prompt.system,/内部记忆/);
   const stored=f.state().life.events.find(e=>e.type==='conversation.user'&&e.source==='qq-group');
   assert.equal(stored.actorId,undefined);
   assert.deepEqual(stored.payload.sourceIds,['q1','q2','q3']);
@@ -161,7 +162,7 @@ test('private chat knows its own delivered group speech without turning group me
   assert.ok(answer.payload.sourceIds.includes('group-reply'));assert.ok(answer.payload.sourceIds.includes('delivery'));
 });
 
-for(const embodiedTools of [false,true])test(`group replies and rewrites get private contact timing without private speech (tools=${embodiedTools})`,async()=>{
+for(const embodiedTools of [false,true])test(`group replies and rewrites share attributed private experience as internal memory (tools=${embodiedTools})`,async()=>{
   const earlier=new Date(Date.now()-5*60000).toISOString();
   const events=[{...event('private-dad','conversation.user','desktop','刚才的改动让工地提速了吗','dad'),occurredAt:earlier},
     {...event('private-fish','conversation.assistant','desktop','我先试一趟再告诉你'),causationId:'private-dad',occurredAt:earlier},
@@ -177,11 +178,51 @@ for(const embodiedTools of [false,true])test(`group replies and rewrites get pri
   for(const prompt of f.calls){
     assert.match(prompt.system,/收到过爸爸的私聊发言，距今约5分钟/);
     assert.match(prompt.system,/收到爸爸的话和你主动找爸爸是两回事/);
-    assert.doesNotMatch(JSON.stringify({system:prompt.system,messages:prompt.messages}),/提速|我先试一趟|已删私聊不可见|过期私聊不可见|private-dad|private-fish|qq-private/);
+    assert.match(prompt.system,/刚才的改动让工地提速了吗/);
+    assert.match(prompt.system,/我先试一趟再告诉你/);
+    assert.match(prompt.system,/晚点再聊提速/);
+    assert.match(prompt.system,/没有公开的私人细节、明确要求保密的事不要透露/);
+    assert.doesNotMatch(JSON.stringify(prompt.messages),/提速|我先试一趟/);
+    assert.doesNotMatch(prompt.system,/已删私聊不可见|过期私聊不可见|private-dad|private-fish|qq-private/);
   }
   const answer=f.state().life.events.find(e=>e.type==='conversation.assistant'&&e.source==='qq-group');
-  assert.ok(!answer.payload.sourceIds.includes('private-fish'));assert.ok(!answer.payload.sourceIds.includes('qq-private'));
+  assert.ok(answer.payload.sourceIds.includes('private-fish'));assert.ok(answer.payload.sourceIds.includes('qq-private'));
   assert.ok(!answer.payload.sourceIds.includes('deleted-private'));
+});
+
+for(const embodiedTools of [false,true])test(`group recall uses the selected topic and retrieves older private experience (tools=${embodiedTools})`,async()=>{
+  const old=new Date(Date.now()-2*86400000).toISOString();
+  const events=[{...event('old-meal','conversation.user','qq-c2c','吃进去的大白饭被抠出来了','dad'),occurredAt:old},
+    {...event('old-answer','conversation.assistant','qq-c2c','本鱼又饿了'),occurredAt:old,causationId:'old-meal'},
+    event('q1','social.message','qq','别的话题'.repeat(100),'qq-member:friend',{scene:'group',groupId:'g1'}),
+    event('q2','social.message','qq','大肥鱼，还想再被抠出大白饭吗','dad',{scene:'group',groupId:'g1'})];
+  let searches=0;
+  const f=fixture(events,'本鱼不想再被抠了。',{},async(petId,query,state)=>{
+    searches++;assert.equal(petId,'main');assert.match(query,/^大肥鱼，还想再被抠出大白饭吗/);
+    assert.ok(state.events.some(e=>e.eventId==='old-meal'));
+    return [{id:'meal-memory',valid:true,content:'爸爸说吃进去的大白饭被抠出来，大肥鱼说又饿了',sourceIds:['old-meal','old-answer'],evidenceLevel:'reported'},
+      {id:'bad',valid:false,content:'无效经历不可见',sourceIds:[],evidenceLevel:'reported'}];
+  });
+  f.model.llm.embodiedTools=embodiedTools;
+  await f.chat.qqTurn({petId:'main',scene:'group',messages:[{eventId:'q1',text:events[2].payload.text,isOwner:false},{eventId:'q2',text:events[3].payload.text,isOwner:true}]},new AbortController().signal);
+  assert.equal(searches,1);assert.match(f.calls[0].system,/吃进去的大白饭被抠出来/);
+  assert.match(f.calls[0].system,new RegExp(old));assert.doesNotMatch(f.calls[0].system,/无效经历不可见/);
+  const saved=f.state().life.events.find(e=>e.type==='conversation.assistant'&&e.source==='qq-group');
+  assert.ok(saved.payload.sourceIds.includes('old-meal'));
+});
+
+test('private chat remembers heard group messages even without replying, with channel and speaker',async()=>{
+  const room={scene:'group',groupId:'g1'};
+  const events=[event('heard','social.message','qq','群友说鱼塘明天开放','qq-member:friend',room),
+    event('removed','social.message','qq','删除的群消息不可见','dad',room),
+    {...event('future-group','social.message','qq','未来消息不可见','dad',room),occurredAt:new Date(Date.now()+60000).toISOString()}];
+  const f=fixture(events,'本鱼听到了。',{invalidSources:{removed:'deleted'}});
+  await f.chat.turn({petId:'main',requestId:'heard-only',channel:'desktop',actorId:'dad',text:'群里刚说什么'},new AbortController().signal);
+  assert.match(f.calls[0].system,/群友说鱼塘明天开放/);assert.match(f.calls[0].system,/qq-member:friend/);
+  assert.match(f.calls[0].system,/听到不等于自己回复或执行/);
+  assert.doesNotMatch(f.calls[0].system,/删除的群消息不可见|未来消息不可见/);
+  assert.doesNotMatch(JSON.stringify(f.calls[0].messages),/鱼塘明天开放/);
+  assert.ok(f.state().life.events.find(e=>e.type==='conversation.assistant').payload.sourceIds.includes('heard'));
 });
 
 test('private and group prompts include source-backed names after the original exchange is old',async()=>{

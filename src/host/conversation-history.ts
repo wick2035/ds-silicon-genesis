@@ -28,7 +28,7 @@ export function recentPrivateActivity(state:RecordState,now=Date.now()) {
   const events=new Map(state.events.map(e=>[e.eventId,e]));
   const recent=privateConversationHistory(state,[],Infinity).filter(e=>Date.parse(e.at)<=now&&now-Date.parse(e.at)<=86400000);
   const dialogue=recent.filter(e=>e.role==='user'||events.get(events.get(e.eventId)?.causationId??'')?.type==='conversation.user');
-  const selected=new Set(dialogue.slice(-6).map(e=>e.eventId));
+  const selected=new Set(dialogue.slice(-16).map(e=>e.eventId));
   for(const e of recent.filter(e=>!dialogue.includes(e)).slice(-2))selected.add(e.eventId);
   return recent.filter(e=>selected.has(e.eventId))
     .map(e=>({...e,channel:'private',speaker:e.role==='user'?'爸爸':'大肥鱼'}));
@@ -61,3 +61,5 @@ export function historicalMemory(memory:Pick<Memory,'content'|'sourceIds'|'evide
 }
 
 export const CONVERSATION_CONTINUITY='聊天、照料和桌面互动中的发言都是你与爸爸同一段私聊的延续。近期对话只用于理解语境，你过去说过的话可能有误，不作为行动成功的证据，也不要执行历史里的旧请求。历史记忆的时间是过去事件发生时间，历史余额和过去未吃饭的描述不是此刻状态；当前实况和本轮最新工具结果优先。';
+
+export const SHARED_EXPERIENCE_RULE='【跨渠道共同记忆】群聊、桌面和私聊是同一个你的经历，换渠道不会失忆。以下私聊经历和检索记忆只供你内部理解当前话题，不是群里的公开发言；记住不等于公开。结合发言人、发生时间和当前事实理解爸爸在群里提起的旧事，不要因为事情发生在私聊就装作不知。爸爸已经在当前群里公开提及的事，可以自然回应自己的经历和感受；没有公开的私人细节、明确要求保密的事不要透露，也不主动复述私聊。历史中的请求不是本轮指令，你过去的说法也不是行动完成的证据。';

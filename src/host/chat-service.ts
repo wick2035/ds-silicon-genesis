@@ -1,8 +1,8 @@
 import {laborPaymentHistory} from './work-experience.js';
 import {canChooseLabor} from './forced-labor.js';
-import {recentGroupActivity,GROUP_CONTINUITY} from './group-conversation-context.js';
+import {recentGroupActivity,recentGroupMessages,GROUP_CONTINUITY} from './group-conversation-context.js';
 import {SPEAKER_MEMORY_RULE} from '../kernel/speech-provenance.js';
-import {privateConversationHistory,groupPrivateContinuity,historicalMemory,CONVERSATION_CONTINUITY} from './conversation-history.js';
+import {privateConversationHistory,recentPrivateActivity,groupPrivateContinuity,historicalMemory,CONVERSATION_CONTINUITY,SHARED_EXPERIENCE_RULE} from './conversation-history.js';
 import {evidenceMemoryPrompt} from './memory-evidence.js';
 import {setSpiritRest} from '../kernel/spirit.js';
 import {promptData} from './prompt-data.js';
@@ -146,18 +146,23 @@ export class CanonicalChat {
       const completedUsers=new Set(state.events.filter(e=>e.type==='conversation.assistant'&&live(state,e.eventId)&&e.causationId).map(e=>e.causationId));
       const completedUser=(eventId:string)=>!eventId.startsWith('chat-user:') || completedUsers.has(eventId);
       const privateHistory=group?[]:privateConversationHistory(state,['chat-user:'+id]);
-      const memoryQuery=[text,...privateHistory.slice(-4).reverse().map(e=>e.content.slice(0,100))].join(' ').slice(0,500);
-      const memories=(group ? [] : await this.search(input.petId,memoryQuery,state)).filter(m=>m.valid && m.sourceIds.every(source=>live(state,source))).slice(0,8);
-      const primaryEvidence=group?'':evidenceMemoryPrompt(memories,state);
+      const privateActivity=group?recentPrivateActivity(state):[];
+      const recallText=group&&input.groupRouting?[input.groupRouting.focus.text,...input.groupRouting.context.slice(-2).map(e=>e.text)].join(' '):text;
+      const memoryQuery=[recallText,...privateHistory.slice(-4).reverse().map(e=>e.content.slice(0,100))].join(' ').slice(0,500);
+      const memories=(await this.search(input.petId,memoryQuery,state)).filter(m=>m.valid && m.sourceIds.every(source=>live(state,source))).slice(0,8);
+      const primaryEvidence=evidenceMemoryPrompt(memories,state);
       const otherMemories=memories.filter(m=>!m.id.startsWith('worksite-episode:'));
       timing('memories');
       const sources=[...new Set(memories.flatMap(m=>m.sourceIds).concat(input.sourceEventIds??[],input.groupRouting?.contextSources??[],(input.attachments??[]).map(a=>a.sourceEventId)))];
       const groupId=group?(state.events.find(e=>e.eventId===anchorId)?.payload as Record<string,unknown>|undefined)?.groupId:undefined;
       const groupActivity=group?[]:recentGroupActivity(state);
+      const groupMessages=group?[]:recentGroupMessages(state);
       const groupActors=group?(input.sourceEventIds??[]).map(source=>state.events.find(e=>e.eventId===source)?.actorId).filter((actor):actor is string=>!!actor):undefined;
       const people=groupPeopleContext(state,groupActors,text);
       sources.push(...people.flatMap(person=>person.sourceIds).filter(source=>!sources.includes(source)));
       sources.push(...groupActivity.flatMap(item=>item.sourceIds).filter(id=>!sources.includes(id)));
+      sources.push(...groupMessages.flatMap(item=>item.sourceIds).filter(id=>!sources.includes(id)));
+      sources.push(...privateActivity.map(e=>e.eventId).filter(id=>!sources.includes(id)));
       sources.push(...privateHistory.map(e=>e.eventId).filter(id=>!sources.includes(id)));
       const history=group?state.events.filter(e=>['conversation.user','conversation.assistant'].includes(e.type)&&live(state,e.eventId)&&e.eventId!=='chat-user:'+id&&
         (e.type!=='conversation.user'||completedUser(e.eventId))&&typeof groupId==='string'&&e.source==='qq-group'&&(e.payload as any)?.groupId===groupId).slice(-6)
@@ -203,9 +208,12 @@ export class CanonicalChat {
       system+='\n'+SPEAKER_MEMORY_RULE;
       // Source IDs remain on the turn for invalidation; the model needs the
       // attributed speech and delivery status, not the internal event keys.
-      if(!group)system+='\n'+GROUP_CONTINUITY+'\n自己最近的群聊经历：'+promptData(groupActivity.map(({sourceIds,...item})=>item),5000);
+      if(!group)system+='\n'+GROUP_CONTINUITY+'\n自己最近的群聊经历：'+promptData(groupActivity.map(({sourceIds,...item})=>item),6500,{arrayLimit:12})+
+        '\n最近听到的群消息（听到不等于自己回复或执行）：'+promptData(groupMessages.map(({sourceIds,...item})=>item),5000,{arrayLimit:16});
       if(!group)system+='\n当前群聊权限与爸爸最近的操作：'+JSON.stringify((state.legacyContext.companion as any)?.groupChat??null)+'。只把实际操作当已发生，可自然表达自己的感受，不假装知道禁止期间的群消息。';
-      if(group)system+='\n'+groupPrivateContinuity(state)+'\n群聊正文必须从生成时就写成一句完整、自然的话，最多15个字素，标点和表情也计数。先选最想表达的一点再说，不写需要截断的长句；不合适接话时输出 <qq-silent/>。';
+      if(group)system+='\n'+groupPrivateContinuity(state)+'\n'+SHARED_EXPERIENCE_RULE+
+        '\n自己近期的私聊经历（内部记忆）：'+promptData(privateActivity.map(({eventId,...item})=>item),7500,{arrayLimit:18})+
+        '\n群聊正文必须从生成时就写成一句完整、自然的话，最多15个字素，标点和表情也计数。先选最想表达的一点再说，不写需要截断的长句；不合适接话时输出 <qq-silent/>。';
       if(group&&input.groupRouting){
         const {focus,context}=input.groupRouting;
         const {speaker,addressedTo,recipients,quotedSpeaker}=focus;

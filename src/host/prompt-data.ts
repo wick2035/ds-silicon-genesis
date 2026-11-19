@@ -1,6 +1,6 @@
 /** Bounded JSON for optional historical context; never cut serialized JSON. */
-export function promptData(value:unknown,limit:number,options:{arrayOrder?:'first'|'last'}={}):string {
-  let stringLimit=600,arrayLimit=8;
+export function promptData(value:unknown,limit:number,options:{arrayOrder?:'first'|'last';arrayLimit?:number}={}):string {
+  let stringLimit=600,arrayLimit=options.arrayLimit??8;
   const project=(v:any,key=''):any=>typeof v==='string'?(/(?:^id$|Id$|Ids$)/u.test(key)?v:v.length>stringLimit?v.slice(0,stringLimit)+'…[节选]':v):
     Array.isArray(v)?(options.arrayOrder==='first'?v.slice(0,arrayLimit):v.slice(-arrayLimit)).map(item=>project(item,key)):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).map(([k,item])=>[k,project(item,k)])):v;
   for(let attempt=0;attempt<12;attempt++){
