@@ -2432,8 +2432,8 @@ function decideEnter(event, watch, now) {
 
 //#endregion
 //#region src/shared/chat/send.ts
-/** 对话要等 LLM 生成回复，比碎碎念（30s）放宽一倍 */
-const SEND_TIMEOUT_MS = 6e4;
+/** 等待模型和实际动作回执，与生命空间聊天的等待时间一致。 */
+const SEND_TIMEOUT_MS = 120_000;
 async function sendChat(baseUrl, text, attachment) {
 	const res = await fetch(baseUrl, {
 		method: "POST",

@@ -15,6 +15,7 @@ import { redactDadNames } from '../../vendor/pet-plugins/behavior/memory-privacy
 import { rebuildRelationships } from '../kernel/index.js';
 import { conversationContext, groundWorksiteReply, worksiteFacts } from './conversation-context.js';
 import { groundActionReply } from './reply-grounding.js';
+import {farmReply,farmTopic} from './farm-reply.js';
 import type {createSemanticGrounding} from './semantic-grounding.js';
 import {groupSpeaker} from './chat-identity.js';
 import {groupPeopleContext} from './group-people.js';
@@ -33,6 +34,16 @@ interface Turn { requestId:string; petId:string; channel:'desktop'|'qq-c2c'|'qq-
 const digest=(value:string)=>createHash('sha256').update(value).digest('hex');
 const safeId=(s:unknown):s is string=>typeof s==='string' && s.length>0 && s.length<=200 && !/[\x00-\x1f]/.test(s);
 const live=(state:LifeState,id:string)=>!Object.hasOwn(state.invalidSources,id);
+function replyFailure(error:unknown,aborted:boolean) {
+  if(aborted)return 'cancelled';
+  const message=error instanceof Error?error.message:'';
+  if(/超时|timeout/iu.test(message))return 'timeout';
+  if(/状态.*变化|依赖的记忆已变化/u.test(message))return 'state-changed';
+  if(/额度不足/u.test(message))return 'budget';
+  if(/模型.*(?:请求|服务|拒绝|截断)/u.test(message))return 'model';
+  if(/完整回复/u.test(message))return 'incomplete';
+  return 'other';
+}
 function withEvidenceAge(facts:ReturnType<ReturnType<typeof createSemanticGrounding>['facts']>) {
   const now=Date.now(),age=(at:string)=>Math.max(0,Math.floor((now-Date.parse(at))/1000));
   return {...facts,receipts:facts.receipts.map(r=>({...r,ageSeconds:age(r.at)})),payments:facts.payments.map(e=>({...e,ageSeconds:age(e.at)}))};
@@ -96,6 +107,9 @@ export class CanonicalChat {
     timing('reserved');
     if(initial.reply!==null)return initial.reply;
     const turnAbort=new AbortController(),combined=AbortSignal.any([signal,this.gate.signal,turnAbort.signal,reservationAbort.signal]);
+    const userEventId='chat-user:'+id;
+    const group=input.channel==='qq-group';
+    let phase:'prepare'|'generate'|'publish'='prepare';
     try {
       if(/^\/(?:冰箱|吃|手机|休息|打盹|醒来|甜食)(?:\s|$)/u.test(text)) {
         const snapshot=await this.reader.loadEnvelope(input.petId),actor=input.channel==='desktop'?'dad':snapshot?.life.events.find(e=>e.eventId===anchorId)?.actorId;
@@ -126,7 +140,6 @@ export class CanonicalChat {
       // Infer from the prepared turn snapshot; publication and tool effects wait for its commit.
       const state=turnSnapshot&&this.reader.projectEnvelope?this.reader.projectEnvelope(turnSnapshot):await this.reader.load(input.petId);if(!state||!state.legacyContext?.personaDescription)throw new Error('角色状态不可用');
       timing('loaded');
-      const group=input.channel==='qq-group';
       const envelope=group?null:turnSnapshot??await this.reader.loadEnvelope(input.petId);
       const toolAware=this.model.llm.embodiedTools===true;
       const situation=!toolAware&&envelope ? conversationContext({...state,...envelope.life,version:envelope.version,petId:input.petId} as LifeState,envelope,['chat-user:'+id,...(input.sourceEventIds??[])]) : null;
@@ -185,7 +198,7 @@ export class CanonicalChat {
         system+='\n有来源的近期结薪历史：'+JSON.stringify(payment)+'。过一天仍未结的约定才纳入结薪风险；足额结清会恢复判断。可考虑 '+choices.join('、')+'，由你自己选择，不能自行结算或改动已确认约定。';
       }
       const selection=this.model.agentDefaultModel.currentSelection();if(!selection.provider||!selection.model)throw new Error('模型不可用');
-      await worksiteReady;let output='',meme:string|undefined;
+      await worksiteReady;let output='',meme:string|undefined,farmFinished=false;
       if(process.env.SILICON_CHAT_TIMING==='1')console.info('[chat-prompt]',state.legacyContext.personaDescription.length,COMPANION_PERSONALITY.length,system.length);timing('generate');let firstText=true;const tokenUsage={inputTokens:0,outputTokens:0,cachedTokens:0};
       system+='\n'+SPEAKER_MEMORY_RULE;
       // Source IDs remain on the turn for invalidation; the model needs the
@@ -201,11 +214,12 @@ export class CanonicalChat {
           (context.length?'\n此前的公开群消息：'+promptData(context,1800):'');
       }
       const generate=async()=>{
-        for await(const part of this.model.llm.stream({...selection,system,streamText:!group,embodiedSnapshot:envelope,beforeActions:initialCommit,embodied:{petId:input.petId,requestId:'chat:'+id,sourceIds:['chat-user:'+id],allowActions:true,privateTime:!group},messages:[...history,{role:'user',content:input.attachments?.length?[{type:'text',text},...input.attachments.map(a=>({type:'image',attachment:{petId:a.petId,id:a.id}}))]:text}],signal:combined,maxTokens:group?120:500,reasoningEffort:'low'})) {
+        for await(const part of this.model.llm.stream({...selection,system,streamText:!group,embodiedSnapshot:envelope,beforeActions:initialCommit,embodied:{petId:input.petId,requestId:'chat:'+id,sourceIds:[userEventId],allowActions:true,privateTime:!group,finishOnFarmReceipt:true},messages:[...history,{role:'user',content:input.attachments?.length?[{type:'text',text},...input.attachments.map(a=>({type:'image',attachment:{petId:a.petId,id:a.id}}))]:text}],signal:combined,maxTokens:group?120:500,reasoningEffort:'low'})) {
           if(part?.type==='usage'){tokenUsage.inputTokens+=part.inputTokens??0;tokenUsage.outputTokens+=part.outputTokens??0;tokenUsage.cachedTokens+=part.cachedTokens??0;}
+          if(part?.type==='farm-result'){farmFinished=true;return;}
           if(part?.type==='meme')meme=part.name;
           if(part?.type==='text-reset'){meme=undefined;output='';input.onPartial?.('');}
-          if(part?.type==='text' && typeof part.text==='string'){await initialCommit;if(firstText){timing('first-text');firstText=false;}output+=part.text;if(!group)input.onPartial?.(redactDadNames(output.replace(/<念头>[\s\S]*?(?:<\/念头>|$)/gu,'').replace(/<(?:body|service)>[\s\S]*$/gi,'').replace(/\[[^\]]*$/u,'').replace(/\[愿意去工地\]/gu,'').trim()));}
+          if(part?.type==='text' && typeof part.text==='string'){await initialCommit;if(firstText){timing('first-text');firstText=false;}output+=part.text;if(!group&&!farmTopic.test(text)&&!farmTopic.test(output))input.onPartial?.(redactDadNames(output.replace(/<念头>[\s\S]*?(?:<\/念头>|$)/gu,'').replace(/<(?:body|service)>[\s\S]*$/gi,'').replace(/\[[^\]]*$/u,'').replace(/\[愿意去工地\]/gu,'').trim()));}
         }
         // Ask for a complete shorter sentence, never slice an utterance. These
         // text-only retries cannot repeat tools or actions from the first pass.
@@ -221,8 +235,10 @@ export class CanonicalChat {
         }
         if(group&&tooLong()){output='<qq-silent/>';meme=undefined;}
       };
+      phase='generate';
       const generateReply=modelTicket?this.budget.runInteractiveReserved(input.petId,modelTicket,generate):this.budget.runAs(input.petId,'interactive',generate);
       await generateReply;
+      phase='publish';
       const thought=extractThought(output);output=thought.reply;
       if(group&&output==='<qq-silent/>'){
         await this.edit(input.petId,draft=>{const turn=(draft.legacy as Record<string,any>).chatTurns?.[id];if(!turn||turn.status!=='running')throw Error('对话状态已变化');turn.status='completed';turn.reply='';turn.sources=['chat-user:'+id];
@@ -241,16 +257,21 @@ export class CanonicalChat {
         if(!deferred && (/(?:这就|马上|现在|立刻).{0,10}(?:搬|进去|进工地|去工地|干活|开工|干|工作)|我(?:自己|愿意|决定|去|来|进).{0,10}(?:搬|进去|进工地|去工地)|我进去(?:了|啦)|(?:这趟|这一趟)我搬/u.test(output) || /^(?:愿意|好啊|行啊|可以|好[，,！!]).{0,40}(?:去试|去搬|搬一|搬块|进去|去工地|进工地)/u.test(output)))worksiteIntent=true;
 
       }
-      output=redactDadNames(output.replace(/\[愿意去工地\]/gu,'').replace(/<(?:body|service)>[\s\S]*?<\/(?:body|service)>/gi,'').trim());if(!output || output.length>4000 || combined.aborted)throw new Error('模型没有给出完整回复');
+      output=redactDadNames(output.replace(/\[愿意去工地\]/gu,'').replace(/<(?:body|service)>[\s\S]*?<\/(?:body|service)>/gi,'').trim());if(!farmFinished&&(!output || output.length>4000 || combined.aborted))throw new Error('模型没有给出完整回复');
       if(!this.grounding && worksiteIntent && !(state.legacyContext.worksite as any)?.inside && /我进去了|我进去啦/u.test(output))throw Error('动作状态尚未核实');
       let decidedToWork=false;
         if(group&&[...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(output)].length>15)throw Error('群聊回复超出长度限制');
         await this.edit(input.petId,draft=>{
         const legacy=draft.legacy as Record<string,any>, turn=legacy.chatTurns?.[id];
         if(!turn||turn.status!=='running'||turn.fingerprint!==fingerprint)throw new Error('对话状态已变化');
+        const verifiedFarm=farmReply(draft,userEventId,text,output,group);
+        if(verifiedFarm){
+          output=verifiedFarm.text;meme=undefined;worksiteIntent=false;
+          sources.splice(0,sources.length,...verifiedFarm.sourceIds);
+        }else if(farmFinished)throw Error('农活完成回执不可用');
         if(sources.some(source=>Object.hasOwn(draft.life.invalidSources,source)||!draft.life.events.some(e=>e.eventId===source)))throw new Error('对话依赖的记忆已变化');
         settleSimulatedSpending(draft,'chat','chat:'+id);
-        if(thought.feeling)draft.life.events.push({eventId:'chat-thought:'+id,petId:input.petId,type:'self.thought',source:'model',occurredAt:new Date().toISOString(),receivedAt:new Date().toISOString(),evidenceLevel:'inferred',payload:{text:thought.feeling,feeling:thought.feeling,sourceIds:['chat-user:'+id]}});
+        if(thought.feeling&&!verifiedFarm)draft.life.events.push({eventId:'chat-thought:'+id,petId:input.petId,type:'self.thought',source:'model',occurredAt:new Date().toISOString(),receivedAt:new Date().toISOString(),evidenceLevel:'inferred',payload:{text:thought.feeling,feeling:thought.feeling,sourceIds:['chat-user:'+id]}});
         const now=new Date().toISOString(), userId='chat-user:'+id, assistantId='chat-assistant:'+id;
         if(!draft.life.events.some(e=>e.eventId===userId) || draft.life.events.some(e=>e.eventId===assistantId))throw Error('对话事件冲突');
         let workDecision:Record<string,unknown>|undefined,workBlocked=false;
@@ -279,7 +300,24 @@ export class CanonicalChat {
       if(meme)input.onMeme?.(meme);return output;
     } catch(error) {
       await initialCommit.catch(()=>{});
-      try {await this.edit(input.petId,draft=>{const turn=(draft.legacy as Record<string,any>).chatTurns?.[id];if(turn?.status==='running'&&turn.fingerprint===fingerprint){turn.status='failed';turn.finishedAt=Date.now();}return undefined;});}catch{/* a lease loss or uncertain commit must not be retried blindly */}
+      try {
+        const recovered=await this.edit(input.petId,draft=>{
+          const turn=(draft.legacy as Record<string,any>).chatTurns?.[id];
+          if(turn?.status!=='running'||turn.fingerprint!==fingerprint)return;
+          turn.failure={phase,reason:replyFailure(error,combined.aborted)};
+          const verifiedFarm=farmReply(draft,userEventId,combined.aborted?'':text,'',group);
+          if(!verifiedFarm){turn.status='failed';turn.finishedAt=Date.now();return;}
+          const at=new Date().toISOString();
+          const user=draft.life.events.find(e=>e.eventId===userEventId);
+          const groupId=(user?.payload as {groupId?:string}|undefined)?.groupId;
+          draft.life.events.push({eventId:'chat-assistant:'+id,petId:input.petId,type:'conversation.assistant',source:input.channel,
+            occurredAt:at,receivedAt:at,evidenceLevel:'inferred',causationId:userEventId,
+            payload:{text:verifiedFarm.text,channel:input.channel,sourceIds:verifiedFarm.sourceIds,...(groupId?{groupId}:{})}});
+          Object.assign(turn,{status:'completed',reply:verifiedFarm.text,sources:verifiedFarm.sourceIds,completedAt:Date.now()});
+          return verifiedFarm.text;
+        });
+        if(recovered!==undefined)return recovered;
+      }catch{/* The original failure remains authoritative if publication cannot be recovered. */}
       throw error;
     } finally {
       turnAbort.abort();
