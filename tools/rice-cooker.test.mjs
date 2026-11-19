@@ -108,12 +108,13 @@ test('only a real completed eating receipt consumes the cooked bowl and increase
   assert.deepEqual(availableRice(state).map(item=>item.id),['fridge-a']);
 });
 
-test('a hungry pet may buy an interim meal while the only batch is uncooked',async()=>{
+test('an uncooked batch and hunger do not trigger a separate rule-driven purchase',async()=>{
   const f=fixture(), state=f.state(), orders=[];
   state.humanity.stats.satiety=15;
   startCooking(state,'batch-5',2,f.now());
   const life=createDeterministicLife({get:async()=>state.humanity},f.reader,async(_id,input)=>orders.push(input.command),
     f.gate,f.uow,{}, {},async()=>{});
   await life.run('main',f.gate.signal,{allowAutonomous:true});
-  assert.deepEqual(orders,['/冰箱 买一碗白饭']);
+  assert.deepEqual(orders,[]);
+  assert.equal(cookerFacts(state).batch.id,'batch-5');
 });

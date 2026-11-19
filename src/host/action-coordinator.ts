@@ -1,4 +1,5 @@
 import {farmVisit} from './farm.js';
+import {isAutonomousWork,validateAutonomousWork} from './autonomous-work.js';
 import {explorationAbility,reserveExploration} from './exploration-budget.js';
 import {hasActiveConversation} from './active-conversation.js';
 import {validateRicePurchase} from './rice-purchase.js';
@@ -30,6 +31,7 @@ export class ActionCoordinator {
       const matches = draft.life.actions.filter(action => action.id === actionId);
       if (matches.length !== 1 || matches[0].status !== 'PROPOSED') throw new Error('行动不处于可排队状态');
       const action = matches[0];
+      if(isAutonomousWork(action.actionType))validateAutonomousWork(draft,action.actionType,this.now().valueOf());
       if((draft.legacy as Record<string,any>).worksite?.inside && (action.actionType.startsWith('care.') || ['service.eat-rice','body.sleep','body.wake','token.pickup','body.activity'].includes(action.actionType)))throw Error('她在网页工地里，请先接她回桌面');
       if(farmVisit(draft) && (action.actionType.startsWith('care.') || ['service.eat-rice','body.sleep','body.wake','token.pickup','body.activity'].includes(action.actionType)))throw Error('她在稻田里，请先接她回桌面');
       if(action.actionType==='body.activity' && ((draft.legacy as Record<string,any>).space?.mode!=='outside' || (draft.legacy as Record<string,any>).labor?.contracts?.some((c:any)=>c.status==='working')))throw Error('当前桌面空间或工作状态不允许走动');

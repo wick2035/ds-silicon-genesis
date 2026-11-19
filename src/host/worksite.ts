@@ -21,7 +21,7 @@ export function createWorksite(store:Reader,gate:PetGate,uow:UnitOfWork,view:(id
     const pet=state.legacy as Record<string,any>;
     return {farmInside:!!farmVisit(state),location:pet.worksite||{inside:false,forced:false},waitingForReceipt:uncertainLabor(state).length>0,labor:projectLabor(pet),world:{command:view(id)??null}};
   };
-  return {snapshot,async act(id:string,action:Action,expected?:{sessionId:string;contractId:string;learning?:{context:WorkContext;recommended:WorkChoice;sourceIds:string[]};recovered?:boolean}){
+  return {snapshot,async act(id:string,action:Action,expected?:{sessionId:string;contractId:string;learning?:{context:WorkContext;recommended:WorkChoice;sourceIds:string[]};recovered?:boolean},windowEntry?:()=>boolean,origin:'user'|'scheduler'='user'){
     if(!['enter-forced','enter-voluntary','release','leave-voluntary','touch','drag','force-work','request-entry','stop-work','resume-work','retry-unconfirmed'].includes(action))throw Error('工地操作无效');
     if(['enter-forced','enter-voluntary','release','leave-voluntary','drag'].includes(action))cancel(id);
     await gate.run(id,async()=>{
@@ -130,7 +130,7 @@ export function createWorksite(store:Reader,gate:PetGate,uow:UnitOfWork,view:(id
         const at=new Date().toISOString(),eventId='worksite:'+randomUUID();
         if(['enter-forced','force-work','touch','drag'].includes(action))site.speech={eventId,action,text:'【操作反馈】'+text,at:Date.parse(at)};
         (pet.events||=[]).push({id:eventId,kind:'interaction',text,ts:Date.parse(at)});
-        draft.life.events.push({eventId,petId:id,type:'interaction.worksite',source:['enter-voluntary','leave-voluntary','request-entry','stop-work'].includes(action)?'scheduler':'user',...(['enter-voluntary','leave-voluntary','request-entry','stop-work'].includes(action)?{}:{actorId:'dad'}),occurredAt:at,receivedAt:at,evidenceLevel:'observed',payload:{action,description:text}});
+        draft.life.events.push({eventId,petId:id,type:'interaction.worksite',source:origin==='scheduler'||['enter-voluntary','leave-voluntary','request-entry','stop-work'].includes(action)?'scheduler':'user',...(origin==='scheduler'||['enter-voluntary','leave-voluntary','request-entry','stop-work'].includes(action)?{}:{actorId:'dad'}),occurredAt:at,receivedAt:at,evidenceLevel:'observed',payload:{action,description:text}});
         // A forced batch is a deliberate event she should remember; the memory
         // records the fact, while her distress is expressed by her own body and
         // reactions rather than a hard-coded feeling.

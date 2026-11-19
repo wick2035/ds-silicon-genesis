@@ -48,7 +48,7 @@ function fixture(now=Date.now()){
   return {get:()=>state,reader,uow,gate,budget};
 }
 
-test('隔一小时的新一餐不会重用六小时内的旧请求，未确认的吃饭仍不重试',async()=>{
+test('跨小时的饥饿只更新实况，规则不抢先吃饭、买饭或重试未知动作',async()=>{
   const realNow=Date.now;let now=Math.floor(realNow()/(6*hour))*6*hour+hour;
   Date.now=()=>now;
   try{
@@ -61,10 +61,9 @@ test('隔一小时的新一餐不会重用六小时内的旧请求，未确认�
       const life=createDeterministicLife({get:async()=>f.get().humanity},f.reader,async(_id,input)=>{requests.push(input);},f.gate,f.uow,{}, {},async()=>{});
       await life.run('main',f.gate.signal,{allowAutonomous:true});now+=hour;
       await life.run('main',f.gate.signal,{allowAutonomous:true});
-      assert.equal(requests.length,2);assert.notEqual(requests[0].key,requests[1].key);
-      assert.equal(requests[0].command,hasRice?'/吃':'/冰箱 买一碗白饭');
+      assert.equal(requests.length,0);
       s.life.actions.push({actionType:hasRice?'service.eat-rice':'service.buy-rice',status:'UNKNOWN'});now+=hour;
-      await life.run('main',f.gate.signal,{allowAutonomous:true});assert.equal(requests.length,2);
+      await life.run('main',f.gate.signal,{allowAutonomous:true});assert.equal(requests.length,0);
     }
   }finally{Date.now=realNow;}
 });

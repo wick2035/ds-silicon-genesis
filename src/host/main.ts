@@ -59,7 +59,7 @@ import {isOwnerPrivateConversation} from './chat-identity.js';
 import {startStandalone} from './standalone.js';
 import {createLegacyServiceActions} from './legacy-service-actions.js';
 import {createDeterministicLife} from './deterministic-life.js';
-import {createAutonomousNeeds} from './autonomous-needs.js';
+import {autonomousWorkTypes,createAutonomousWorkExecutors} from './autonomous-work.js';
 import {localRiceReconciler} from './rice-purchase.js';
 import {createHelperTokens} from './helper-tokens.js';
 import {isPresentationRoute} from './visual-routes.js';
@@ -122,7 +122,7 @@ export async function main():Promise<void> {
     await lease.run(petId,async()=>{
       const state=await store.loadEnvelope(petId);
       if(!state)return;
-      const missing=[{name:'farm.tend',enabled:true,physical:true},{name:'service.cook-rice',enabled:true}]
+      const missing=[{name:'farm.tend',enabled:true,physical:true},{name:'service.cook-rice',enabled:true},...autonomousWorkTypes.map(name=>({name,enabled:true}))]
         .filter(cap=>!state.life.constraints.capabilities.some(item=>item.name===cap.name));
       if(missing.length)await unitOfWork.apply(petId,state.version,draft=>{draft.life.constraints.capabilities.push(...missing);return {};});
     });
@@ -135,7 +135,7 @@ export async function main():Promise<void> {
     const tokens=createHelperTokens(store,domain,observerAuthority);
     const commandChannel=createDesktopCommandChannel(store,helperAuthority);
     let worksiteWake:(id:string)=>void=()=>{};
-    let wakeNeeds:(id:string)=>void=()=>{};
+    let wakeCognition:(id:string)=>void=()=>{};
     const worksite=createWorksite(store,lease,unitOfWork,id=>commandChannel.view(id),id=>commandChannel.cancelPet(id),id=>worksiteWake(id));
     let wakeTokenPickup:(id:string)=>void=()=>{};
     let semanticResponse:((id:string,requestId:string,detail:unknown)=>Promise<unknown>)|undefined;
@@ -154,7 +154,7 @@ export async function main():Promise<void> {
       },
       async(id,requestId,detail)=>{const d=detail as any;if(!d||typeof d.id!=='string'||typeof d.key!=='string'||![d.fromX,d.toX].every((n:unknown)=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=1))throw Error('搬砖拖动观察无效');await domain.laborAction(id,requestId,{action:'disturb',id:d.id,key:d.key,surface:'desktop',fromX:d.fromX,toX:d.toX},observerAuthority);const state=await store.loadEnvelope(id);if(!state)throw Error('状态不可用');return projectLegacySnapshot(state).labor;},
       (id,requestId,detail)=>{if(!semanticResponse)throw Error('互动服务尚未就绪');return semanticResponse(id,requestId,detail);},
-      (id,action)=>action==='snapshot'?worksite.snapshot(id):worksite.act(id,action as Parameters<typeof worksite.act>[1]),desktopIdle,id=>worksiteWake(id),farm,cooker,id=>wakeNeeds(id));
+      (id,action)=>action==='snapshot'?worksite.snapshot(id):worksite.act(id,action as Parameters<typeof worksite.act>[1]),desktopIdle,id=>worksiteWake(id),farm,cooker,id=>wakeCognition(id));
     bili=createBiliReader(root);
     const executors=new Map(createDomainExecutors(commandChannel.bridge));
     executors.set('farm.tend',farm.execute);
@@ -173,6 +173,18 @@ export async function main():Promise<void> {
     const service=createLegacyServiceActions(store,lease,unitOfWork,actions,dispatcher);
     const speech=createEmbodiedSpeech({loadEnvelope:farm.settle},lease,unitOfWork,actions,dispatcher,async(id)=>worksite.act(id,'resume-work'),
       id=>worksite.act(id,'leave-voluntary'),id=>worksite.act(id,'request-entry'),id=>worksite.act(id,'stop-work'),farm.requestEntry);
+    for(const [type,execute] of createAutonomousWorkExecutors(store,{
+      enter:id=>worksite.act(id,'request-entry'),
+      cancelEntry:(id,requestId)=>lease.run(id,async()=>{
+        const state=await store.loadEnvelope(id);if(!state||lease.signal.aborted)return;
+        const site=(state.legacy as any).worksite,last=state.life.events.filter(e=>e.type==='interaction.worksite'&&(e.payload as any)?.action==='request-entry').at(-1);
+        if(!site?.requested||site.inside||last?.eventId!==requestId)return;
+        await unitOfWork.apply(id,state.version,draft=>{const site=(draft.legacy as any).worksite;site.requested=false;site.suppressUntilDecision=true;return {};});
+      }),
+      begin:id=>worksite.act(id,'resume-work',undefined,undefined,'scheduler'),
+      stop:id=>worksite.act(id,'stop-work',undefined,undefined,'scheduler'),
+      leave:async(id,signal)=>{if(signal.aborted)throw Error('移动已取消');return worksite.act(id,'leave-voluntary');},
+    }))executors.set(type,execute);
     let memeSource:MemeSource=async()=>[];
     const replyMemes=new Map<string,string>();
     const rememberMeme=(text:string,meme?:string)=>{if(meme)replyMemes.set(text,meme);else replyMemes.delete(text);if(replyMemes.size>100)replyMemes.delete(replyMemes.keys().next().value!);};
@@ -259,13 +271,12 @@ export async function main():Promise<void> {
         }
       }catch(error){console.error('[tokens] pickup:',error);}finally{pickupRuns.delete(id);}})();
     };
-    const needs=createAutonomousNeeds(store,lease,unitOfWork,budget,model,text=>{if(!publishWhisper)throw Error('桌宠显示尚未就绪');publishWhisper(text);});
-    wakeNeeds=id=>{void needs.run(id,lease.signal).catch(error=>console.error('[rice-cooker] 煮饭判断暂不可用',error));};
+    wakeCognition=id=>{void scheduler?.requestWake(id).catch(error=>console.error('[cognition] 唤醒暂不可用',error));};
     scheduler=new LifeScheduler(kernel,cognition,{connectionString:connectionUri(dbConfig.connection),petId,intervalSeconds:60,cognitiveIntervalSeconds:300,idle:desktopIdle,signal:lease.signal,development,
       groupConversation:{run:async(id,signal)=>{await groupConversation?.run(id,signal);}},
       reminders:{run:(id,signal)=>todos.remind(id,signal,t=>{if(!publishWhisper)throw Error('桌宠显示尚未就绪');publishWhisper('提醒：'+t.text);})},
       whisper:{settings:()=>model!.getSettings(),run:async(id,signal)=>{if(!publishWhisper)throw Error('桌宠显示尚未就绪');const text=await responses(id,'whisper',signal,undefined,{autonomous:true});if(!signal.aborted)publishWhisper(text);}},
-      wakeCoordinator:wakes,deterministic,resultCoordinator:coordinator,farm,cooker,needs,
+      wakeCoordinator:wakes,deterministic,resultCoordinator:coordinator,farm,cooker,
       assertExclusive:async()=>lease.assertHeld()});
     app=await startStandalone({root,llm:model.llm,ai:{...model,queryBalance:meteredBalance,testConnection:(input:Record<string,unknown>)=>budget.runAs(petId,'interactive',()=>model!.testConnection(input))},agentDefaultModel:model.agentDefaultModel,helperChannel:helper,api,
       hostReady:(deps,helpers)=>{

@@ -31,7 +31,7 @@ export interface CognitiveContext { observation: string[]; recall: string[]; app
 export interface CognitiveModel { generate(snapshot: CognitiveWorkspace, signal: AbortSignal, context: CognitiveContext): Promise<unknown> }
 /** Atomically and durably reserve before each call; failed calls consume the reservation. */
 export interface CognitiveBudget { reserve(petId: string): Promise<object|null>; withReserved<T>(petId:string, ticket:object, fn:()=>Promise<T>):Promise<T> }
-export type CognitiveResult = { status: 'proposed'; sourceVersion: number; proposal: ActionProposal | null; candidates: Omit<ModelOutput, 'action' | 'moment'> & {moment?:MomentDraft} } | { status: 'degraded'; reason: string };
+export type CognitiveResult = { status: 'proposed'; sourceVersion: number; observedCookerReminderId?:string; proposal: ActionProposal | null; candidates: Omit<ModelOutput, 'action' | 'moment'> & {moment?:MomentDraft} } | { status: 'degraded'; reason: string };
 
 const ContextGraph = Annotation.Root({
   state: Annotation<LifeState>(), snapshot: Annotation<CognitiveWorkspace>(),
@@ -132,7 +132,7 @@ export class Cognition {
         }
       }
       const publish=post.success&&snapshot.recentEvents.some(e=>e.momentSource&&e.eventId===post.data.sourceId);
-      return { status: 'proposed', sourceVersion: state.version, proposal, candidates:{...candidates,...(publish?{moment:post.data}:{})} };
+      return { status: 'proposed', sourceVersion: state.version, observedCookerReminderId:state.legacyContext?.autonomy?.cookerReminderId, proposal, candidates:{...candidates,...(publish?{moment:post.data}:{})} };
     } catch { return { status: 'degraded', reason: signal.aborted ? 'stopped' : controller.signal.aborted ? 'model_timeout' : 'model_unavailable' }; }
     finally { if (timer) clearTimeout(timer); signal.removeEventListener('abort', abort); }
   }

@@ -1,7 +1,5 @@
 import {farmVisit} from './farm.js';
-import {availableRice} from './rice-inventory.js';
 import {hasActiveConversation,hasRunningChat} from './active-conversation.js';
-import {riceMotivation} from './companion-personality.js';
 import {recordWorkOutcome} from './work-experience.js';
 import {hasForcedWork,canChooseLabor,hasLaborResources} from './forced-labor.js';
 import {advanceSpirit} from '../kernel/spirit.js';
@@ -13,9 +11,8 @@ import type {PetGate,UnitOfWork,OutboxDispatcher} from '../storage/uow.js';
 import type {ActionCoordinator} from './action-coordinator.js';
 import {randomUUID} from 'node:crypto';
 
-/** Biological time always advances. An enabled autonomous pet may request a
- * meal already in inventory; the regular service path requires the actual
- * desktop animation receipt before inventory or body is changed. */
+/** Biological time, recovery and authorized work advance without model polling.
+ * New purchases, meals and cooking belong to comprehensive cognition. */
 export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader:{loadEnvelope(id:string):Promise<CanonicalEnvelope|null>},service:(id:string,input:Record<string,unknown>,origin?:'user'|'autonomous')=>Promise<unknown>,
   gate:PetGate,uow:UnitOfWork,actions:ActionCoordinator,dispatcher:OutboxDispatcher,refreshBudget:(petId:string)=>Promise<void>,tokenHeld:(petId:string)=>boolean=()=>false, reviewingWork:(state:CanonicalEnvelope)=>boolean=()=>false) {
   // A release can start pickup immediately, independently of the minute wakeup.
@@ -40,7 +37,7 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
       return (await dispatcher.dispatch(id)).status==='completed';
     });
   }
-  async function run(petId:string,signal:AbortSignal,{allowAutonomous,needsManaged=false}:{allowAutonomous:boolean;needsManaged?:boolean}) {
+  async function run(petId:string,signal:AbortSignal,{allowAutonomous}:{allowAutonomous:boolean}) {
     if(signal.aborted)return;
     await refreshBudget(petId);
     if(signal.aborted)return;
@@ -61,29 +58,12 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     }
     if(hasActiveConversation(resting)&&!pet.worksite?.inside&&!resting.life.actions.some(a=>a.actionType==='labor.step'&&a.status==='PENDING'))return;const spirit=advanceSpirit(resting.life);
     if(human.sleeping){if(spirit.mode==='sleep' && spirit.value>=100 || spirit.mode==='nap' && Date.now()-spirit.sleepStartedAt!>=1200000)await service(petId,{key:'auto-wake:'+spirit.sleepStartedAt,command:'/醒来'},'autonomous');return;}
-    if(!needsManaged && spirit.value<=2 && !(resting.legacy as any).worksite?.inside && !(resting.legacy as any).labor?.contracts?.some((c:any)=>c.status==='working'&&c.workPermit)){await service(petId,{key:'auto-sleep:'+Math.floor(Date.now()/3600000),command:'/休息'},'autonomous');return;}
+    if(spirit.value<=2 && !(resting.legacy as any).worksite?.inside && !(resting.legacy as any).labor?.contracts?.some((c:any)=>c.status==='working'&&c.workPermit)){await service(petId,{key:'auto-sleep:'+Math.floor(Date.now()/3600000),command:'/休息'},'autonomous');return;}
     if(Number.isFinite(human.restingUntil) && human.restingUntil>Date.now()&&!(resting.legacy as any).labor?.contracts?.some((c:any)=>c.status==='working'&&c.workPermit))return;
     const state=await reader.loadEnvelope(petId);
     if(signal.aborted || !state || state.life.constraints.paused)return;
-    const legacy=state.legacy as Record<string,any>, inventory=legacy.services?.inventory, meals=availableRice(state);
-    // Only the worksite body may perform physical work while she is inside.
-    // Desktop-only meals and coin pickup wait until she returns.
+    const legacy=state.legacy as Record<string,any>;
     const inWorksite=legacy.worksite?.inside===true;
-    const mealDue=riceMotivation(human,legacy.config??{}).mealDue;
-    if(!needsManaged && !inWorksite && mealDue && meals.length>0) {
-      if(!state.life.actions.some(a=>a.actionType==='service.eat-rice' && ['PENDING','DISPATCHED'].includes(a.status)))
-        await service(petId,{key:'auto-meal:'+Math.floor(Date.now()/60000),command:'/吃'},'autonomous');
-      return;
-    }
-    // Buying is a real, separately authorized purchase. Never manufacture a
-    // free meal or retry an unconfirmed purchase merely because time passed.
-    const price=legacy.config?.costs?.feed, wallet=legacy.wallet;
-    if(!needsManaged && !inWorksite && mealDue && Array.isArray(inventory) && !meals.length && !inventory.some((i:any)=>i.status==='available') &&
-       Number.isFinite(price) && price>0 && wallet?.frozen!==true && Number.isFinite(wallet?.balance) && wallet.balance>=price &&
-       state.life.constraints.capabilities.some(c=>c.name==='service.buy-rice'&&c.enabled) &&
-       !state.life.actions.some(a=>a.actionType==='service.buy-rice'&&['PENDING','DISPATCHED','UNKNOWN'].includes(a.status))) {
-      await service(petId,{key:'auto-buy:'+Math.floor(Date.now()/60000),command:'/冰箱 买一碗白饭'},'autonomous');return;
-    }
     if(inWorksite){await runWorksite(petId,signal,allowAutonomous);return;}
     await gate.run(petId,async()=>{
       const current=await reader.loadEnvelope(petId);if(!current||signal.aborted||current.life.constraints.paused||farmVisit(current))return;

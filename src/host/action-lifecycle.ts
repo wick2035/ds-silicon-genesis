@@ -1,4 +1,5 @@
 import {explorationAbility} from './exploration-budget.js';
+import {isAutonomousWork,validateAutonomousWork} from './autonomous-work.js';
 import {farmActionTarget,farmFacts,farmVisit,type FarmAction} from './farm.js';
 import {checkFarmBody,checkFarmReceipt} from './farm-scene.js';
 import {validateStartCooking} from './rice-cooker.js';
@@ -109,6 +110,7 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
     const projection = projectActionBody(draft,this.projectBody(draft),action.actionType);
     const state: LifeState = {...draft.life, petId:draft.petId, version:draft.version, ...projection};
     try {
+      if(isAutonomousWork(action.actionType))validateAutonomousWork(draft,action.actionType,this.clock().valueOf());
       // A proposal was accepted earlier. Revalidate it against the locked latest
       // state, not against its historical proposal version.
       if(action.actionType==='body.sleep'&&hasActiveConversation(draft)&&!(draft.legacy as any).manualServiceRequests?.[action.id]&&!action.sourceIds.some(id=>id.startsWith('chat-user:')||id.startsWith('needs:')))throw Error('还有正在进行的决定，先完成这轮');

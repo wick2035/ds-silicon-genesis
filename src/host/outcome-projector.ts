@@ -1,4 +1,5 @@
 import {hasLaborResources} from './forced-labor.js';
+import {isAutonomousWork} from './autonomous-work.js';
 import {completeFarmOperation,farmVisit,setFarmVisit,type FarmAction} from './farm.js';
 import {startCooking} from './rice-cooker.js';
 import {cookerBowlStorage,findRiceBowl} from './rice-inventory.js';
@@ -64,6 +65,12 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
   const e = receipt.evidence as Obj, params = intent.payload.parameters as Obj;
   const pet = draft.legacy as Obj, human = draft.humanity as Obj;
   assert(params && typeof params === 'object' && !Array.isArray(params), '行动参数无效');
+  if(isAutonomousWork(intent.type)) {
+    assert(e.actionId===intent.id&&e.kind===intent.type&&e.confirmed===true,'缺少工地操作确认');
+    assert(intent.type==='work.leave'?e.inside===false:e.inside===true,'工地位置未确认');
+    if(intent.type==='work.begin'||intent.type==='work.stop')assert(e.workState===(intent.type==='work.begin'?'running':'stopped'),'工地工作状态未确认');
+    return;
+  }
   // Each recognized result is explicitly bound to this action and its executor.
   if (!['self.express','service.sweet','body.activity','service.buy-rice','service.cook-rice','care.feed','care.water','care.pet','care.play','care.soothe','care.accompany','service.eat-rice','labor.step','token.pickup','body.sleep','body.wake','image.observe','learning.observe'].includes(intent.type)) return;
   assert(e && e.actionId === intent.id && e.kind === intent.type && e.confirmed === true, '缺少与行动绑定的可信执行结果');

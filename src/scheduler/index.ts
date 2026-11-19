@@ -1,9 +1,8 @@
 import { PgBoss } from 'pg-boss';
 import { createHash } from 'node:crypto';
-import { Cognition, hasCognitiveDemand, type CognitiveResult } from '../cognition/index.js';
+import { Cognition, type CognitiveResult } from '../cognition/index.js';
 import type { LifeKernel } from '../kernel/index.js';
 import type { CognitiveResultCoordinator } from '../host/cognitive-result.js';
-import type { NeedsDecision } from '../host/autonomous-needs.js';
 
 const queueFor = (petId: string) => 'life-wakeup-' + createHash('sha256').update(petId).digest('hex').slice(0, 24);
 const JOB_SCHEMA = 'silicon_genesis_jobs';
@@ -14,7 +13,7 @@ export interface WakeCoordinator {
   release(petId: string, cursor: string): Promise<void>;
 }
 /** Must invoke the authoritative body/action adapter, never fabricate outcomes. */
-export interface DeterministicActivity { run(petId: string, signal: AbortSignal, options: { allowAutonomous: boolean;needsManaged?:boolean }): Promise<void> }
+export interface DeterministicActivity { run(petId: string, signal: AbortSignal, options: { allowAutonomous: boolean }): Promise<void> }
 export interface SchedulerOptions {
   connectionString: string;
   petId: string;
@@ -24,7 +23,6 @@ export interface SchedulerOptions {
   deterministic: DeterministicActivity;
   farm?:{settle(petId:string):Promise<unknown>};
   cooker?:{settle(petId:string):Promise<unknown>};
-  needs?: {run(petId:string,signal:AbortSignal):Promise<NeedsDecision>};
   groupConversation?: {run(petId:string,signal:AbortSignal):Promise<void>};
   resultCoordinator: CognitiveResultCoordinator;
   development?: {run(petId:string,signal:AbortSignal):Promise<void>};
@@ -49,7 +47,6 @@ export class LifeScheduler {
   private bossStarted = false;
   private started = false;
   private stopped = false;
-  private nextWhisperAt = 0;
   private readonly ownershipLost = () => { void this.stop().catch(() => this.report({ status: 'degraded', reason: 'stop_failed' })); };
   constructor(private readonly kernel: LifeKernel, private readonly cognition: Cognition, private readonly options: SchedulerOptions) {
     if (!options.resultCoordinator || !options.connectionString || !options.petId || !Number.isInteger(options.intervalSeconds) || options.intervalSeconds < 10 || (options.cognitiveIntervalSeconds !== undefined && (!Number.isInteger(options.cognitiveIntervalSeconds) || options.cognitiveIntervalSeconds < 300))) throw new Error('Invalid scheduler configuration');
@@ -92,20 +89,16 @@ export class LifeScheduler {
             if(this.options.cooker)await this.options.cooker.settle(this.options.petId);
             const before = await this.kernel.getState(this.options.petId);
             if (this.controller.signal.aborted) throw new Error('Scheduler stopped');
-            let needsDecision:NeedsDecision='idle';
-            if(!before.constraints.paused&&this.options.needs){try{needsDecision=await this.options.needs.run(this.options.petId,this.controller.signal);}catch{this.report({status:'degraded',reason:'needs_unavailable'});}}
-            await this.options.deterministic.run(this.options.petId, this.controller.signal, { allowAutonomous: !before.constraints.paused,needsManaged:needsDecision!=='idle' });
+            await this.options.deterministic.run(this.options.petId, this.controller.signal, { allowAutonomous: !before.constraints.paused });
             if(!before.constraints.paused&&this.options.groupConversation){try{await this.options.groupConversation.run(this.options.petId,this.controller.signal);}catch{this.report({status:'degraded',reason:'group_conversation_unavailable'});}}
             if (this.controller.signal.aborted) throw new Error('Scheduler stopped');
-            // Cooling down still owns meal decisions, but leaves time for other plans and thoughts.
-            const needsBusy=needsDecision==='busy'||needsDecision==='handled';
-            const resumed=needsBusy?false:await this.options.resultCoordinator.resume(this.options.petId,this.controller.signal);
+            const resumed=await this.options.resultCoordinator.resume(this.options.petId,this.controller.signal);
             const state = await this.kernel.getState(this.options.petId);
             if(!state.constraints.paused && this.options.development)await this.options.development.run(this.options.petId,this.controller.signal);
             const idleBefore=this.options.idle?.snapshot();
-            const ongoing=(state.cognitivePlans||[]).some(p=>p.status==='active'||p.status==='failed') || state.goals.some(g=>g.status==='active'&&g.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id)));
-            const farmDemand=!!state.legacyContext?.farm?.operation && !state.body.sleeping && !state.body.restrained && !state.body.injured;
-            if (!needsBusy && !resumed && !state.constraints.paused && (claim.changed || farmDemand || hasCognitiveDemand(state) || ongoing || (idleBefore?.seconds??0)>=120) && await this.options.resultCoordinator.claimCognition(this.options.petId,this.options.cognitiveIntervalSeconds??1800,this.controller.signal)) {
+            // A due turn considers her whole life, including quiet days.
+            // Hunger and desktop idleness are not prerequisites for initiative.
+            if (!resumed && !state.constraints.paused && await this.options.resultCoordinator.claimCognition(this.options.petId,this.options.cognitiveIntervalSeconds??1800,this.controller.signal)) {
               const fresh=await this.kernel.getState(this.options.petId);
               const result = await this.cognition.propose(fresh, this.controller.signal, () => this.kernel.getState(this.options.petId));
               if (result.status === 'proposed' && !this.controller.signal.aborted) {
@@ -140,8 +133,10 @@ export class LifeScheduler {
     }
   }
   private report(result: CognitiveResult): void { try { this.options.onResult?.(result); } catch { /* observers cannot alter job state */ } }
-  private async pump(): Promise<void> {
+  async requestWake(petId:string):Promise<void> {
+    if(petId!==this.options.petId)throw Error('Incorrect pet wakeup');
     if (this.stopped || !this.started) return;
+    if(this.pendingSend)return this.pendingSend;
     const sending = (async () => {
       try {
         // Exclusive queue + singletonKey deduplicates across restarts and retries.
@@ -150,6 +145,9 @@ export class LifeScheduler {
     })();
     this.pendingSend = sending;
     try { await sending; } finally { if (this.pendingSend === sending) this.pendingSend = undefined; }
+  }
+  private async pump(): Promise<void> {
+    await this.requestWake(this.options.petId);
     // This independent timer repairs the wakeup after a job exhausts retries.
     if (!this.stopped && this.started) this.timer = setTimeout(() => { void this.pump(); }, this.options.intervalSeconds * 1000);
   }

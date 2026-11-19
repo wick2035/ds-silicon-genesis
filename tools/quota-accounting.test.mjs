@@ -25,12 +25,12 @@ test('预检和无效请求不会扣额度，真实请求只扣一次并记录�
  await assert.rejects(f.budget.withReserved('main',ticket,()=>consume(m.llm.stream({provider:'test',model:'test',messages:[]}))));
  assert.equal(s.requests(),0);assert.equal(f.d.legacy.usage[day()],undefined);
  const second=await f.budget.reserve('main');await f.budget.withReserved('main',second,()=>consume(m.llm.stream({provider:'test',model:'test',messages:[{role:'user',content:'hi'}]})));
- const u=f.d.legacy.usage[day()];assert.equal(s.requests(),1);assert.equal(u.totalCalls,1);assert.equal(u.modelCalls,1);assert.equal(u.callDetails.length,1);assert.equal(u.callDetails[0].purpose,'自主思考');assert.equal(u.callDetails[0].status,'completed');
+ const u=f.d.legacy.usage[day()];assert.equal(s.requests(),1);assert.equal(u.totalCalls,1);assert.equal(u.modelCalls,1);assert.equal(u.callDetails.length,1);assert.equal(u.callDetails[0].purpose,'综合自主决策');assert.equal(u.callDetails[0].status,'completed');
 });
 test('已发出的失败请求计入并标记失败，未发出时取消不扣次数',async t=>{
  const f=fixture(),s=await server(t,500),m=facade(f,s.url),args={provider:'test',model:'test',messages:[{role:'user',content:'hi'}]};
- await assert.rejects(f.budget.runAs('main','needs',()=>consume(m.llm.stream(args))));assert.equal(s.requests(),1);assert.equal(f.d.legacy.usage[day()].callDetails[0].status,'failed');
- const c=new AbortController();c.abort();await assert.rejects(f.budget.runAs('main','needs',()=>consume(m.llm.stream({...args,signal:c.signal}))));assert.equal(f.d.legacy.usage[day()].totalCalls,1);
+ await assert.rejects(f.budget.runAs('main','autonomous',()=>consume(m.llm.stream(args))));assert.equal(s.requests(),1);assert.equal(f.d.legacy.usage[day()].callDetails[0].status,'failed');
+ const c=new AbortController();c.abort();await assert.rejects(f.budget.runAs('main','autonomous',()=>consume(m.llm.stream({...args,signal:c.signal}))));assert.equal(f.d.legacy.usage[day()].totalCalls,1);
 });
 test('网络派发前取消可补偿已预留次数，恢复精神并且保留其他调用',async()=>{
  const f=fixture(),before=f.d.life.spirit.value;const release=await f.budget.runAs('main','autonomous',()=>f.budget.reserve('test','test',f.gate.signal));assert.equal(f.d.legacy.usage[day()].totalCalls,1);await release('not-sent');await release('not-sent');assert.equal(f.d.legacy.usage[day()].totalCalls,0);assert.equal(f.d.legacy.usage[day()].callDetails.length,0);assert.ok(Math.abs(f.d.life.spirit.value-before)<.01);
@@ -42,28 +42,28 @@ test('旧版累计和新增明细分开投影',()=>{
 
 test('连接被拒绝时未发出 HTTP 请求，不扣额度',async t=>{
  const f=fixture(),s=http.createServer();await new Promise(r=>s.listen(0,'127.0.0.1',r));const url=`http://127.0.0.1:${s.address().port}`;await new Promise(r=>s.close(r));
- const m=facade(f,url);await assert.rejects(f.budget.runAs('main','needs',()=>consume(m.llm.stream({provider:'test',model:'test',messages:[{role:'user',content:'hi'}]}))));
+ const m=facade(f,url);await assert.rejects(f.budget.runAs('main','autonomous',()=>consume(m.llm.stream({provider:'test',model:'test',messages:[{role:'user',content:'hi'}]}))));
  assert.equal(f.d.legacy.usage[day()].totalCalls,0);assert.equal(f.d.legacy.usage[day()].callDetails.length,0);
 });
 test('并发请求原子扣减，不超过主动额度',async t=>{
  const f=fixture(),s=await server(t),m=facade(f,s.url),args={provider:'test',model:'test',messages:[{role:'user',content:'hi'}]};f.d.legacy.config.learning.dailyModelCalls=3;
- const outcomes=await Promise.allSettled([1,2].map(()=>f.budget.runAs('main','needs',()=>consume(m.llm.stream(args)))));
+ const outcomes=await Promise.allSettled([1,2].map(()=>f.budget.runAs('main','autonomous',()=>consume(m.llm.stream(args)))));
  assert.equal(outcomes.filter(x=>x.status==='fulfilled').length,1);assert.equal(s.requests(),1);assert.equal(f.d.legacy.usage[day()].totalCalls,1);
 });
 
-test('精神耗尽时取消必要需求请求，不会凭空增加精神',async()=>{
- const f=fixture();f.d.life.spirit.value=0;const release=await f.budget.runAs('main','needs',()=>f.budget.reserve('test','test',f.gate.signal));await release('not-sent');assert.equal(f.d.life.spirit.value,0);
+test('精神耗尽不会为食物需求绕过自主限制',async()=>{
+ const f=fixture();f.d.life.spirit.value=0;
+ await assert.rejects(f.budget.runAs('main','autonomous',()=>f.budget.reserve('test','test',f.gate.signal)),/额度不足/);
+ assert.throws(()=>f.budget.runAs('main','needs',()=>f.budget.reserve('test','test',f.gate.signal)),/类别无效/);
+ assert.equal(f.d.life.spirit.value,0);assert.equal(f.d.legacy.usage[day()],undefined);
 });
-test('没有目标时仍为真正的自主思考留额度，通知不能冒充思考耗尽它',async()=>{
+
+test('综合决策共享自主额度，只为日记与反思预留两次',async()=>{
  const f=fixture();f.d.legacy.config.learning.dailyModelCalls=12;
- for(let i=0;i<8;i++){const release=await f.budget.runAs('main','needs',()=>f.budget.reserve('test','test',f.gate.signal));await release('completed');}
- await assert.rejects(f.budget.runAs('main','needs',()=>f.budget.reserve('test','test',f.gate.signal)),/额度不足/);
- await assert.rejects(f.budget.runAs('main','autonomous',()=>f.budget.reserve('test','test',f.gate.signal),'工作完成提醒'),/额度不足/);
- const ticket=await f.budget.reserve('main');
- const release=await f.budget.withReserved('main',ticket,()=>f.budget.reserve('test','test',f.gate.signal));await release('completed');
- assert.equal(f.d.legacy.usage[day()].totalCalls,9);
- await assert.rejects(f.budget.runAs('main','needs',()=>f.budget.reserve('test','test',f.gate.signal)),/额度不足/);
- const next=await f.budget.reserve('main');
- const second=await f.budget.withReserved('main',next,()=>f.budget.reserve('test','test',f.gate.signal));await second('completed');
- assert.equal(f.d.legacy.usage[day()].totalCalls,10);
+ for(let i=0;i<10;i++){const release=await f.budget.runAs('main','autonomous',()=>f.budget.reserve('test','test',f.gate.signal),'综合自主决策');await release('completed');}
+ assert.equal(f.d.legacy.usage[day()].totalCalls,10);assert.equal(await f.budget.reserve('main'),null);
+ await assert.rejects(f.budget.runAs('main','autonomous',()=>f.budget.reserve('test','test',f.gate.signal)),/额度不足/);
+ for(const kind of ['diary','reflection']){const release=await f.budget.runAs('main',kind,()=>f.budget.reserve('test','test',f.gate.signal));await release('completed');}
+ assert.equal(f.d.legacy.usage[day()].totalCalls,12);
+ await assert.rejects(f.budget.runAs('main','diary',()=>f.budget.reserve('test','test',f.gate.signal)),/额度不足/);
 });

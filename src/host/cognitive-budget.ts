@@ -8,7 +8,7 @@ import type { KernelStore } from '../kernel/types.js';
 import type { PetGate, UnitOfWork } from '../storage/uow.js';
 import type { ModelBudget } from './model-facade.js';
 
-type Category='autonomous'|'needs'|'diary'|'reflection'|'interactive';
+type Category='autonomous'|'diary'|'reflection'|'interactive';
 type Context={petId:string;category:Category;ticket?:object;consumed:boolean;purpose?:string};
 type Charge={id:string;day:string;spiritCost:number};
 type Outcome='completed'|'failed'|'not-sent';
@@ -33,7 +33,7 @@ export class DurableCognitiveBudget implements CognitiveBudget, ModelBudget {
   }
   private chargeDraft(draft:CanonicalEnvelope,category:Category,purpose='',provider='',model=''):Charge {
     let spiritCost:number;
-    try{const before=advanceSpirit(draft.life).value;if(category==='interactive'||category==='needs')spendConversationSpirit(draft.life);else spendSpirit(draft.life,'thought');spiritCost=Math.max(0,before-draft.life.spirit!.value);}catch{throw exhausted;}
+    try{const before=advanceSpirit(draft.life).value;if(category==='interactive')spendConversationSpirit(draft.life);else spendSpirit(draft.life,'thought');spiritCost=Math.max(0,before-draft.life.spirit!.value);}catch{throw exhausted;}
     const pet=draft.legacy as Record<string,any>, constraints=draft.life.constraints;
     const limit=pet.config?.learning?.dailyModelCalls;
     if(category!=='interactive' && (constraints.paused || !Number.isSafeInteger(limit) || limit<0))throw exhausted;
@@ -48,15 +48,8 @@ export class DurableCognitiveBudget implements CognitiveBudget, ModelBudget {
       if(cap!==undefined && (!Number.isSafeInteger(cap)||cap<0||usage.interactiveCalls>=cap))throw exhausted;
       usage.interactiveCalls++;
     } else {
-      const cap=category==='autonomous'||category==='needs'?Math.max(0,limit-2):limit;
+      const cap=category==='autonomous'?Math.max(0,limit-2):limit;
       if(usage.totalCalls>=cap)throw exhausted;
-      // Notices and meal decisions cannot spend the share reserved for actual
-      // cognition, even without an active goal. Keep the total cap unchanged.
-      if(category==='needs'||category==='autonomous'&&purpose!=='自主思考'){
-        const thoughts=(Array.isArray(usage.callDetails)?usage.callDetails:[]).filter((entry:any)=>entry.category==='autonomous'&&entry.purpose==='自主思考').length;
-        const reserve=Math.max(0,Math.min(Math.ceil(cap*.2),Math.max(0,cap-1))-thoughts);
-        if(usage.totalCalls>=cap-reserve)throw exhausted;
-      }
       usage.totalCalls++;usage.modelCalls++;
       (usage.callDetails??=[]).push({id,at:new Date().toISOString(),category,purpose,provider,model,status:'started'});
     }
@@ -109,7 +102,7 @@ export class DurableCognitiveBudget implements CognitiveBudget, ModelBudget {
       context.consumed=true;this.tickets.delete(context.ticket);
       if(context.category==='interactive')return ()=>{};
     }
-    const purpose=context.purpose??({autonomous:'自主行为',needs:'食物需求判断',diary:'日记整理',reflection:'成长反思',interactive:'互动'}[context.category]);
+    const purpose=context.purpose??({autonomous:'自主行为',diary:'日记整理',reflection:'成长反思',interactive:'互动'}[context.category]);
     const charged=await this.charge(context.petId,context.category,purpose,first,_model??'',signal);
     if(!charged)throw new Error('模型调用额度不足');
     if(signal.aborted){await this.finish(context.petId,context.category,charged,'not-sent');throw new Error('模型请求已取消');}
@@ -118,12 +111,12 @@ export class DurableCognitiveBudget implements CognitiveBudget, ModelBudget {
   }
   withReserved<T>(petId:string,ticket:object,fn:()=>Promise<T>):Promise<T>{
     if(this.tickets.get(ticket)!==petId)throw Error('模型预算票据无效');
-    return this.context.run({petId,category:'autonomous',purpose:'自主思考',ticket,consumed:false},async()=>{try{return await fn();}finally{this.tickets.delete(ticket);}});
+    return this.context.run({petId,category:'autonomous',purpose:'综合自主决策',ticket,consumed:false},async()=>{try{return await fn();}finally{this.tickets.delete(ticket);}});
   }
   /** Host wraps each non-cognitive entry point with the correct trusted pet
    * and category; callers must not supply this context from model output. */
   runAs<T>(petId:string,category:Category,fn:()=>Promise<T>,purpose?:string):Promise<T>{
-    if(!petId || !['autonomous','needs','diary','reflection','interactive'].includes(category))throw new Error('模型预算类别无效');
+    if(!petId || !['autonomous','diary','reflection','interactive'].includes(category))throw new Error('模型预算类别无效');
     return this.context.run({petId,category,consumed:false,purpose},fn);
   }
 }

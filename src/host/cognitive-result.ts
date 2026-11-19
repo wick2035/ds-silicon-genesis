@@ -9,6 +9,9 @@ import type { PetGate, UnitOfWork, OutboxDispatcher } from '../storage/uow.js';
 import type { ActionCoordinator } from './action-coordinator.js';
 import {validateActionParameters} from './action-parameters.js';
 import {appendMoment} from './moment-publishing.js';
+import {clearCookerReminder} from './rice-cooker.js';
+import {hasRunningChat} from './active-conversation.js';
+import {autonomousDecisionKey,repeatedAutonomousAction} from './autonomous-context.js';
 interface Reader {loadEnvelope(petId:string):Promise<CanonicalEnvelope|null>}
 const key=(kind:string,value:unknown)=>`${kind}:${createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0,32)}`;
 type Proposed=Extract<CognitiveResult,{status:'proposed'}>;
@@ -22,6 +25,9 @@ export class CognitiveResultCoordinator {
   async claimCognition(petId:string,intervalSeconds:number,signal:AbortSignal):Promise<boolean>{
     return this.gate.run(petId,async()=>{
       const state=await this.reader.loadEnvelope(petId);if(!state||state.life.constraints.paused||signal.aborted||this.gate.signal.aborted)return false;
+      const pet=state.legacy as any;
+      if(pet.config?.autonomousPaused||pet.growth?.stopAt||state.humanity.sleeping||hasRunningChat(state)||
+        state.life.actions.some(a=>a.actionType!=='labor.step'&&['PROPOSED','PENDING','DISPATCHED'].includes(a.status)))return false;
       const spirit=advanceSpirit(state.life);if(spirit.mode!=='awake'||spirit.value<2)return false;
       const now=Date.now(), prior=state.life.nextCognitionAt;
       if(prior && (!Number.isFinite(Date.parse(prior)) || Date.parse(prior)>now))return false;
@@ -39,6 +45,7 @@ export class CognitiveResultCoordinator {
         if(state.constraints.paused) throw new Error('自主行为已暂停');
         const valid=(id:string)=>!Object.hasOwn(life.invalidSources,id) && life.events.some(e=>e.eventId===id);
         const candidates=result.candidates;
+        if(result.observedCookerReminderId)clearCookerReminder(draft,result.observedCookerReminderId);
         if(candidates.thought){
           const t=candidates.thought;if(!t.sourceIds.every(valid))throw Error('念头来源已变化');
           const id='thought:'+randomUUID(),at=new Date().toISOString();
@@ -140,7 +147,7 @@ export class CognitiveResultCoordinator {
           const step=possible?.steps.find(s=>s.status==='pending');
           if(step && (step.readSearchResult || step.actionType!==proposal.actionType || JSON.stringify(step.parameters)!==JSON.stringify(proposal.parameters) || step.goalId!==proposal.goalId || !step.requiredCapabilities.every(x=>proposal.requiredCapabilities.includes(x)))) throw new Error('行动与计划步骤不匹配');
           if(step){step.status='in_progress';step.actionId=proposal.id;proposal.sourceIds=[...new Set([...proposal.sourceIds,...step.sourceIds])];}
-          const now=new Date().toISOString();life.actions.push({...structuredClone(proposal),autonomous:true,status:'PROPOSED',createdAt:now,updatedAt:now});
+          const now=new Date().toISOString();life.actions.push({...structuredClone(proposal),autonomous:true,decisionKey:autonomousDecisionKey(draft,proposal.actionType,proposal.parameters),status:'PROPOSED',createdAt:now,updatedAt:now});
         }
         mergeDuplicateGoals({...life,petId},new Date().toISOString());
         return {};
@@ -170,11 +177,14 @@ export class CognitiveResultCoordinator {
     const state=await this.reader.loadEnvelope(petId);if(!state||state.life.constraints.paused||signal.aborted||this.gate.signal.aborted)return;
     const action=state.life.actions.find(a=>a.id===actionId);if(!action)return;
     if(action.status==='PROPOSED'){
+      if(action.autonomous&&repeatedAutonomousAction(state,action.actionType,action.parameters,action.id,action.goalId)){
+        await this.rejectProposal(petId,actionId,'相同条件下已有相同尝试，请等待新条件或选择其他事情');return;
+      }
       try {if(!goalIsRunnable(state.life,action.goalId))throw Error('行动目标已暂停或失效');validateActionParameters(action.actionType,action.parameters);if(!this.dispatcher.hasExecutor(action.actionType))throw Error('行动执行器不可用');const latest:LifeState={...structuredClone(state.life),petId,version:state.version,...this.projectBody(state)};validateProposal(latest,{...action,expectedStateVersion:state.version});}
       catch(error){await this.rejectProposal(petId,actionId,error instanceof Error?error.message:'行动不可用');return;}
       try{await this.actions.queue(petId,actionId,state.version);}catch(error){
         const message=error instanceof Error?error.message:'';
-        if(!/当前桌面空间或工作状态不允许走动|她在网页工地里|她在稻田里|精神不足|探索权限不可用|探索额度配置无效|今日探索额度已用完|今日联网搜索额度已用完|探索饭钱配置无效|模拟饭钱不足|图片来源无效/.test(message))throw error;
+        if(!/当前桌面空间或工作状态不允许走动|她在网页工地里|她在稻田里|精神不足|探索权限不可用|探索额度配置无效|今日探索额度已用完|今日联网搜索额度已用完|探索饭钱配置无效|模拟饭钱不足|图片来源无效/.test(message)&&!action.actionType.startsWith('work.')&&!['service.buy-rice','service.cook-rice','service.eat-rice'].includes(action.actionType))throw error;
         const fresh=await this.reader.loadEnvelope(petId);if(fresh?.life.actions.find(a=>a.id===actionId)?.status==='PROPOSED')await this.rejectProposal(petId,actionId,message);else throw error;return;
       }
     }
@@ -233,7 +243,7 @@ export class CognitiveResultCoordinator {
         const now=new Date().toISOString();
         currentStep.sourceIds=proposal.sourceIds;
         currentPlan.sourceIds=[...new Set([...currentPlan.sourceIds,...proposal.sourceIds])];
-        currentStep.status='in_progress';currentStep.actionId=id;draft.life.actions.push({...proposal,autonomous:true,status:'PROPOSED',createdAt:now,updatedAt:now});return {};
+        currentStep.status='in_progress';currentStep.actionId=id;draft.life.actions.push({...proposal,autonomous:true,decisionKey:autonomousDecisionKey(draft,proposal.actionType,proposal.parameters),status:'PROPOSED',createdAt:now,updatedAt:now});return {};
       });
       await this.runAction(petId,id,signal);return true;});
   }

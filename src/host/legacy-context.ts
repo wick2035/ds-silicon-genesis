@@ -3,6 +3,7 @@ import {companionContext} from './companion-personality.js';
 import {farmFacts,farmVisit} from './farm.js';
 import {laborPaymentHistory} from './work-experience.js';
 import {laborHistory} from './labor-management.js';
+import {autonomousContext} from './autonomous-context.js';
 
 /** Read-only context from the canonical legacy domain. The caller supplies the
  * exact original persona text; historical records remain attributed data. */
@@ -37,7 +38,8 @@ export function legacyContext(personaDescription: string): LegacyProjection {
     const c=(pet.labor?.contracts||[]).find((x:any)=>['offered','working','paused','queued'].includes(x.status) && x.done<x.trips);
     const labor=c?{id:c.id,status:c.status,trips:c.trips,done:c.done,wage:c.wage,wageUnspecified:c.wageUnspecified===true,paid:c.paid,carrying:!!c.carrying,nextDecision:c.nextDecision,workPermit:!!c.workPermit,behavior:c.behavior,counter:c.counter??null}:null;
     const field=farmFacts(envelope);
-    return {companion:companionContext(envelope),...(field?{farm:{...field,inside:!!farmVisit(envelope),operation:pet.worksite?.inside||pet.worksite?.requested?null:field.operation}}:{}),proactiveContact:{balance:pet.wallet?.balance??0,sentencePrice:0.2,maxSentences:3,intervalSeconds:7200},labor,laborHistory:laborHistory(pet),laborPayment:laborPaymentHistory(envelope.life),worksite:structuredClone(pet.worksite||{inside:false,forced:false}),personaDescription,traits:structuredClone(personaStillValid ? growth.persona?.traits || {} : {}),
+    const autonomy=autonomousContext(envelope);
+    return {autonomy,companion:companionContext(envelope),...(field?{farm:{...field,inside:!!farmVisit(envelope),operation:pet.worksite?.inside||pet.worksite?.requested?null:field.operation}}:{}),proactiveContact:{balance:pet.wallet?.balance??0,sentencePrice:0.2,maxSentences:3,intervalSeconds:7200},labor,laborHistory:laborHistory(pet),laborPayment:laborPaymentHistory(envelope.life),worksite:structuredClone(pet.worksite||{inside:false,forced:false}),personaDescription,traits:structuredClone(personaStillValid ? growth.persona?.traits || {} : {}),
       interests:structuredClone(personaStillValid ? growth.persona?.interests || [] : []),skills:records('skills'),strategies:records('strategies'),attempts};
   };
 }
