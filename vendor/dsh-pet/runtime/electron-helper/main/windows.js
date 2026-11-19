@@ -230,9 +230,13 @@ function createWindows({
     };
   }
 
+  const fixedDesktopCanvas = platform === 'win32' && !!process.env.SILICON_HELPER_EPOCH;
+
   /** 一只宠物一个窗口；返回窗口，泵与清理都在这里装好。 */
   function createPetWindow(pet, geo, scale) {
-    const win = new BrowserWindow(windowOptions(petWindowSize(pet.size * scale), geo.hull));
+    // Floor tokens can appear anywhere in the work area while the pointer is captured.
+    const size = fixedDesktopCanvas ? geo.hull : petWindowSize(pet.size * scale);
+    const win = new BrowserWindow(windowOptions(size, geo.hull));
     win.setAlwaysOnTop(true, topmostLevel(process.platform));
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     // 被遮挡的窗口默认暂停渲染，表现成「消失」；关掉后台节流让它持续渲染
@@ -287,6 +291,7 @@ function createWindows({
       workAreaH: String(geo.hull.height),
       workAreaX: String(geo.hull.x),
       workAreaY: String(geo.hull.y),
+      fixedDesktopCanvas: fixedDesktopCanvas ? '1' : '0',
       areas: JSON.stringify(geo.areas),
       workAreas: JSON.stringify(geo.workAreas),
       topInsetRatio: String(geo.topInsetRatio),

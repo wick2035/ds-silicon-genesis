@@ -136,10 +136,10 @@
   // never inherits a moving OS window origin. Transparent regions still pass through.
   proto.fitWindow=function(){
     const fit=old.fitWindow.call(this),coins=this.tokenScene?.tokens?.coins.filter(c=>c.surface==='desktop')||[];
-    if(!coins.length){this.tokenOrigin={x:fit.x,y:fit.y};return fit;}
+    if(!CONFIG.fixedDesktopCanvas&&!coins.length){this.tokenOrigin={x:fit.x,y:fit.y};return fit;}
     const next={x:0,y:0,width:VIEW.w,height:VIEW.h,offsetX:fit.x+fit.offsetX,offsetY:fit.y+fit.offsetY};this.tokenOrigin={x:0,y:0};this.applyWinOffset(next.offsetX,next.offsetY);return next;
   };
   proto.reportWindow=function(fit){old.reportWindow.call(this,fit);this.tokenScene?.paint();if(this.inputRegionElements)this.syncInputRegions();};
-  proto.onMouseMove=function(e){old.onMouseMove.call(this,e);for(const {el}of this.tokenScene?.nodes.values()||[]){const r=el.getBoundingClientRect();if(e.clientX>=r.left&&e.clientX<=r.right&&e.clientY>=r.top&&e.clientY<=r.bottom){this.setInteractive(true);break;}}};
+  proto.onMouseMove=function(e){old.onMouseMove.call(this,e);for(const {el}of this.tokenScene?.nodes.values()||[]){if(el.disabled)continue;const r=el.getBoundingClientRect();if(e.clientX>=r.left&&e.clientX<=r.right&&e.clientY>=r.top&&e.clientY<=r.bottom){this.setInteractive(true);break;}}};
   proto.dispose=function(...args){clearTimeout(this.tokenClickTimer);this.stopTokenSpaceWatch();this.unsubscribeTokenSpace?.();this.tokenScene?.dispose();return old.dispose.apply(this,args);};
 })();

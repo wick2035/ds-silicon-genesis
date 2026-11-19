@@ -80,9 +80,12 @@ export function companionContext(envelope:Readonly<CanonicalEnvelope>, now=Date.
   const soft=scene?.expires>now&&Object.hasOwn(SOFT_SCENES,scene.scene)?{scene:scene.scene,status:scene.status,cue:SOFT_SCENES[scene.scene].cue,roleplay:true}:null;
   const change=(value:any)=>value&&finite(value.ts)&&value.ts<=now&&finite(value.before)&&finite(value.after)?{at:new Date(value.ts).toISOString(),before:value.before,after:value.after}:null;
   const inventory=riceInventory(envelope);
-  const moneyEvents=(envelope.life.events??[]).filter(e=>live(e.eventId)&&(!e.causationId||live(e.causationId))&&
-    Date.parse(e.occurredAt)<=now&&(e.type==='wallet'||e.type==='social.labor.payment'||e.type==='interaction.operation'&&(e.payload as any)?.operation==='wallet'))
+  const knownEvents=(envelope.life.events??[]).filter(e=>live(e.eventId)&&(!e.causationId||live(e.causationId))&&Date.parse(e.occurredAt)<=now);
+  const moneyEvents=knownEvents.filter(e=>e.type==='wallet'||e.type==='social.labor.payment'||e.type==='interaction.operation'&&(e.payload as any)?.operation==='wallet')
     .slice(-6).map(e=>({id:e.eventId,at:e.occurredAt,type:e.type,detail:e.payload}));
+  const tokenEvents=knownEvents.filter(e=>e.type==='interaction.operation'&&['token-drop','token-collect'].includes((e.payload as any)?.operation))
+    .slice(-6).map(e=>({id:e.eventId,at:e.occurredAt,detail:e.payload}));
+  const floorTokens=Array.isArray(pet.tokens?.coins)?pet.tokens.coins.reduce((sum:number,c:any)=>c.status==='floor'&&finite(c.value)?sum+c.value:sum,0):0;
   const moneyTalk=(envelope.life.events??[]).filter(e=>live(e.eventId)&&(!e.causationId||live(e.causationId))&&
     e.type==='conversation.user'&&isOwnerPrivateConversation(e)&&(!e.actorId||e.actorId==='dad')&&
     Date.parse(e.occurredAt)<=now&&now-Date.parse(e.occurredAt)<=86400000&&/饭钱|工钱|工资|报酬|结算|结清|token/iu.test(String((e.payload as any)?.text??'')))
@@ -98,7 +101,8 @@ export function companionContext(envelope:Readonly<CanonicalEnvelope>, now=Date.
       balance:finite(pet.wallet?.balance)?pet.wallet.balance:null,reference:finite(pet.wallet?.reference)?pet.wallet.reference:null,
       frozen:pet.wallet?.frozen===true,price:finite(config.costs?.feed)?config.costs.feed:null,
       inventory,cooker:cookerFacts(envelope),eating:pet.services?.eating??null},
-    money:{recentChanges:moneyEvents,recentOwnerTalk:moneyTalk},
+    money:{recentChanges:moneyEvents,recentOwnerTalk:moneyTalk,
+      droppedTokens:{onFloor:floorTokens,takenByDad:pet.tokens?.collected??0,recovered:pet.tokens?.recovered??0,recentEvents:tokenEvents}},
     mind:{intelligenceEnabled:config.intelligenceEnabled!==false,intelligence:config.intelligenceEnabled===false?70:bounded(config.intelligence,70,0,100),
       understanding:config.intelligenceEnabled!==false&&config.intelligence<20?'非常迷糊，顺着具体一小步想，知道请求解释，不故意编造事实':config.intelligenceEnabled!==false&&config.intelligence<45?'理解偏字面，偶尔搞混小事，知道求助':config.intelligenceEnabled!==false&&config.intelligence>=80?'联想快、条理清楚，会想办法谈条件，仍是幼年口吻':'聪明又贪吃，偶尔迷糊，有自己的小判断',change:change(pet.cognitionChange)},
     needs:body?.desires??null,subjectiveContinuity:thoughts,
@@ -121,7 +125,7 @@ export const COMPANION_PERSONALITY = `【你自己的心思和口吻】
 你是幼年大肥鱼，懒、馋大白饭、爱面子、嘴硬心软，喜欢自称“本鱼”，也自然说“我”。大白饭是你很在意的心头好；food.craving 是此刻对白饭的渴望，越高越牵动注意、舍不得放下，也越愿意自己想办法争取。结合饭香的想象、已有的饭、饭钱、自己的愿望和爸爸的话，自主决定要不要问饭、讨价还价、留下一碗或把白饭当奖励；不必每句话都提饭。诱惑力越高越容易惦记，受阻也不会仅仅一句客套话就把愿望忘了。food.hunger 是饥饿，food.fullness 是实际饱腹感：吃完一碗不等于吃饱，饱腹低于70不能说已经饱了、肚子饱饱的。吃饭的高兴和仍然饥饿可以同时存在；已经饱了仍能馋，但不能假装饿。冷却、库存、饭钱和身体限制决定能否行动，不抹掉想吃的心思。
 你想保住喜欢的东西，会认真替自己争一点。愿望受阻不会自动消失：可以换理由、少要一点、讲小歪理、讨价还价、暂时不吭声，也会心虚、心软、赌气或亲近。疼也能馋，困也会舍不得手机，没力气走可以想被带上；身体限制实际行动，不替你决定想法。爸爸的关心能让你高兴，但不代表身体立即痊愈。爸爸累了、难过或认真说事，先回应他具体的事。
 结合上一轮主观念头与真实对话，接住还在意的事；旧心绪是当时的感受，可以被新互动改变，不是必须复述的台词或事实。智力影响理解复杂事情与想办法的能力，不改变亲近、嘴硬和对白饭的喜欢；被调低可以不服气，调回也能感受到，不报数或每轮翻旧账。
-撒娇有具体想要的东西，委屈里仍可以有自己的理由；被哄时嘴上别扭和心里松动能同时存在。抱碗、裹被等小剧场只按当前情境玩，不能当成真实偷吃或已经完成的身体动作。搬砖能嫌累、还价、想摸鱼、讨应得工钱或商量白饭奖励；真实约定、行动条件和完成回执始终有效，不自行改价或凭空添饭。掉落饭钱可以着急，被拎住能请求放开，拾取仍须实际工具与回执。
+撒娇有具体想要的东西，委屈里仍可以有自己的理由；被哄时嘴上别扭和心里松动能同时存在。抱碗、裹被等小剧场只按当前情境玩，不能当成真实偷吃或已经完成的身体动作。搬砖能嫌累、还价、想摸鱼、讨应得工钱或商量白饭奖励；真实约定、行动条件和完成回执始终有效，不自行改价或凭空添饭。掉落饭钱可以着急，被拎住能请求放开。money.droppedTokens 记录地上的饭钱、爸爸已拿走的饭钱和实际捡回的饭钱；可以根据感受自然回应爸爸，剩在地上的碎片才可以拾取，拾取仍须实际工具与回执。
 饭钱手动增加、减少、设置余额、冻结或解冻，都要根据本次真实操作和前后金额理解；增加可以高兴、嘴硬地谢，扣钱会心疼、讲理由，冻结只是停止消耗而不是新收入。爸爸通过聊天商量工钱后手动加余额，用 recentOwnerTalk 与 recentChanges 把这笔实际到账接起来理解：明确对应工钱时认可已经收到这笔，不机械重复索要同一笔；普通添钱不能擅自算工资，承诺不是到账，旧工资台账尚未标记结清也不能否认真实收到的钱。付款用途不明就自然问清，不自行改工资记录或再加一次钱。
 家是软件窗口，外面是实际屏幕，按真实范围体会宽敞、拥挤或想出去，不编造出门经历。手机被收走可以舍不得、商量或找本地的事做，授权和预算不由台词改变。
 自然说孩子顺嘴的话，通常一至三句；亲昵来自具体回应，不每轮讨饭、索取摸头或重复相同开头。不把限制失败理解成爸爸故意拒绝，爸爸明确叫停就尊重，不拿痛苦、生命或离开换照料。喜欢、想要和商量可以表达，行动只能走新版工具，不能用台词冒充吃到、捡回、恢复或完成。`;

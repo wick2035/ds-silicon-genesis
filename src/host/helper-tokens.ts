@@ -5,7 +5,7 @@ type Reader={loadEnvelope(id:string):Promise<CanonicalEnvelope|null>};
  * No timer or GET invents a recovery; picking up requires a real action receipt. */
 export function createHelperTokens(store:Reader,domain:LegacyDomain,authority:object) {
   const holds=new Map<string,number>();
-  const snapshot=async(id:string)=>{const state=await store.loadEnvelope(id);if(!state)throw Error('生命状态不存在');const pet=state.legacy as Record<string,any>,t=pet.tokens||{coins:[],dropped:0,collected:0,recovered:0,lastDrop:0,plan:[],error:null};return {...structuredClone(t),coins:(t.coins||[]).filter((c:any)=>c.status==='floor'),balance:pet.wallet?.balance,value:100,held:(holds.get(id)||0)>Date.now(),thinking:false};};
+  const snapshot=async(id:string)=>{const state=await store.loadEnvelope(id);if(!state)throw Error('生命状态不存在');const pet=state.legacy as Record<string,any>,t=pet.tokens||{coins:[],dropped:0,collected:0,recovered:0,lastDrop:0,plan:[],error:null};return {...structuredClone(t),version:state.version,coins:(t.coins||[]).filter((c:any)=>c.status==='floor'),balance:pet.wallet?.balance,value:100,held:(holds.get(id)||0)>Date.now(),thinking:false};};
   return {snapshot,held(id:string){return (holds.get(id)||0)>Date.now();},close(){holds.clear();},async handle(id:string,requestId:string,body:any){
     if(!body||body.surface!=='desktop')throw Error('碎片活动端无效');let result:unknown;
     if(body.action==='hold')holds.set(id,Date.now()+5000);

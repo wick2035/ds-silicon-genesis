@@ -74,7 +74,8 @@ function createTokenScene(options) {
     paintOverlay();
   }
   function sync(data) {
-    if(stopped)return;const previousFloor=tokens?.coins.filter(c=>c.surface===options.surface).length||0;tokens=data;options.onState?.(data);
+    if(stopped||data.version<tokens?.version)return;
+    const previousFloor=tokens?.coins.filter(c=>c.surface===options.surface).length||0;tokens=data;options.onState?.(data);
     balance.textContent='饭钱 '+(data.balance||0).toLocaleString('zh-CN')+' token';
     hint.textContent=dragging&&data.coins.length?'钱掉出来了，松手让她去捡':data.thinking?'正在想办法捡回来…':'空格 + 拖动晃出饭钱 · 每片 100';
     retry.hidden=!data.coins.some(c=>c.surface===options.surface)||data.thinking||dragging;
@@ -109,7 +110,9 @@ function createTokenScene(options) {
     const epoch=readEpoch;
     if(body && options.surface==='desktop'){const d=await window.petBridge.reportInteraction('tokens',{...body,surface:'desktop'});if(!d.ok)throw Error(d.message||'饭钱未能同步，请重试');sync(d.tokens);return d;}
     const r=await fetch(url,{...(body?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...body,surface:options.surface})}:{}),cache:'no-store',signal:AbortSignal.any([abort.signal,AbortSignal.timeout(35000)])});
-    const d=await r.json();if(!r.ok||!d.ok)throw Error(d.message||'饭钱未能同步，请重试');if(body||epoch===readEpoch)sync(d.tokens);return d;
+    const d=await r.json();if(!r.ok||!d.ok)throw Error(d.message||'饭钱未能同步，请重试');
+    if(body||Number.isSafeInteger(d.tokens?.version)||epoch===readEpoch)sync(d.tokens);
+    return d;
   }
   async function drain() {
     if(processing)return;processing=true;
@@ -141,7 +144,8 @@ function createTokenScene(options) {
   window.addEventListener('keyup',e=>{if(e.code==='Space')updateSpace(false);},{signal:abort.signal});
   window.addEventListener('blur',()=>{updateSpace(false);scene.setNativeSpace(undefined);scene.release();},{signal:abort.signal});
   window.addEventListener('resize',paint,{signal:abort.signal});
-  async function poll(){try{if(!mutations)await request();}catch(e){if(!stopped)announce(e.message);}finally{if(!stopped)timer=setTimeout(poll,900);}}
+  // A committed drop can be read even while its IPC reply is delayed.
+  async function poll(){try{if(native||!mutations)await request();}catch(e){if(!stopped)announce(e.message);}finally{if(!stopped)timer=setTimeout(poll,900);}}
   void poll();
   status.addEventListener('focusout',()=>queueMicrotask(()=>{flash();}));
   scene.dispose=()=>{if(stopped)return;if(dragging)void fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'release',surface:options.surface}),keepalive:true}).catch(()=>{});stopped=true;abort.abort();clearTimeout(timer);clearTimeout(overlayTimer);clearTimeout(noteTimer);clearInterval(heartbeat);layer.remove();status.remove();note.remove();nodes.clear();};

@@ -81,20 +81,18 @@ function pointerZone(bounds, point, margins) {
  * @returns 新的穿透状态。
  */
 function decideWindowIgnore(bounds, point, ignoring, busy, offBodyMs = 0, input, margins) {
-  if (busy) {
-    if (!input || input.dragging) return false; // 兼容旧渲染端；拖拽租约绝不被位置判定打断
-    const inControl = input.rects.some(
-      (r) =>
-        point.x >= bounds.x + r.x &&
-        point.x < bounds.x + r.x + r.width &&
-        point.y >= bounds.y + r.y &&
-        point.y < bounds.y + r.y + r.height,
-    );
-    return !inControl && pointerZone(bounds, point, margins) !== 'body';
-  }
+  if (busy && (!input || input.dragging)) return false; // 拖拽租约不受位置判定打断
+  const inControl = input?.rects?.some(
+    (r) =>
+      point.x >= bounds.x + r.x &&
+      point.x < bounds.x + r.x + r.width &&
+      point.y >= bounds.y + r.y &&
+      point.y < bounds.y + r.y + r.height,
+  );
   const zone = pointerZone(bounds, point, margins);
+  if (busy) return !inControl && zone !== 'body';
   if (zone === 'outside') return true; // 窗外：恢复穿透
-  if (zone === 'body') return false; // 宠物身上：可交互
+  if (zone === 'body' || inControl) return false; // 身体和地上的饭钱等控件可交互
   if (offBodyMs >= OFF_BODY_RELEASE_MS) return true; // 余量区停留超时：恢复穿透
   return ignoring; // 余量区：保持（菜单/弹窗由 busy 覆盖）
 }
