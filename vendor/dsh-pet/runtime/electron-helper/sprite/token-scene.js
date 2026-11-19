@@ -25,7 +25,8 @@ function tokenFloorLayout(coins, areas, view) {
 function createTokenScene(options) {
   const host=options.host, nodes=new Map(), abort=new AbortController(),native=options.surface==='desktop';
   let overlayTimer,noteTimer,noticeUntil=0,lastAnnouncement='';
-  let stopped=false, timer, heartbeat, sample, lastDrop=0, queue=[], processing=false, mutations=0, tokens=null, dragging=false, space=false,readEpoch=0,lastError='';
+  let stopped=false, timer, heartbeat, sample, lastDrop=-Infinity, queue=[], processing=false, mutations=0, tokens=null, dragging=false, space=false,readEpoch=0,lastError='';
+  let nativeSpace;
   const layer=document.createElement('div');layer.className='pet-token-layer';layer.setAttribute('aria-label','地上的饭钱');host.append(layer);
   const status=document.createElement('div');status.className='pet-token-status';status.hidden=native;
   const balance=document.createElement('span'), hint=document.createElement('span'), retry=document.createElement('button');
@@ -33,11 +34,19 @@ function createTokenScene(options) {
   status.append(balance,hint,retry);host.append(status);
   const note=document.createElement('p');note.className='pet-token-note';note.setAttribute('role','status');host.append(note);
   const url=options.base+'/humanity/companion/tokens?pet='+encodeURIComponent(options.petId);
-  const scene={get tokens(){return tokens;},get dragging(){return dragging;},get space(){return space;},nodes};
+  const scene={get tokens(){return tokens;},get dragging(){return dragging;},get space(){return nativeSpace??space;},nodes};
+  function updateSpace(pressed, physical=false) {
+    const wasPressed=scene.space;
+    if(physical)nativeSpace=pressed;
+    else space=pressed;
+    if(wasPressed!==scene.space)sample=null;
+    paintOverlay();
+  }
+  scene.setNativeSpace=pressed=>updateSpace(pressed,true);
   function paintOverlay(){
     if(!native||stopped)return;
     const wasHidden=status.hidden;
-    status.hidden=!(dragging||space&&options.isHovered?.()||Date.now()<noticeUntil||status.contains(document.activeElement)&&document.activeElement.matches(':focus-visible'));
+    status.hidden=!(dragging||scene.space&&options.isHovered?.()||Date.now()<noticeUntil||status.contains(document.activeElement)&&document.activeElement.matches(':focus-visible'));
     if(status.hidden&&!note.textContent){if(!wasHidden)options.onOverlay?.();return;}
     const area=options.overlayArea?.()||{x:0,y:0,width:innerWidth,height:innerHeight};
     const left=Math.max(0,area.x)+8,top=Math.max(0,area.y)+8,right=Math.min(innerWidth,area.x+area.width)-8,bottom=Math.min(innerHeight,area.y+area.height)-8;
@@ -118,7 +127,7 @@ function createTokenScene(options) {
     void safePost('hold');heartbeat=setInterval(()=>void safePost('hold'),2000);options.onHold?.(true);
   };
   scene.sample=(x,y)=>{
-    if(!dragging||!space)return;const now=performance.now();sample=tokenShakeSample(sample,x,y,now);
+    if(!dragging||!scene.space)return;const now=performance.now();sample=tokenShakeSample(sample,x,y,now);
     if(sample.drop&&now-lastDrop>260){lastDrop=now;const g=options.geometry();
       const spread=(Math.random()-.5)*.22,fromX=Math.max(.03,Math.min(.97,g.x)),fromY=Math.max(.03,Math.min(.97,g.y));
       void safePost('drop',{key:crypto.randomUUID(),x:Math.max(.045,Math.min(.955,fromX+spread)),y:g.floorY,fromX,fromY});
@@ -128,9 +137,9 @@ function createTokenScene(options) {
   scene.post=post;scene.paint=paint;scene.announce=announce;
   retry.addEventListener('click',()=>{retry.disabled=true;void post('recover').catch(e=>announce(e.message)).finally(()=>retry.disabled=false);});
   const typing=e=>e.target?.closest?.('input,textarea,[contenteditable=true]');
-  window.addEventListener('keydown',e=>{if(e.code==='Space'&&!typing(e)){space=true;if(dragging||options.isHovered?.())e.preventDefault();paintOverlay();}},{signal:abort.signal});
-  window.addEventListener('keyup',e=>{if(e.code==='Space'){space=false;paintOverlay();}},{signal:abort.signal});
-  window.addEventListener('blur',()=>{space=false;scene.release();},{signal:abort.signal});
+  window.addEventListener('keydown',e=>{if(e.code==='Space'&&!typing(e)){updateSpace(true);if(dragging||options.isHovered?.())e.preventDefault();}},{signal:abort.signal});
+  window.addEventListener('keyup',e=>{if(e.code==='Space')updateSpace(false);},{signal:abort.signal});
+  window.addEventListener('blur',()=>{updateSpace(false);scene.setNativeSpace(undefined);scene.release();},{signal:abort.signal});
   window.addEventListener('resize',paint,{signal:abort.signal});
   async function poll(){try{if(!mutations)await request();}catch(e){if(!stopped)announce(e.message);}finally{if(!stopped)timer=setTimeout(poll,900);}}
   void poll();

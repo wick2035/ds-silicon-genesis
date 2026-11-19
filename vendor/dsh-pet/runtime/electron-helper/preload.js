@@ -15,6 +15,12 @@ contextBridge.exposeInMainWorld('petBridge', {
   canStartIdleMotion() { return ipcRenderer.invoke('pet:motion-ready'); },
   reportActionReceipt(receipt) { return ipcRenderer.invoke('pet:action-receipt', receipt); },
   reportInteraction(kind, detail) { return ipcRenderer.invoke('pet:interaction', {kind,detail}); },
+  watchTokenSpace(id, enabled) { ipcRenderer.send('pet:watch-token-space', id, enabled); },
+  onTokenSpace(callback) {
+    const listener = (_event, id, pressed) => callback(id, pressed);
+    ipcRenderer.on('pet:token-space', listener);
+    return () => { ipcRenderer.removeListener('pet:token-space', listener); };
+  },
   // 宠物窗口逐帧跟随：x/y/width/height 是窗口内容区坐标（用于移动窗口），
   // boxX/boxY 是宠物包围盒左上角的工作区坐标——碰撞站场必须用包围盒，窗口坐标差半只宠物宽。
   // size/bottomPad 让静止宠物也登记进碰撞站场，vx/vy 是当前速度（静止/拖拽为 0）。

@@ -1,6 +1,7 @@
 'use strict';
 (() => {
   const proto=PetSprite.prototype;
+  let nextSpaceWatch=0;
   const old=Object.fromEntries(['bindEvents','onPointerDown','onPointerMove','onPointerUp','onClick','fitWindow','reportWindow','inputBusy','onMouseMove','dispose','executeBody','playIdle'].map(k=>[k,proto[k]]));
   const style=document.createElement('style');style.textContent=PET_TOKEN_CSS+`
     .pet-token-native .pet-token-layer{z-index:2147483000}
@@ -26,15 +27,45 @@
       onOverlay:()=>this.syncInputRegions?.(),
       onHold:held=>this.painStage?.classList.toggle('pet-token-held',held),isHovered:()=>this.hoverBody,
     });
+    this.unsubscribeTokenSpace=window.petBridge?.onTokenSpace?.((id,pressed)=>{
+      if(id!==this.tokenSpaceWatch||!this.dragState.active)return;
+      this.tokenScene.setNativeSpace(pressed);
+      this.startTokenGrab();
+    });
     return result;
+  };
+  proto.startTokenGrab=function(){
+    if(!this.tokenPointer||this.tokenGrab||!this.tokenScene.space||this.sleeping)return;
+    this.cancelBody?.();
+    this.tokenGrab=true;
+    this.dragState.sling=false;
+    this.tokenScene.begin(...this.tokenPointer);
+  };
+  proto.stopTokenSpaceWatch=function(){
+    if(this.tokenSpaceWatch===undefined)return;
+    window.petBridge?.watchTokenSpace?.(this.tokenSpaceWatch,false);
+    this.tokenSpaceWatch=undefined;
+    this.tokenPointer=null;
+    this.tokenScene.setNativeSpace(undefined);
   };
   proto.onPointerDown=function(e){
     old.onPointerDown.call(this,e);
-    if(e.button===0&&this.tokenScene?.space&&!this.sleeping){this.cancelBody?.();this.tokenGrab=true;this.dragState.sling=false;this.tokenScene.begin(toLocal(e.screenX),toLocal(e.screenY));}
+    if(e.button!==0||!this.dragState.active||this.sleeping)return;
+    this.tokenPointer=[toLocal(e.screenX),toLocal(e.screenY)];
+    this.tokenSpaceWatch=++nextSpaceWatch;
+    window.petBridge?.watchTokenSpace?.(this.tokenSpaceWatch,true);
+    this.startTokenGrab();
   };
-  proto.onPointerMove=function(e){old.onPointerMove.call(this,e);if(this.dragState.active&&this.tokenScene?.space&&!this.tokenGrab&&!this.sleeping){this.cancelBody?.();this.tokenGrab=true;this.dragState.sling=false;this.tokenScene.begin(toLocal(e.screenX),toLocal(e.screenY));}if(this.dragState.active&&this.tokenScene?.dragging)this.tokenScene.sample(toLocal(e.screenX),toLocal(e.screenY));};
+  proto.onPointerMove=function(e){
+    old.onPointerMove.call(this,e);
+    if(!this.dragState.active||!this.tokenPointer)return;
+    this.tokenPointer=[toLocal(e.screenX),toLocal(e.screenY)];
+    this.startTokenGrab();
+    if(this.tokenGrab)this.tokenScene.sample(...this.tokenPointer);
+  };
   proto.pollTokenSoon=function(){for(const delay of [200,600,1200])setTimeout(()=>{if(!this.ac.signal.aborted)void this.pollBody();},delay);};
   proto.onPointerUp=function(e){
+    this.stopTokenSpaceWatch();
     if(this.tokenGrab){this.tokenGrab=false;this.stopThrow();this.dragTrail=[];this.dragState.sling=false;this.tokenJustDragged=true;clearTimeout(this.tokenClickTimer);this.tokenClickTimer=setTimeout(()=>this.tokenJustDragged=false,400);this.tokenScene.release();this.pollTokenSoon();}
     return old.onPointerUp.call(this,e);
   };
@@ -110,5 +141,5 @@
   };
   proto.reportWindow=function(fit){old.reportWindow.call(this,fit);this.tokenScene?.paint();if(this.inputRegionElements)this.syncInputRegions();};
   proto.onMouseMove=function(e){old.onMouseMove.call(this,e);for(const {el}of this.tokenScene?.nodes.values()||[]){const r=el.getBoundingClientRect();if(e.clientX>=r.left&&e.clientX<=r.right&&e.clientY>=r.top&&e.clientY<=r.bottom){this.setInteractive(true);break;}}};
-  proto.dispose=function(...args){clearTimeout(this.tokenClickTimer);this.tokenScene?.dispose();return old.dispose.apply(this,args);};
+  proto.dispose=function(...args){clearTimeout(this.tokenClickTimer);this.stopTokenSpaceWatch();this.unsubscribeTokenSpace?.();this.tokenScene?.dispose();return old.dispose.apply(this,args);};
 })();

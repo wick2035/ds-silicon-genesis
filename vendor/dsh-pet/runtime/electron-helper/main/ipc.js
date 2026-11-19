@@ -20,7 +20,10 @@ const { decideWindowIgnore } = require('../pointer-target.js');
 function registerIpc({ ipcMain, petWindows, shell, openTarget, petRoute, hostRequest, dpi }) {
   require('./worksite.js').register({ipcMain,petWindows,hostRequest,BrowserWindow,screen,app});
   const epoch = process.env.SILICON_HELPER_EPOCH || '';
-  if (epoch) require('./rice-cooker.js').register({ ipcMain, BrowserWindow, screen, petWindows, hostRequest, dpi });
+  if (epoch) {
+    require('./rice-cooker.js').register({ ipcMain, BrowserWindow, screen, petWindows, hostRequest, dpi });
+    require('./token-space.js').registerTokenSpace({ app, ipcMain, petWindows });
+  }
   const restraint = new Map();
   // Only elapsed system input inactivity is observed; no keys or pointer positions are collected.
   const idleTimer=setInterval(()=>{
