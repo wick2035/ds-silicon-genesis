@@ -128,12 +128,36 @@ test('scene checks helper generation, worksite ownership and the completed anima
   const response=api(new Request('http://localhost/api/life/farm',{method:'POST'}));
   await new Promise(setImmediate);
   const opening=await helper('snapshot');assert.ok(opening.openRequestId);
+  assert.equal(opening.enterOnOpen,false);
   await helper('open-ack',opening.openRequestId);
   assert.equal((await response).status,200);
+  assert.equal(farmVisit(state),undefined);
   await assert.rejects(scene.helper('main','stale',{action:'enter'}),/已断开/);
   await helper('enter');
   await assert.rejects(worksite.act('main','enter-forced'),/她在稻田/);
   await helper('leave');
+
+  const controller=new AbortController();
+  const entry=scene.requestEntry('main',controller.signal);
+  const cancelled=assert.rejects(entry,/进田已取消/);
+  await new Promise(setImmediate);
+  const request=await helper('snapshot');
+  assert.equal(request.enterOnOpen,true);
+  controller.abort();
+  await cancelled;
+  await helper('open-ack',request.openRequestId);
+  assert.equal(farmVisit(state),undefined);
+
+  const blockedEntry=scene.requestEntry('main',gate.signal);
+  const blocked=assert.rejects(blockedEntry,/正在休息/);
+  await new Promise(setImmediate);
+  const secondRequest=await helper('snapshot');
+  state.humanity.sleeping=true;
+  await assert.rejects(helper('open-ack',secondRequest.openRequestId),/正在休息/);
+  await blocked;
+  assert.equal(farmVisit(state),undefined);
+  state.humanity.sleeping=false;
+
   state.legacy.farmSeedBundles=4;
   const intent={id:'sow',type:'farm.tend',payload:{parameters:{operation:'plant',seedPurchase:farmFacts(state,now).seedPurchase}}};
   const receipt=scene.execute('main',intent,gate.signal);

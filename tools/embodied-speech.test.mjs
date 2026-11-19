@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createEmbodiedSpeech} from '../dist/host/embodied-speech.js';
-import {changeFarmWeather} from '../dist/host/farm.js';
+import {changeFarmWeather,farmFacts} from '../dist/host/farm.js';
+import {ActionCoordinator} from '../dist/host/action-coordinator.js';
+import {CanonicalActionLifecycle} from '../dist/host/action-lifecycle.js';
+import {projectBody} from '../dist/host/body-projection.js';
 import {createHumanity,advanceHumanity,reactHumanity} from '../vendor/dsh-pet/src/host/humanity.mjs';
 import {actionFacts} from '../dist/host/semantic-grounding.js';
 import {WriterLease} from '../dist/host/writer-lease.js';
 
-function fixture(resultStatus='COMPLETED'){
+function fixture(resultStatus='COMPLETED',enterFarm){
   const now=Date.now(),human=createHumanity(now);human.helperReady=true;human.restrained=false;
   let state={petId:'main',version:0,humanity:human,legacy:{services:{inventory:[{id:'rice-1',name:'白饭',status:'available'}]},wallet:{balance:100},config:{costs:{feed:20}}},life:{events:[{eventId:'user-1',type:'conversation.user',payload:{text:'先吃饭吧'}}],invalidSources:{},actions:[],receipts:[],goals:[],constraints:{paused:false,permissions:[],capabilities:[{name:'service.eat-rice',enabled:true},{name:'care.feed',enabled:true}]}}};
   let reads=0;const gate={signal:new AbortController().signal,run:async(_id,fn)=>fn()},reader={loadEnvelope:async()=>{reads++;return structuredClone(state);}};
@@ -14,9 +17,9 @@ function fixture(resultStatus='COMPLETED'){
   const actions={queue:async(_id,id)=>{state.life.actions.find(a=>a.id===id).status='PENDING';}};
   let dispatches=0;
   const dispatcher={dispatch:async id=>{dispatches++;const a=state.life.actions.find(a=>a.id===id);a.status=resultStatus;state.life.receipts.push({actionId:id,status:resultStatus});}};
-  const speech=createEmbodiedSpeech(reader,gate,uow,actions,dispatcher,async()=>({status:'PENDING'}),async()=>({status:'done'}));
+  const speech=createEmbodiedSpeech(reader,gate,uow,actions,dispatcher,async()=>({status:'PENDING'}),async()=>({status:'done'}),undefined,undefined,enterFarm);
   const options={embodied:{petId:'main',requestId:'speech-test',sourceIds:['user-1'],allowActions:true},system:'角色',messages:[{role:'user',content:'先吃饭'}],signal:gate.signal};
-  return {speech,options,dispatcher,get:()=>state,dispatches:()=>dispatches,reads:()=>reads};
+  return {speech,options,actions,dispatcher,get:()=>state,dispatches:()=>dispatches,reads:()=>reads};
 }
 const call=(id,name,input)=>({type:'tool-call-delta',index:1,id,name,argumentsDelta:JSON.stringify(input)});
 async function collect(stream){let text='';for await(const p of stream)if(p.type==='text')text+=p.text;return text;}
@@ -46,6 +49,56 @@ test('speech knows the current farm weather at the worksite and refreshes when i
   }};
   assert.equal(await collect(f.speech.wrap(model).stream(f.options)),'稻田现在是重度台风。');
   assert.equal(rounds,2);
+});
+
+test('chat can enter the farm without submitting an order for seeds or farm work',async()=>{
+  let entered=false,rounds=0;
+  const f=fixture('COMPLETED',async(id,signal)=>{
+    assert.equal(id,'main');assert.equal(signal.aborted,false);
+    entered=true;
+    return {status:'COMPLETED',inside:true};
+  });
+  changeFarmWeather(f.get(),'light-rain',Date.now());
+  f.options.messages[0].content='自己进去稻田里，我教你种地';
+  const model={async *stream(o){
+    if(++rounds===1){
+      assert.ok(o.tools.some(tool=>tool.name==='enter_farm'));
+      yield call('enter','enter_farm',{});
+    }else{
+      assert.equal(entered,true);
+      assert.deepEqual(JSON.parse(o.messages.at(-1).content).result,{status:'COMPLETED',inside:true});
+      yield {type:'text',text:'我到田边了，等你教我。'};
+    }
+  }};
+  assert.equal(await collect(f.speech.wrap(model).stream(f.options)),'我到田边了，等你教我。');
+  assert.deepEqual(f.get().life.actions,[]);
+  assert.equal(f.get().legacy.wallet.balance,100);
+});
+
+test('a chat farm proposal passes the real queue and dispatch checks with live weather evidence',async()=>{
+  const f=fixture(),state=f.get();let rounds=0,intent;
+  changeFarmWeather(state,'light-rain',Date.now());
+  state.life.constraints.capabilities.push({name:'farm.tend',enabled:true,physical:true});
+  const field=farmFacts(state);
+  const queue=new ActionCoordinator(undefined,projectBody),lifecycle=new CanonicalActionLifecycle(projectBody);
+  f.actions.queue=async(_id,actionId)=>{
+    const proposal=state.life.actions.find(action=>action.id===actionId);
+    assert.equal(proposal.interruptPolicy,'interruptible');
+    assert.deepEqual(proposal.sourceIds,['user-1',field.weatherEventId]);
+    [intent]=queue.queueDraft(state,actionId).intents;
+  };
+  f.dispatcher.dispatch=async(actionId)=>{
+    assert.equal(intent.id,actionId);
+    assert.deepEqual(lifecycle.prepare(state,intent),{allowed:true});
+  };
+  const model={async *stream(o){
+    if(++rounds===1)yield call('plant','act',{actionType:'farm.tend',parameters:{operation:'plant',seedPurchase:field.seedPurchase}});
+    else{
+      assert.equal(JSON.parse(o.messages.at(-1).content).result.status,'DISPATCHED');
+      yield {type:'text',text:'我准备播种。'};
+    }
+  }};
+  assert.equal(await collect(f.speech.wrap(model).stream(f.options)),'我准备播种。');
 });
 
 test('model operation feedback retains time and meaning without internal event IDs',async()=>{

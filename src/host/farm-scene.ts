@@ -5,7 +5,7 @@ import {advanceFarm, changeFarmWeather, farmActionTarget, farmFacts, farmVisit, 
 
 const CLIP_MS = 1600;
 type Reader = {loadEnvelope(id:string):Promise<CanonicalEnvelope|null>};
-type OpenRequest = {id:string; promise:Promise<void>; finish:(error?:Error)=>void};
+type OpenRequest = {id:string; owner:string; signal?:AbortSignal; promise:Promise<void>; finish:(error?:Error)=>void};
 type ActiveCommand = {id:string; action:FarmAction; epoch:string; target:ReturnType<typeof farmActionTarget>;
   started?:{at:number; visitId:string}; finish:(receipt:ExecutionReceipt)=>void};
 
@@ -59,14 +59,49 @@ export function createFarmScene(store:Reader, gate:PetGate, uow:UnitOfWork, cloc
     const cmd = active.get(id), opening = openings.get(id);
     const command = cmd && cmd.epoch === epoch ? {id:cmd.id,operation:cmd.action.operation,clipMs:CLIP_MS} : null;
     const inside = !!epoch && farmVisit(state)?.epoch === epoch;
-    return {field:farmFacts(state,clock()),inside,command,openRequestId:opening?.id,
+    return {field:farmFacts(state,clock()),inside,command,openRequestId:opening?.id,enterOnOpen:!!opening?.signal,
       worksiteInside:(state.legacy as any).worksite?.inside === true};
   };
   const disconnect = (id:string, owner:string) => {
     if (active.get(id)?.epoch === owner) cancel(id,'稻田窗口已断开');
-    openings.get(id)?.finish(Error('稻田窗口已断开'));
+    const opening = openings.get(id);
+    if (opening?.owner === owner) opening.finish(Error('稻田窗口已断开'));
     return clearVisit(id,owner);
   };
+  async function requestWindow(id:string, signal?:AbortSignal):Promise<void> {
+    if (signal?.aborted) throw Error('进田已取消');
+    const owner = epoch;
+    if (!owner) throw Error('桌宠尚未连接');
+    const state = await settle(id);
+    if (owner !== epoch) throw Error('桌宠已断开');
+    if (signal?.aborted) throw Error('进田已取消');
+    if (signal) {
+      if (active.has(id)) throw Error('正在处理农活，请稍后再试');
+      if (farmVisit(state)?.epoch === owner) return;
+      checkFarmBody(state,clock(),true);
+    }
+    const existing = openings.get(id);
+    if (existing) {
+      if (!signal) return existing.promise;
+      if (existing.signal) throw Error('进田请求正在处理');
+      await existing.promise;
+      return requestWindow(id,signal);
+    }
+    let finish!:OpenRequest['finish'];
+    const aborted = () => finish(Error('进田已取消'));
+    const promise = new Promise<void>((resolve,reject)=>{
+      const timer = setTimeout(()=>finish(Error('稻田窗口暂未响应，请稍后重试')),8000);
+      finish = error => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort',aborted);
+        openings.delete(id);
+        if (error) reject(error); else resolve();
+      };
+    });
+    openings.set(id,{id:randomUUID(),owner,signal,promise,finish});
+    signal?.addEventListener('abort',aborted,{once:true});
+    return promise;
+  }
   return {
     settle, clearVisit,
     pending(id:string) {return openings.has(id) || active.has(id);},
@@ -75,20 +110,10 @@ export function createFarmScene(store:Reader, gate:PetGate, uow:UnitOfWork, cloc
       if (epoch === old) epoch = '';
       await disconnect(id,old);
     },
-    async requestOpen(id:string) {
-      if (!epoch) throw Error('桌宠尚未连接');
-      const owner = epoch;
-      await settle(id);
-      if (owner !== epoch) throw Error('桌宠已断开');
-      const existing = openings.get(id);
-      if (existing) return existing.promise;
-      let finish!:OpenRequest['finish'];
-      const promise = new Promise<void>((resolve,reject)=>{
-        const timer = setTimeout(()=>finish(Error('稻田窗口暂未响应，请稍后重试')),8000);
-        finish = error => {clearTimeout(timer);openings.delete(id);if(error)reject(error);else resolve();};
-      });
-      openings.set(id,{id:randomUUID(),promise,finish});
-      return promise;
+    requestOpen(id:string) {return requestWindow(id);},
+    async requestEntry(id:string, signal:AbortSignal) {
+      await requestWindow(id,signal);
+      return {status:'COMPLETED',inside:true};
     },
     async weather(id:string, value:unknown) {
       if (typeof value !== 'string' || value === 'sunny' || !Object.hasOwn(farmWeather,value)) throw Error('请选择有效的天气');
@@ -102,7 +127,7 @@ export function createFarmScene(store:Reader, gate:PetGate, uow:UnitOfWork, cloc
         const state = await settle(id);
         checkFarmBody(state,clock(),true);
         const target = farmActionTarget(state,action,clock());
-        if (owner !== epoch || signal.aborted || active.has(id)) throw Error('稻田窗口暂不可用');
+        if (owner !== epoch || signal.aborted || active.has(id) || openings.get(id)?.signal) throw Error('稻田窗口暂不可用');
         return await new Promise<ExecutionReceipt>(resolve=>{
           const timeout = setTimeout(()=>cancel(id,'稻田动作等待超时'),15000);
           const aborted = () => cancel(id,'稻田动作已中断');
@@ -121,10 +146,27 @@ export function createFarmScene(store:Reader, gate:PetGate, uow:UnitOfWork, cloc
       if (!owner || epoch !== owner) throw Error('稻田通道已断开');
       if (input.action === 'snapshot' || input.action === 'open') return snapshot(id);
       if (input.action === 'open-ack') {
-        const opening = openings.get(id);if (opening?.id === input.requestId) opening?.finish();
+        const opening = openings.get(id);
+        if (opening?.owner !== owner || opening.id !== input.requestId) return snapshot(id);
+        if (opening.signal) {
+          try {
+            await uow.applyCurrent(id,draft=>{
+              if (epoch !== owner || openings.get(id) !== opening || opening.signal?.aborted) throw Error('进田请求已失效');
+              checkFarmBody(draft,clock(),true);
+              if (farmVisit(draft)?.epoch !== owner) setFarmVisit(draft,{id:randomUUID(),epoch:owner});
+              return {};
+            });
+          } catch (error) {
+            if (openings.get(id) === opening) opening.finish(error instanceof Error ? error : Error('进田未完成'));
+            throw error;
+          }
+        }
+        if (openings.get(id) === opening) opening.finish();
         return snapshot(id);
       }
       if (input.action === 'leave') {
+        const opening = openings.get(id);
+        if (opening?.signal) opening.finish(Error('进田已取消'));
         cancel(id,'她已离开稻田');await clearVisit(id,owner);return snapshot(id);
       }
       const cmd = active.get(id);

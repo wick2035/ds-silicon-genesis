@@ -1,6 +1,6 @@
 import {riceInventory,riceAvailability,validateRiceMeal} from './rice-inventory.js';
 import {cookerFacts} from './rice-cooker.js';
-import {FARM_WEATHER_AWARENESS,farmVisit} from './farm.js';
+import {FARM_WEATHER_AWARENESS,farmFacts,farmVisit} from './farm.js';
 import {COMPANION_PERSONALITY,TIME_AWARENESS,riceMotivation} from './companion-personality.js';
 import {createHash} from 'node:crypto';
 import {selfModelContext,STABLE_PERSONALITY} from './self-model-context.js';
@@ -48,7 +48,7 @@ function decisionFacts(envelope:CanonicalEnvelope):string {
 /** One tool-aware turn for every utterance. Text preceding a tool call is a
  * draft, not a published claim. Real receipts return to the same model. */
 export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<CanonicalEnvelope|null>},gate:PetGate,uow:UnitOfWork,actions:ActionCoordinator,dispatcher:OutboxDispatcher,
-  beginWork:(id:string,sourceIds:string[],key:string)=>Promise<unknown>,leaveWork:(id:string)=>Promise<unknown>,enterWork?:(id:string)=>Promise<unknown>,stopWork?:(id:string)=>Promise<unknown>) {
+  beginWork:(id:string,sourceIds:string[],key:string)=>Promise<unknown>,leaveWork:(id:string)=>Promise<unknown>,enterWork?:(id:string)=>Promise<unknown>,stopWork?:(id:string)=>Promise<unknown>,enterFarm?:(id:string,signal:AbortSignal)=>Promise<unknown>) {
   async function sense(petId:string, excludeEventIds:string[]=[],query='',snapshot?:CanonicalEnvelope){
     const envelope=snapshot??await reader.loadEnvelope(petId);if(!envelope)throw Error('生命状态不可用');
     const events=envelope.life.events.filter(e=>!Object.hasOwn(envelope.life.invalidSources,e.eventId) &&
@@ -64,6 +64,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
     if(type==='work.stop'){if(!stopWork)throw Error('工地不可用');return stopWork(speech.petId);}
     if(type==='work.begin')return beginWork(speech.petId,speech.sourceIds,key);
     if(type==='work.leave'){const current=await reader.loadEnvelope(speech.petId);if(!current||current.life.constraints.paused)throw Error('自主活动已暂停');return leaveWork(speech.petId);}
+    if(type==='farm.enter'){if(!enterFarm)throw Error('稻田入口暂不可用');return enterFarm(speech.petId,signal);}
     if(!executable.has(type)||type==='labor.step')throw Error('不支持的自主行动；搬砖请用 work.begin');
     validateActionParameters(type,parameters);
     const id='speech-action:'+createHash('sha256').update(key).digest('hex');
@@ -76,7 +77,14 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
       if(conflicts(current,type,parameters))throw Error('身体还有未确认的行动，先等结果');
       const now=new Date().toISOString();
       await uow.apply(speech.petId,current.version,draft=>{
-        draft.life.actions.push({id,petId:speech.petId,actionType:type,parameters,priority:60,interruptPolicy:type==='body.activity'?'interruptible':'safe-point',requiredCapabilities:[type],expectedStateVersion:draft.version,sourceIds:[...speech.sourceIds],status:'PROPOSED',createdAt:now,updatedAt:now});return {};
+        const sourceIds=[...speech.sourceIds];
+        if(type==='farm.tend'){
+          const field=farmFacts(draft,Date.parse(now));
+          if(!field?.operation || field.operation!==parameters.operation)throw Error('请根据稻田实况选择当前可做的农活');
+          if(!sourceIds.includes(field.weatherEventId))sourceIds.push(field.weatherEventId);
+        }
+        const interruptPolicy=type==='body.activity'||type==='farm.tend'?'interruptible':'safe-point';
+        draft.life.actions.push({id,petId:speech.petId,actionType:type,parameters,priority:60,interruptPolicy,requiredCapabilities:[type],expectedStateVersion:draft.version,sourceIds,status:'PROPOSED',createdAt:now,updatedAt:now});return {};
       });
       current=await reader.loadEnvelope(speech.petId);if(!current)throw Error('行动状态不可用');
       try{await actions.queue(speech.petId,id,current.version);}catch(error){
@@ -102,6 +110,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
     if(!initial.envelope.life.constraints.capabilities.some(c=>c.name==='care.water')&&initial.envelope.life.constraints.capabilities.some(c=>c.name==='care.feed'&&c.enabled))allowed.push('care.water');
     const tools=[{name:'sense_self',description:'感知此刻身体、需求、钱包、稻田天气、近期真实互动与行动结果。',inputSchema:empty},
       ...(speech.allowActions?[{name:'act',description:'按需要选择一次真实行动。吃饭优先选锅里的熟饭（source=cooker），再选冰箱库存；没饭才考虑买。自己煮饭用 service.cook-rice。'+JSON.stringify(actionCatalog),inputSchema:{type:'object',properties:{actionType:{type:'string',enum:allowed},parameters:{type:'object'}},required:['actionType','parameters'],additionalProperties:false}},
+      ...(enterFarm?[{name:'enter_farm',description:'自主进稻田看一看、等爸爸来教或待在田边。等窗口确认进场后才算到达。',inputSchema:empty}]:[]),
       {name:'enter_worksite',description:'自主决定进入工地，即使没有任务也可以去；有任务时自动开始工作。',inputSchema:empty},
       {name:'begin_work',description:'在工地恢复普通工作，之后持续搬砖；不创建合同，不触发强制模式。',inputSchema:empty},
       {name:'stop_work',description:'自主决定在工地停工，留在工地；强制工作期间不能覆盖爸爸的强制命令。',inputSchema:empty},
@@ -128,7 +137,9 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
       const signature=decisionFacts(decision.envelope);
       const {近期真实经历:recentExperiences,...currentContext}=decision.context;
       const field=currentContext.生活.farm;
-      const liveFarm=field?'\n稻田实况：'+JSON.stringify(field)+'。'+FARM_WEATHER_AWARENESS+'米缸只存生米。':'';
+      const liveFarm=field?'\n稻田实况：'+JSON.stringify(field)+'。'+FARM_WEATHER_AWARENESS+'米缸只存生米。'+
+        (enterFarm?'想先进去看看或等爸爸教时，调用 enter_farm。inside 为 true 就已经在田边。':'')+
+        '决定立刻播种、浇水或收割时才调用 act 的 farm.tend，operation 用实况给出的值；播种缺种子时须决定是否接受 seedPurchase 报价，接受时原样传入。根据进场确认和农活回执说实际结果。':'';
       const liveSystem=system+'\n此刻实况：'+promptData(currentContext,1600)+'\n近期真实经历：'+promptData(recentExperiences,800)+timeFor(decision.envelope)+liveWorkFor(decision.envelope)+updatesFor(decision.envelope)+liveFarm+'\n当前身体与食物（优先于旧对话和历史摘要）：'+JSON.stringify(liveFoodFor(decision.envelope));
       let text='';const calls=new Map<number,{id:string;name:string;arguments:string}>();
       for await(const part of model.stream({...options,embodied:undefined,embodiedSnapshot:undefined,signal,system:liveSystem,messages,tools:round<4?tools:undefined})){
@@ -164,6 +175,10 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
             if(uncertainBody&&physical)throw Error('本轮身体动作的结果未确认，先等确认');
             result=await execute(speech,p.actionType,p.parameters,`${speech.requestId}:${round}:${index}`,signal,signature);
             if(physical&&(result as any)?.status==='UNKNOWN')uncertainBody=true;
+          }
+          else if(c.name==='enter_farm'){
+            if(uncertainBody || conflicts(current,'farm.tend',{}))throw Error('身体还有未确认的行动，先等结果');
+            result=await execute(speech,'farm.enter',{},`${speech.requestId}:${round}:${index}`,signal,signature);
           }
           else if(c.name==='enter_worksite')result=await execute(speech,'work.enter',{},`${speech.requestId}:${round}:${index}`,signal,signature);
           else if(c.name==='stop_work')result=await execute(speech,'work.stop',{},`${speech.requestId}:${round}:${index}`,signal,signature);

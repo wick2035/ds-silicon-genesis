@@ -54,9 +54,12 @@ function registerFarm({ipcMain, petWindows, BrowserWindow, app, call, showBody})
       return;
     }
     if(state.openRequestId) {
-      const session=open(id,true);
+      const session=open(id,!state.enterOnOpen);
       await session.loaded;
-      if(!session.win.isDestroyed())await call(id,'open-ack',state.openRequestId);
+      if(!session.closing && !session.win.isDestroyed()){
+        if(state.enterOnOpen && (!session.win.isVisible() || session.win.isMinimized()))session.win.showInactive();
+        await call(id,'open-ack',state.openRequestId);
+      }
     }
     if(state.command || state.inside)open(id,false);
   }

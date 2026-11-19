@@ -69,6 +69,14 @@ app.whenReady().then(async()=>{
   await until(()=>!farmVisit(state) && desktop.isVisible());
 
   await farm.weather('main','light-rain');
+  assert.deepEqual(await farm.requestEntry('main',gate.signal),{status:'COMPLETED',inside:true});
+  await until(()=>farmVisit(state) && !desktop.isVisible());
+  await until(()=>render('!document.getElementById("farmer").hidden && document.getElementById("visit").textContent === "接她回来"'));
+  assert.equal(farmFacts(state).stage,'empty');
+  assert.equal(state.legacy.wallet.balance,100);
+  await render('document.getElementById("visit").click()');
+  await until(()=>!farmVisit(state) && desktop.isVisible());
+
   const plant={id:'electron-sow',type:'farm.tend',payload:{parameters:{operation:'plant',seedPurchase:farmFacts(state).seedPurchase}}};
   const animate=farm.execute('main',plant,gate.signal);
   await until(()=>render('document.getElementById("farmer").src.includes("plant.gif")'));
@@ -112,5 +120,5 @@ app.whenReady().then(async()=>{
   assert.equal((await watering).status,'cancelled');
   assert.equal(farmFacts(state).watered,beforeWater);
   await until(()=>win.isDestroyed() && !farmVisit(state) && desktop.isVisible());
-  console.log('PASS: farm Electron open, shared body, GIF receipt, weather, narrow layout, reduced motion and close');
+  console.log('PASS: farm Electron open, confirmed entry, shared body, GIF receipt, weather, narrow layout, reduced motion and close');
 }).then(()=>{clearTimeout(deadline);app.exit(0);}).catch(error=>{console.error(error);clearTimeout(deadline);app.exit(1);});
