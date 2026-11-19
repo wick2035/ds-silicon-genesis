@@ -14,8 +14,17 @@ class DesktopRiceCooker {
     this.launcher.className = 'rice-cooker-launcher';
     this.launcher.setAttribute('aria-controls', 'rice-cooker-details');
     this.launcher.setAttribute('aria-label', '电饭锅');
-    this.launcher.innerHTML = '<span class="rice-cooker-art"><img alt=""><span class="rice-cooker-steam" aria-hidden="true"><i></i><i></i></span></span><span class="rice-cooker-caption"></span>';
-    this.image = this.launcher.querySelector('img');
+    this.launcher.innerHTML = `
+      <span class="rice-cooker-art">
+        <img class="rice-cooker-body" alt="">
+        <span class="rice-cooker-fill" aria-hidden="true" hidden><img class="rice-cooker-mound" alt=""></span>
+        <span class="rice-cooker-steam" aria-hidden="true"><i></i><i></i></span>
+      </span>
+      <span class="rice-cooker-caption"></span>`;
+    this.image = this.launcher.querySelector('.rice-cooker-body');
+    this.fill = this.launcher.querySelector('.rice-cooker-fill');
+    this.mound = this.fill.querySelector('img');
+    this.mound.src = COOKER_ASSETS+'mound.png';
     this.caption = this.launcher.querySelector('.rice-cooker-caption');
     this.panel = document.createElement('section');
     this.panel.id = 'rice-cooker-details';
@@ -128,7 +137,10 @@ class DesktopRiceCooker {
     this.state = state;
     this.connected = true;
     this.clockOffset = state.now-Date.now();
-    if (finished && !this.reduceMotion.matches) this.revealUntil = performance.now()+2000;
+    if (finished && !this.reduceMotion.matches) {
+      this.lidOpensAt = performance.now()+550;
+      this.steamUntil = this.lidOpensAt+1450;
+    }
     if (this.hasFood()) this.manual = false;
     if (!this.hasFood() && !this.manual) this.expanded = false;
     this.paint();
@@ -195,11 +207,24 @@ class DesktopRiceCooker {
 
   paintClock() {
     const {batch,remaining,reserved} = this.state??{};
-    const revealing = !this.reduceMotion.matches && performance.now()<(this.revealUntil??0);
-    const asset = revealing?'ready.gif':batch?'closed.png':remaining?'full.png':'empty.png';
+    const now = performance.now();
+    const showingSteam = !this.reduceMotion.matches && (Boolean(batch) || Boolean(remaining) && now<(this.steamUntil??0));
+    const closed = Boolean(batch) || (showingSteam && now<(this.lidOpensAt??0));
+    const asset = closed?'closed.png':'empty.png';
+    this.launcher.dataset.steaming = String(showingSteam);
+    this.fill.hidden = closed || !remaining;
+    if (remaining && this.moundBowls!==remaining) {
+      const amount = Math.min(remaining,6)/6;
+      this.moundBowls = remaining;
+      this.mound.style.setProperty('--rice-width',String(.66+.34*amount));
+      this.mound.style.setProperty('--rice-height',String(.23+.77*amount));
+    }
     if (this.asset !== asset) {
       this.asset = asset;
       this.image.src = COOKER_ASSETS+asset;
+      this.launcher.dataset.lidClosed = String(closed);
+      this.layout();
+      this.pet.syncInputRegions();
     }
     let caption = '空锅', status = caption;
     if (batch) {
@@ -220,7 +245,6 @@ class DesktopRiceCooker {
   paint() {
     const {availableIds=[],maxBowls,reminderId,batch,remaining,raw} = this.state??{};
     this.launcher.hidden = !this.hasFood() && !this.manual;
-    this.launcher.dataset.cooking = String(Boolean(batch));
     this.panel.hidden = !this.expanded;
     this.launcher.setAttribute('aria-expanded',String(Boolean(this.expanded)));
     const count = availableIds.length;
@@ -245,7 +269,7 @@ class DesktopRiceCooker {
     const {x:ox,y:oy} = pet.winOffset;
     const left = clamp.x-ox, right = left+clamp.w, top = clamp.y-oy, bottom = top+clamp.h;
     const width = Math.min(clamp.w,Math.max(88,Math.min(122,pet.size*.29)));
-    const artHeight = this.state?.batch ? width*.66 : width;
+    const artHeight = this.asset==='closed.png' ? width*.82 : width;
     const height = artHeight+24, foot = pet.bottomPad+pet.height*S.FEET_Y/S.CANVAS_H;
     const besideRight = pet.hitRect.x+pet.hitRect.w+4, besideLeft = pet.hitRect.x-width-4;
     const rightRoom = right-besideRight, leftRoom = besideLeft+width-left;

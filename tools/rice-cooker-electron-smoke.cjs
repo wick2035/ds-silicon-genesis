@@ -83,13 +83,14 @@ app.whenReady().then(async()=>{
   await js('cooker.closeButton.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}))');
   assert.equal(await js('cooker.launcher.hidden'),true);
 
-  startCooking(state,'desktop-smoke',3,now);
-  await until('cooker.caption.textContent.startsWith("煮 3 碗 ·")');
+  startCooking(state,'desktop-smoke',6,now);
+  await until('cooker.caption.textContent.startsWith("煮 6 碗 ·")');
   await until('cooker.image.naturalWidth===384 && cooker.image.src.endsWith("closed.png")');
   now+=COOKING_MS;
-  await until('cooker.caption.textContent==="锅里还有 3 碗"');
-  await until('cooker.image.naturalWidth===280 && cooker.image.src.endsWith("ready.gif")');
-  await until('cooker.image.naturalWidth===384 && cooker.image.src.endsWith("full.png")');
+  await until('cooker.caption.textContent==="锅里还有 6 碗"');
+  await until('cooker.image.naturalWidth===384 && cooker.image.src.endsWith("empty.png") && !cooker.fill.hidden && cooker.mound.naturalWidth>0');
+  const riceHeight='cooker.mound.getBoundingClientRect().height/cooker.fill.getBoundingClientRect().height';
+  const fullHeight=await js(riceHeight);
   await js('cooker.launcher.click()');
   await until('!cooker.panel.hidden && cooker.panel.offsetHeight>0');
   for(const zoom of [1,1.45]){
@@ -106,16 +107,18 @@ app.whenReady().then(async()=>{
     await js('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
     fs.writeFileSync(process.env.SILICON_COOKER_SMOKE_IMAGE,(await win.webContents.capturePage()).toPNG());
   }
-  await js('cooker.plus.click()');
-  assert.equal(await js('cooker.submit.textContent'),'盛走 2 碗');
+  await js('for(let i=0;i<4;i++)cooker.plus.click()');
+  assert.equal(await js('cooker.submit.textContent'),'盛走 5 碗');
+  assert(Math.abs(await js(riceHeight)-fullHeight)<.01);
   await js('cooker.submit.click();cooker.submit.click();');
   await until('cooker.caption.textContent==="锅里还有 1 碗"');
-  await until('window.lastReply?.includes("爸盛走了2碗")');
+  await until(`${riceHeight} < ${fullHeight*.4}`);
+  await until('window.lastReply?.includes("爸盛走了5碗")');
   assert.equal(state.life.events.filter(event=>event.type==='rice.taken').length,1);
   await js('cooker.submit.click()');
   await until('cooker.launcher.hidden && cooker.panel.hidden');
   assert.equal(state.life.events.filter(event=>event.type==='rice.taken').length,2);
-  console.log('PASS: transparent cooker, countdown, GIF, keyboard, zoom, edge clamp, taking and reply');
+  console.log('PASS: transparent cooker, countdown, opening, keyboard, zoom, edge clamp, rice height, taking and reply');
 }).then(()=>{clearTimeout(timeout);win?.destroy();app.exit(0);}).catch(error=>{
   console.error(error);
   clearTimeout(timeout);

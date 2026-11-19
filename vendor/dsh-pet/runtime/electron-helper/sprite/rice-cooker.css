@@ -7,6 +7,7 @@
 }
 
 .rice-cooker-launcher[hidden],
+.rice-cooker-fill[hidden],
 .rice-cooker-panel [hidden],
 .rice-cooker-panel[hidden] { display: none; }
 
@@ -28,20 +29,38 @@
   aspect-ratio: 1;
 }
 
-.rice-cooker-art img {
+.rice-cooker-body {
   width: 100%;
   height: 100%;
   display: block;
   object-fit: contain;
   filter: drop-shadow(0 3px 3px #14203538);
 }
-.rice-cooker-launcher[data-cooking="true"] .rice-cooker-art { aspect-ratio: 1 / .66; }
-.rice-cooker-launcher[data-cooking="true"] .rice-cooker-art img {
+.rice-cooker-launcher[data-lid-closed="true"] .rice-cooker-art { aspect-ratio: 1 / .82; }
+.rice-cooker-launcher[data-lid-closed="true"] .rice-cooker-body {
   position: absolute;
   bottom: 0;
   left: 0;
   height: auto;
   aspect-ratio: 1;
+}
+
+.rice-cooker-fill {
+  position: absolute;
+  inset: 0;
+  clip-path: polygon(0 0, 100% 0, 100% 37%, 78% 41%, 70% 43%, 60% 44.2%, 50% 44.5%, 40% 44.2%, 30% 43%, 22% 41%, 0 37%);
+  pointer-events: none;
+}
+
+.rice-cooker-mound {
+  position: absolute;
+  left: 26%;
+  bottom: 55.5%;
+  width: 48%;
+  height: 17%;
+  transform: scale(var(--rice-width,1), var(--rice-height,1));
+  transform-origin: center bottom;
+  transition: transform 280ms ease-out;
 }
 
 .rice-cooker-caption {
@@ -66,12 +85,13 @@
 .rice-cooker-steam {
   position: absolute;
   display: none;
-  inset: -9% 25% auto;
-  height: 55%;
+  inset: 17% 25% auto;
+  height: 28%;
   pointer-events: none;
 }
 
-.rice-cooker-launcher[data-cooking="true"] .rice-cooker-steam { display: block; }
+.rice-cooker-launcher[data-steaming="true"] .rice-cooker-steam { display: block; }
+.rice-cooker-launcher[data-lid-closed="true"] .rice-cooker-steam { top: -9%; height: 30%; }
 .rice-cooker-steam i {
   position: absolute;
   left: 50%;
@@ -131,5 +151,6 @@
 .rice-cooker-message { margin: 8px 0 0; color: #4a5f74; font-size: 11px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .rice-cooker-launcher[data-cooking="true"] .rice-cooker-steam { display: none; }
+  .rice-cooker-launcher[data-steaming="true"] .rice-cooker-steam { display: none; }
+  .rice-cooker-mound { transition: none; }
 }
