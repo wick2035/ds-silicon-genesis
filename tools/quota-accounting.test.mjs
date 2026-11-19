@@ -54,13 +54,16 @@ test('并发请求原子扣减，不超过主动额度',async t=>{
 test('精神耗尽时取消必要需求请求，不会凭空增加精神',async()=>{
  const f=fixture();f.d.life.spirit.value=0;const release=await f.budget.runAs('main','needs',()=>f.budget.reserve('test','test',f.gate.signal));await release('not-sent');assert.equal(f.d.life.spirit.value,0);
 });
-test('有进行中目标时，食物需要不能耗尽自主思考额度',async()=>{
- const f=fixture();f.d.legacy.config.learning.dailyModelCalls=12;f.d.life.goals.push({id:'g',status:'active',sourceIds:['q']});
+test('没有目标时仍为真正的自主思考留额度，通知不能冒充思考耗尽它',async()=>{
+ const f=fixture();f.d.legacy.config.learning.dailyModelCalls=12;
  for(let i=0;i<8;i++){const release=await f.budget.runAs('main','needs',()=>f.budget.reserve('test','test',f.gate.signal));await release('completed');}
  await assert.rejects(f.budget.runAs('main','needs',()=>f.budget.reserve('test','test',f.gate.signal)),/额度不足/);
- const release=await f.budget.runAs('main','autonomous',()=>f.budget.reserve('test','test',f.gate.signal));await release('completed');
+ await assert.rejects(f.budget.runAs('main','autonomous',()=>f.budget.reserve('test','test',f.gate.signal),'工作完成提醒'),/额度不足/);
+ const ticket=await f.budget.reserve('main');
+ const release=await f.budget.withReserved('main',ticket,()=>f.budget.reserve('test','test',f.gate.signal));await release('completed');
  assert.equal(f.d.legacy.usage[day()].totalCalls,9);
  await assert.rejects(f.budget.runAs('main','needs',()=>f.budget.reserve('test','test',f.gate.signal)),/额度不足/);
- const second=await f.budget.runAs('main','autonomous',()=>f.budget.reserve('test','test',f.gate.signal));await second('completed');
+ const next=await f.budget.reserve('main');
+ const second=await f.budget.withReserved('main',next,()=>f.budget.reserve('test','test',f.gate.signal));await second('completed');
  assert.equal(f.d.legacy.usage[day()].totalCalls,10);
 });

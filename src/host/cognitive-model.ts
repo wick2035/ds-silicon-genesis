@@ -46,7 +46,7 @@ ${FARM_WEATHER_AWARENESS}
       ? '\n当前.goalReadings 列出已实际阅读的资料及其对应念想。请先查看这些资料，根据 memoryId 找正文。能回答自己的问题时，用对应 goalId 和 evidenceId 提交 understood，并用自己的话记录具体答案。若资料不足，可以保留念想并说明还有什么没弄懂。' : '';
     const messages=[{role:'user',content:input}];
     let text='';
-    const momentRule=bounded.recentEvents?.some(event=>event.momentSource)?'\n'+MOMENT_INSTRUCTION:'';
+    const momentRule=bounded.recentEvents?.some(event=>event.momentSource)?'\n'+MOMENT_INSTRUCTION+'\n本轮有可分享的新经历，请认真想一想有没有一件愿意记在说说里给爸爸看的小事。分享与身体行动独立，action 为 null 也可以写 moment。':'';
     for await(const chunk of llm.stream({provider:selected.provider,model:selected.model,system:system+'\n'+goalInstructions+readingRule+'\n'+SPEAKER_MEMORY_RULE+momentRule,messages,signal,maxTokens:4096,temperature:0.35,reasoningEffort:'low'})){
       if(signal.aborted)throw Error('认知已取消');
       if(chunk.type==='text'&&typeof chunk.text==='string'){text+=chunk.text;if(text.length>32768)throw Error('认知回复过长');}

@@ -50,14 +50,20 @@ function matterIds(event: LifeEvent, events: Map<string, LifeEvent>): Set<string
   return ids;
 }
 
-export function momentSources(history: MomentHistory, now: number): Map<string, string> {
-  const sources = new Map<string, string>();
-  const events = new Map(history.events.map(event => [event.eventId, event]));
+export function momentLimitReason(history: MomentHistory, now: number): string | null {
   const published = history.events.filter(event => event.type === momentEventType);
   const today = hongKongDay.format(now);
   const stamps = published.map(event => Date.parse(event.occurredAt)).filter(Number.isFinite);
-  if (stamps.some(stamp => now - stamp < 2 * hour) ||
-      stamps.filter(stamp => hongKongDay.format(stamp) === today).length >= 2) return sources;
+  if(stamps.filter(stamp => hongKongDay.format(stamp) === today).length >= 2)return '今天已发满两条说说，明天可以继续分享';
+  if(stamps.some(stamp => now - stamp < 2 * hour))return '距离上一条说说还不足两小时，稍后可以继续分享';
+  return null;
+}
+
+export function momentSources(history: MomentHistory, now: number): Map<string, string> {
+  const sources = new Map<string, string>();
+  if(momentLimitReason(history,now))return sources;
+  const events = new Map(history.events.map(event => [event.eventId, event]));
+  const published = history.events.filter(event => event.type === momentEventType);
 
   const used = new Set(published.flatMap(event => linkedSources(event).flatMap(id => {
     const source = events.get(id);

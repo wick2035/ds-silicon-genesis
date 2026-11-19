@@ -8,8 +8,7 @@ import type { CanonicalEnvelope, BodyProjection } from '../storage/postgres.js';
 import type { PetGate, UnitOfWork, OutboxDispatcher } from '../storage/uow.js';
 import type { ActionCoordinator } from './action-coordinator.js';
 import {validateActionParameters} from './action-parameters.js';
-import {momentEventType, momentSources} from '../kernel/moments.js';
-import {redactDadNames} from '../../vendor/pet-plugins/behavior/memory-privacy.mjs';
+import {appendMoment} from './moment-publishing.js';
 interface Reader {loadEnvelope(petId:string):Promise<CanonicalEnvelope|null>}
 const key=(kind:string,value:unknown)=>`${kind}:${createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0,32)}`;
 type Proposed=Extract<CognitiveResult,{status:'proposed'}>;
@@ -47,15 +46,8 @@ export class CognitiveResultCoordinator {
           life.memories.push({id:'memory:'+id,kind:'autobiographical',content:t.text+'\n当时感受：'+t.feeling+'\n想做的事：'+t.desire,sourceIds:[id,...t.sourceIds],evidenceLevel:'inferred',valid:true,createdAt:at,feeling:t.feeling,salience:t.salience??.5});
         }
         if(candidates.moment){
-          const {sourceId}=candidates.moment,now=Date.now();
-          const text=redactDadNames(candidates.moment.text).trim();
-          const context=momentSources(life,now).get(sourceId);
-          if(context&&text){
-            const at=new Date(now).toISOString();
-            const noteId='memory:'+sourceId;
-            const sourceIds=life.memories.some(memory=>memory.id===noteId&&memory.valid)?[sourceId,noteId]:[sourceId];
-            life.events.push({eventId:'moment:'+randomUUID(),petId,type:momentEventType,source:'model',occurredAt:at,receivedAt:at,evidenceLevel:'inferred',payload:{text,context,sourceIds}});
-          }
+          try{appendMoment(life,petId,candidates.moment,'moment:'+randomUUID());}
+          catch{/* Sharing eligibility can expire without discarding unrelated thoughts. */}
         }
         if([...candidates.goals,...candidates.plan,...candidates.interests,...candidates.selfModel].some(x=>!x.sourceIds.length||!x.sourceIds.every(valid))) throw new Error('认知来源无效');
         for(const candidate of candidates.goals){

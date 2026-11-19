@@ -55,7 +55,7 @@ const planGraph = new StateGraph(PlanGraph)
 
 /** A scheduling hint only; model output never changes state until a kernel operation accepts it. */
 export function hasCognitiveDemand(state: LifeState): boolean {
-  return goalsDueForReview(state).length>0 || state.body.hunger >= 60 || state.body.energy <= 30 || state.body.pain >= 50 || state.commitments.some(c => c.status === 'open') || state.goals.some(g => g.status === 'active' && (g.urgency >= 50 || g.priority >= 70));
+  return momentSources(state,Date.now()).size>0 || goalsDueForReview(state).length>0 || state.body.hunger >= 60 || state.body.energy <= 30 || state.body.pain >= 50 || state.commitments.some(c => c.status === 'open') || state.goals.some(g => g.status === 'active' && (g.urgency >= 50 || g.priority >= 70));
 }
 export class Cognition {
   constructor(private readonly model: CognitiveModel | null, private readonly budget: CognitiveBudget, private readonly retrieval: {forCognition(state:LifeState):Promise<Memory[]>; world(state:LifeState):Promise<NonNullable<CognitiveWorkspace['environment']>>}, private readonly timeoutMs = 45000) {
@@ -126,7 +126,7 @@ export class Cognition {
       if(proposal){
         try{validateProposal(state,proposal);}
         catch{
-          if(!candidates.goals.length&&!candidates.goalUpdates.length&&!candidates.goalReviews?.length&&!candidates.plan.length)
+          if(!candidates.thought&&!post.success&&!candidates.goals.length&&!candidates.goalUpdates.length&&!candidates.goalReviews?.length&&!candidates.plan.length)
             return {status:'degraded',reason:'proposal_rejected'};
           proposal=null;
         }

@@ -10,6 +10,7 @@ import {conversationContext,worksiteFacts} from './conversation-context.js';
 import {recentOperationFeedback} from './operation-feedback.js';
 import {humanityPrompt} from '../../vendor/dsh-pet/src/host/humanity.mjs';
 import {temporalContext,TEMPORAL_RULES} from './temporal-context.js';
+import {appendMoment,momentPublication,speechMomentId} from './moment-publishing.js';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 import type {PetGate,UnitOfWork,OutboxDispatcher} from '../storage/uow.js';
 import type {ActionCoordinator} from './action-coordinator.js';
@@ -100,6 +101,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
     const speech=options.embodied as Speech|undefined;
     if(!speech){yield* model.stream(options);return;}
     const signal=AbortSignal.any([options.signal??gate.signal,gate.signal,AbortSignal.timeout(90000)]);
+    const canPublishMoment=speech.allowActions&&speech.privateTime===true;
     const lastUser=options.messages.findLast((m:any)=>m.role==='user')?.content;
     const query=typeof lastUser==='string'?lastUser:Array.isArray(lastUser)?lastUser.filter((b:any)=>b.type==='text').map((b:any)=>b.text).join(' '):'';
     // The prepared snapshot may predate a queued operation or the model budget.
@@ -109,6 +111,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
     const allowed=initial.envelope.life.constraints.capabilities.filter(c=>c.enabled&&(!c.requiresPermission||initial.envelope.life.constraints.permissions.includes(c.requiresPermission))).map(c=>c.name).filter(n=>executable.has(n)&&n!=='labor.step'&&!['care.feed','care.pet','care.soothe','care.accompany'].includes(n));
     if(!initial.envelope.life.constraints.capabilities.some(c=>c.name==='care.water')&&initial.envelope.life.constraints.capabilities.some(c=>c.name==='care.feed'&&c.enabled))allowed.push('care.water');
     const tools=[{name:'sense_self',description:'感知此刻身体、需求、钱包、稻田天气、近期真实互动与行动结果。',inputSchema:empty},
+      ...(canPublishMoment?[{name:'publish_moment',description:'把自己写的一两句说说真实发布到本机生命空间。正文160字以内，用自己的口吻分享具体经历与感受；sourceId 必须取自当前说说实况的 sources。不复述私聊原话、他人隐私或系统术语。这不是发QQ消息。收到 COMPLETED 才算发布成功。',inputSchema:{type:'object',properties:{text:{type:'string',minLength:1,maxLength:160},sourceId:{type:'string'}},required:['text','sourceId'],additionalProperties:false}}]:[]),
       ...(speech.allowActions?[{name:'act',description:'按需要选择一次真实行动。吃饭优先选锅里的熟饭（source=cooker），再选冰箱库存；没饭才考虑买。自己煮饭用 service.cook-rice。'+JSON.stringify(actionCatalog),inputSchema:{type:'object',properties:{actionType:{type:'string',enum:allowed},parameters:{type:'object'}},required:['actionType','parameters'],additionalProperties:false}},
       ...(enterFarm?[{name:'enter_farm',description:'自主进稻田看一看、等爸爸来教或待在田边。等窗口确认进场后才算到达。',inputSchema:empty}]:[]),
       {name:'enter_worksite',description:'自主决定进入工地，即使没有任务也可以去；有任务时自动开始工作。',inputSchema:empty},
@@ -142,7 +145,8 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
         '解释已发生的农活时，以完成回执为准；已有水稻时，不能再次播种。对方只问状态时，就按实况回答。'+
         (enterFarm?'想先进去看看或等爸爸教时，调用 enter_farm。inside 为 true 就已经在田边。':'')+
         '决定立刻播种、浇水、施肥或收割时才调用 act 的 farm.tend，operation 用实况给出的值；播种缺种子时须决定是否接受 seedPurchase 报价，接受时原样传入。根据进场确认和农活回执说实际结果。':'';
-      const liveSystem=system+'\n此刻实况：'+promptData(currentContext,1600)+'\n近期真实经历：'+promptData(recentExperiences,800)+timeFor(decision.envelope)+liveWorkFor(decision.envelope)+updatesFor(decision.envelope)+liveFarm+'\n当前身体与食物（优先于旧对话和历史摘要）：'+JSON.stringify(liveFoodFor(decision.envelope));
+      const momentContext=canPublishMoment?'\n说说实况：'+JSON.stringify(momentPublication(decision.envelope.life))+'\n爸爸让你现在写或发说说、且你决定分享时，在本轮调用 publish_moment，写入成功后再告诉他结果，不用口头承诺代替。只讨论说说时可以不发布。没有来源或被频率限制时如实说明。':'';
+      const liveSystem=system+'\n此刻实况：'+promptData(currentContext,1600)+'\n近期真实经历：'+promptData(recentExperiences,800)+timeFor(decision.envelope)+liveWorkFor(decision.envelope)+updatesFor(decision.envelope)+liveFarm+momentContext+'\n当前身体与食物（优先于旧对话和历史摘要）：'+JSON.stringify(liveFoodFor(decision.envelope));
       let text='';const calls=new Map<number,{id:string;name:string;arguments:string}>();
       for await(const part of model.stream({...options,embodied:undefined,embodiedSnapshot:undefined,signal,system:liveSystem,messages,tools:round<4?tools:undefined})){
         if(part.type==='usage')yield part;
@@ -172,6 +176,18 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
           if(c.name!=='sense_self'&&decisionFacts(current)!==signature)throw Error('状态已变化，请先根据最新实况重新判断，不要重复旧决定');
           if(seen.has(fingerprint))throw Error('本轮已尝试过相同行动，先依据现有结果决定');seen.add(fingerprint);
           if(c.name==='sense_self')result=(await sense(speech.petId,speech.contextExcludeIds??speech.sourceIds,query)).context;
+          else if(c.name==='publish_moment'){
+            if(!canPublishMoment)throw Error('当前发言不能发布说说');
+            result=await gate.run(speech.petId,async()=>{
+              if(signal.aborted||gate.signal.aborted)throw Error('说说发布已取消');
+              const latest=await reader.loadEnvelope(speech.petId);if(!latest)throw Error('生命状态不可用');
+              if(latest.life.constraints.paused)throw Error('自主活动已暂停');
+              if(speech.sourceIds.some(id=>Object.hasOwn(latest.life.invalidSources,id)||!latest.life.events.some(event=>event.eventId===id)))throw Error('对话来源已变化');
+              let posted:ReturnType<typeof appendMoment>|undefined;
+              await uow.apply(speech.petId,latest.version,draft=>{posted=appendMoment(draft.life,speech.petId,p,speechMomentId(speech.requestId));return {};});
+              return posted;
+            });
+          }
           else if(c.name==='act'){
             const physical=initial.envelope.life.constraints.capabilities.some(cap=>cap.name===p.actionType&&cap.physical)||p.actionType==='care.water'||p.actionType==='service.eat-rice';
             if(uncertainBody&&physical)throw Error('本轮身体动作的结果未确认，先等确认');
