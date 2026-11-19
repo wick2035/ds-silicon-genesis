@@ -5,7 +5,6 @@ import {cookerBowlStorage,findRiceBowl} from './rice-inventory.js';
 import {sweetPrice} from './spirit-activity.js';
 import {mergeDuplicateGoals} from '../kernel/goal-lifecycle.js';
 import {setSpiritRest,advanceSpirit} from '../kernel/spirit.js';
-import {settleSimulatedSpending} from './simulated-spending.js';
 import {recordWorkOutcome} from './work-experience.js';
 import { rebuildRelationships } from '../kernel/index.js';
 import { actHumanity, advanceHumanity, reactHumanity } from '../../vendor/dsh-pet/src/host/humanity.mjs';
@@ -101,7 +100,8 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
     }
     return;
   }
-  if(intent.type==='care.feed'){assert(e.played===true && e.itemId==='parent','投喂动画未完成');const result=actHumanity(human,'feed',at);assert(result.ok,result.message||'当前不能投喂');settleSimulatedSpending(draft,'feed',intent.id);draft.humanity=result.state;draft.life.events.push({eventId:'care-feed:'+intent.id,petId:draft.petId,type:'social.care',source:'executor',actorId:'dad',occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'observed',payload:{action:'feed'}});rebuildRelationships(draft.life);return;}
+  // Parent-provided meals do not spend the pet's simulated wallet.
+  if(intent.type==='care.feed'){assert(e.played===true && e.itemId==='parent','投喂动画未完成');const result=actHumanity(human,'feed',at);assert(result.ok,result.message||'当前不能投喂');draft.humanity=result.state;draft.life.events.push({eventId:'care-feed:'+intent.id,petId:draft.petId,type:'social.care',source:'executor',actorId:'dad',occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'observed',payload:{action:'feed'}});rebuildRelationships(draft.life);return;}
   if(['care.water','care.pet','care.play','care.soothe','care.accompany'].includes(intent.type)){const action=intent.type.slice(5);assert(e.played===true && e.itemId===action,'照料动画未完成');const result=actHumanity(human,action,at);assert(result.ok,result.message||'当前不能照料');draft.humanity=result.state;draft.life.events.push({eventId:'care-'+action+':'+intent.id,petId:draft.petId,type:'social.care',source:'executor',...(intent.id.startsWith('speech-action:')?{}:{actorId:'dad'}),occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'observed',payload:{action,selfInitiated:intent.id.startsWith('speech-action:')}});rebuildRelationships(draft.life);return;}
   if (intent.type === 'service.eat-rice') {
     const services = pet.services; const itemId = params.itemId;

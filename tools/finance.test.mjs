@@ -115,12 +115,20 @@ test('聊天完成、失败和重复请求均不再扣饭钱',async()=>{
   assert.equal(f.get().legacy.wallet.balance,10000);
 });
 
-test('只有可信喂饭完成回执才扣除喂饭价格',()=>{
+for(const balance of [10000,0])test(`爸爸主动喂饭不扣饭钱，余额 ${balance} 时仍须可信完成回执`,()=>{
   const f=fixture(),draft=f.get(),at='2026-11-14T02:00:00.000Z';
+  draft.legacy.wallet.balance=balance;
   draft.humanity=createHumanity(Date.parse(at));
+  const satiety=draft.humanity.stats.satiety;
   const intent={id:'feed-action',type:'care.feed',payload:{parameters:{}}};
   projectOutcome(draft,intent,{status:'failed',evidence:{}},at,'receipt');
-  assert.equal(draft.legacy.wallet.balance,10000);
+  assert.equal(draft.legacy.wallet.balance,balance);
+  assert.equal(draft.humanity.stats.satiety,satiety);
+  assert.throws(()=>projectOutcome(draft,intent,{status:'completed',evidence:{confirmed:true,actionId:'feed-action',kind:'care.feed',played:false,itemId:'parent'}},at,'receipt'),/投喂动画未完成/);
+  assert.equal(draft.humanity.stats.satiety,satiety);
   projectOutcome(draft,intent,{status:'completed',evidence:{confirmed:true,actionId:'feed-action',kind:'care.feed',played:true,itemId:'parent'}},at,'receipt');
-  assert.equal(draft.legacy.wallet.balance,9980);
+  assert.equal(draft.legacy.wallet.balance,balance);
+  assert.ok(draft.humanity.stats.satiety>satiety);
+  assert.equal(draft.life.events.filter(e=>e.type==='wallet.spend').length,0);
+  assert.equal(draft.life.events.filter(e=>e.type==='social.care'&&e.payload.action==='feed').length,1);
 });
