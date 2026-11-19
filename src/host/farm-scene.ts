@@ -39,11 +39,15 @@ export function createFarmScene(store:Reader, gate:PetGate, uow:UnitOfWork, cloc
     if (!state) throw Error('稻田档案不可用');
     return state;
   };
-  const settle = (id:string, activate = false) => gate.run(id,async()=>{
-    const state = await load(id), now = clock();
-    if (!needsFarmAdvance(state,now) && (!activate || farmFacts(state,now))) return state;
-    return uow.apply(id,state.version,draft=>{advanceFarm(draft,now,activate);return {};});
-  });
+  const settle = async(id:string) => {
+    const latest = await load(id);
+    if (!needsFarmAdvance(latest,clock())) return latest;
+    return gate.run(id,async()=>{
+      const state = await load(id), now = clock();
+      if (!needsFarmAdvance(state,now)) return state;
+      return uow.apply(id,state.version,draft=>{advanceFarm(draft,now);return {};});
+    });
+  };
   const clearVisit = (id:string, owner?:string) => gate.run(id,async()=>{
     const state = await load(id), visit = farmVisit(state);
     if (!visit || (owner && visit.epoch !== owner)) return;
@@ -51,8 +55,7 @@ export function createFarmScene(store:Reader, gate:PetGate, uow:UnitOfWork, cloc
   });
   const cancel = (id:string, reason:string) => active.get(id)?.finish({status:'cancelled',evidence:{reason}});
   const snapshot = async(id:string) => {
-    const latest = await load(id);
-    const state = needsFarmAdvance(latest,clock()) ? await settle(id) : latest;
+    const state = await settle(id);
     const cmd = active.get(id), opening = openings.get(id);
     const command = cmd && cmd.epoch === epoch ? {id:cmd.id,operation:cmd.action.operation,clipMs:CLIP_MS} : null;
     const inside = !!epoch && farmVisit(state)?.epoch === epoch;
@@ -75,7 +78,7 @@ export function createFarmScene(store:Reader, gate:PetGate, uow:UnitOfWork, cloc
     async requestOpen(id:string) {
       if (!epoch) throw Error('桌宠尚未连接');
       const owner = epoch;
-      await settle(id,true);
+      await settle(id);
       if (owner !== epoch) throw Error('桌宠已断开');
       const existing = openings.get(id);
       if (existing) return existing.promise;
@@ -116,8 +119,7 @@ export function createFarmScene(store:Reader, gate:PetGate, uow:UnitOfWork, cloc
     },
     async helper(id:string, owner:string,input:{action:string;requestId?:string}) {
       if (!owner || epoch !== owner) throw Error('稻田通道已断开');
-      if (input.action === 'snapshot') return snapshot(id);
-      if (input.action === 'open') {await settle(id,true);return snapshot(id);}
+      if (input.action === 'snapshot' || input.action === 'open') return snapshot(id);
       if (input.action === 'open-ack') {
         const opening = openings.get(id);if (opening?.id === input.requestId) opening?.finish();
         return snapshot(id);
@@ -127,7 +129,7 @@ export function createFarmScene(store:Reader, gate:PetGate, uow:UnitOfWork, cloc
       }
       const cmd = active.get(id);
       if (input.action === 'enter') {
-        await settle(id,true);
+        await settle(id);
         await uow.applyCurrent(id,draft=>{
           if (epoch !== owner) throw Error('稻田通道已断开');
           checkFarmBody(draft,clock(),false);

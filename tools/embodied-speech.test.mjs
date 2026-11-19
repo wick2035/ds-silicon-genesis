@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createEmbodiedSpeech} from '../dist/host/embodied-speech.js';
+import {changeFarmWeather} from '../dist/host/farm.js';
 import {createHumanity,advanceHumanity,reactHumanity} from '../vendor/dsh-pet/src/host/humanity.mjs';
 import {actionFacts} from '../dist/host/semantic-grounding.js';
 import {WriterLease} from '../dist/host/writer-lease.js';
@@ -24,6 +25,27 @@ test('ordinary speech reads the committed state once before generating and check
   const f=fixture(),model={async *stream(){assert.equal(f.reads(),1);yield {type:'text',text:'爸爸，我在听。'};}};
   assert.equal(await collect(f.speech.wrap(model).stream(f.options)),'爸爸，我在听。');
   assert.equal(f.reads(),2);
+});
+
+test('speech knows the current farm weather at the worksite and refreshes when it changes mid-reply',async()=>{
+  const f=fixture(),s=f.get(),now=Date.now();let rounds=0;
+  s.legacy.worksite={inside:true};
+  changeFarmWeather(s,'heavy-rain',now);
+  const model={async *stream(o){
+    assert.match(o.system,/稻田天气是全局环境实况/);
+    const field=JSON.parse(o.system.split('稻田实况：')[1].split('。')[0]);
+    assert.equal(field.inside,false);
+    if(++rounds===1){
+      assert.equal(field.weatherLabel,'大雨');
+      changeFarmWeather(s,'heavy-typhoon',now);
+      yield {type:'text',text:'稻田在下大雨。'};
+    }else{
+      assert.equal(field.weatherLabel,'重度台风');
+      yield {type:'text',text:'稻田现在是重度台风。'};
+    }
+  }};
+  assert.equal(await collect(f.speech.wrap(model).stream(f.options)),'稻田现在是重度台风。');
+  assert.equal(rounds,2);
 });
 
 test('model operation feedback retains time and meaning without internal event IDs',async()=>{

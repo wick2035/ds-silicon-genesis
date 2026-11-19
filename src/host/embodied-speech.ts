@@ -1,6 +1,6 @@
 import {riceInventory,riceAvailability,validateRiceMeal} from './rice-inventory.js';
 import {cookerFacts} from './rice-cooker.js';
-import {farmFacts,farmVisit} from './farm.js';
+import {FARM_WEATHER_AWARENESS,farmVisit} from './farm.js';
 import {COMPANION_PERSONALITY,TIME_AWARENESS,riceMotivation} from './companion-personality.js';
 import {createHash} from 'node:crypto';
 import {selfModelContext,STABLE_PERSONALITY} from './self-model-context.js';
@@ -100,7 +100,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
     const initial=await sense(speech.petId,speech.contextExcludeIds??speech.sourceIds,query),messages=[...options.messages];
     const allowed=initial.envelope.life.constraints.capabilities.filter(c=>c.enabled&&(!c.requiresPermission||initial.envelope.life.constraints.permissions.includes(c.requiresPermission))).map(c=>c.name).filter(n=>executable.has(n)&&n!=='labor.step'&&!['care.feed','care.pet','care.soothe','care.accompany'].includes(n));
     if(!initial.envelope.life.constraints.capabilities.some(c=>c.name==='care.water')&&initial.envelope.life.constraints.capabilities.some(c=>c.name==='care.feed'&&c.enabled))allowed.push('care.water');
-    const tools=[{name:'sense_self',description:'感知此刻身体、需求、钱包、近期真实互动与行动结果。',inputSchema:empty},
+    const tools=[{name:'sense_self',description:'感知此刻身体、需求、钱包、稻田天气、近期真实互动与行动结果。',inputSchema:empty},
       ...(speech.allowActions?[{name:'act',description:'按需要选择一次真实行动。吃饭优先选锅里的熟饭（source=cooker），再选冰箱库存；没饭才考虑买。自己煮饭用 service.cook-rice。'+JSON.stringify(actionCatalog),inputSchema:{type:'object',properties:{actionType:{type:'string',enum:allowed},parameters:{type:'object'}},required:['actionType','parameters'],additionalProperties:false}},
       {name:'enter_worksite',description:'自主决定进入工地，即使没有任务也可以去；有任务时自动开始工作。',inputSchema:empty},
       {name:'begin_work',description:'在工地恢复普通工作，之后持续搬砖；不创建合同，不触发强制模式。',inputSchema:empty},
@@ -127,8 +127,8 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
       const decision=firstDecision?initial:await sense(speech.petId,speech.contextExcludeIds??speech.sourceIds,query);firstDecision=false;
       const signature=decisionFacts(decision.envelope);
       const {近期真实经历:recentExperiences,...currentContext}=decision.context;
-      const field=farmFacts(decision.envelope);
-      const liveFarm=field?'\n稻田实况：'+JSON.stringify({...field,inside:!!farmVisit(decision.envelope)})+'。天气起因未知。米缸只存生米。':'';
+      const field=currentContext.生活.farm;
+      const liveFarm=field?'\n稻田实况：'+JSON.stringify(field)+'。'+FARM_WEATHER_AWARENESS+'米缸只存生米。':'';
       const liveSystem=system+'\n此刻实况：'+promptData(currentContext,1600)+'\n近期真实经历：'+promptData(recentExperiences,800)+timeFor(decision.envelope)+liveWorkFor(decision.envelope)+updatesFor(decision.envelope)+liveFarm+'\n当前身体与食物（优先于旧对话和历史摘要）：'+JSON.stringify(liveFoodFor(decision.envelope));
       let text='';const calls=new Map<number,{id:string;name:string;arguments:string}>();
       for await(const part of model.stream({...options,embodied:undefined,embodiedSnapshot:undefined,signal,system:liveSystem,messages,tools:round<4?tools:undefined})){

@@ -2,6 +2,7 @@ import {createHash, randomUUID} from 'node:crypto';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 
 export const FARM_WATER_GAP = 4 * 60 * 60 * 1000;
+export const FARM_WEATHER_AWARENESS = '稻田天气是全局环境实况，你在桌面、工地或稻田都能知道当前天气。inside 只表示你是否在稻田。天气起因未知。';
 const SEEDS_PER_SEASON = 24;
 const SEED_LIMIT = SEEDS_PER_SEASON * 3;
 const DEFAULT_SEED_PRICE = 1;
@@ -107,14 +108,13 @@ function setWeather(draft:CanonicalEnvelope, farm:Farm, weather:FarmWeather, at:
 
 export function needsFarmAdvance(draft:CanonicalEnvelope, at:number) {
   const farm = storage(draft).farm;
-  return !!farm && farm.day.date < farmDay(at);
+  return !farm || farm.day.date < farmDay(at);
 }
 
-export function advanceFarm(draft:CanonicalEnvelope, at:number, activate = false, seed?:string) {
+export function advanceFarm(draft:CanonicalEnvelope, at:number, seed?:string) {
   const target = farmDay(at);
   const legacy = storage(draft);
   if (!legacy.farm) {
-    if (!activate) return;
     const weatherSeed = seed ?? randomUUID();
     legacy.farm = {seed:weatherSeed,day:{date:target,weather:'sunny',eventId:''},crop:null,rawBowls:0,lastHarvest:null};
     setWeather(draft,legacy.farm,randomFarmWeather(weatherSeed,target),at);
@@ -136,7 +136,7 @@ export function advanceFarm(draft:CanonicalEnvelope, at:number, activate = false
 }
 
 export function changeFarmWeather(draft:CanonicalEnvelope, weather:FarmWeather, at:number) {
-  advanceFarm(draft,at,true);
+  advanceFarm(draft,at);
   const farm = storage(draft).farm!;
   if (farm.day.date !== farmDay(at)) throw Error('稻田日期正在等待时钟恢复');
   if (farm.day.weather !== weather) setWeather(draft,farm,weather,at);

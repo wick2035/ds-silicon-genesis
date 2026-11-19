@@ -26,7 +26,7 @@ const drySeed = Array.from({length:200},(_,i)=>`test-${i}`).find(seed=>['16','17
 
 test('counts planting day, enforces four hours across midnight, and skips a dry day',()=>{
   const s=fixture();
-  advanceFarm(s,date(16,10),true,drySeed);
+  advanceFarm(s,date(16,10),drySeed);
   tend(s,'plant','sow',date(16,17));
   tend(s,'water','first',date(16,18));
   assert.throws(()=>tend(s,'water','early',date(16,21,59)),/浇水时间/);
@@ -50,7 +50,7 @@ test('counts planting day, enforces four hours across midnight, and skips a dry 
 
 test('rain credits and the worst damage survive a same-day weather replacement, while ripe yield stays locked',()=>{
   const s=fixture();
-  advanceFarm(s,date(16,7),true,drySeed);
+  advanceFarm(s,date(16,7),drySeed);
   tend(s,'plant','sow',date(16,7));
   tend(s,'water','water',date(16,7));
   changeFarmWeather(s,'light-rain',date(16,8));
@@ -71,7 +71,7 @@ test('rain credits and the worst damage survive a same-day weather replacement, 
 
 test('settles offline deterministically with weather only and without attributing weather to the user',()=>{
   const a=fixture();
-  advanceFarm(a,date(16,7),true,drySeed);tend(a,'plant','sow',date(16,7));
+  advanceFarm(a,date(16,7),drySeed);tend(a,'plant','sow',date(16,7));
   const b=structuredClone(a);
   noRain(a,16);noRain(b,16);
   advanceFarm(a,date(25));
@@ -89,8 +89,28 @@ test('settles offline deterministically with weather only and without attributin
   assert.ok(a.life.memories.some(m=>m.sourceIds.includes(manual.eventId)&&!m.content.includes('爸爸')));
   assert.ok(developmentMaterial(a,'2026-11-16',new Set()).some(e=>e.id===manual.eventId&&!e.text.includes('爸爸')));
   const empty=fixture();
-  advanceFarm(empty,date(16,7),true,drySeed);advanceFarm(empty,date(19));
+  advanceFarm(empty,date(16,7),drySeed);advanceFarm(empty,date(19));
   assert.deepEqual(weatherFacts(empty).map(e=>e.date),['2026-11-16','2026-11-17','2026-11-18','2026-11-19']);
+});
+
+test('weather initializes and rolls over without a connected helper or farm visit',async()=>{
+  const state=fixture();let now=date(16,23,59);
+  const store={loadEnvelope:async()=>structuredClone(state)};
+  const gate={run:async(_id,fn)=>fn()};
+  const uow={apply:async(_id,version,change)=>{assert.equal(version,state.version);change(state);state.version++;return structuredClone(state);}};
+  const scene=createFarmScene(store,gate,uow,()=>now);
+  const first=await scene.settle('main');
+  assert.equal(farmFacts(first,now).date,'2026-11-16');
+  assert.equal(farmVisit(first),undefined);
+  assert.equal((await scene.settle('main')).version,first.version);
+  now=date(17);
+  const next=await scene.settle('main');
+  const field=farmFacts(next,now);
+  assert.equal(field.date,'2026-11-17');
+  assert.equal(field.weather,randomFarmWeather(first.legacy.farm.seed,field.date));
+  assert.equal(farmVisit(next),undefined);
+  assert.deepEqual(next.life.events.map(e=>e.type),['farm.weather','farm.weather']);
+  assert.equal(field.weatherEventId,next.life.events.at(-1).eventId);
 });
 
 test('scene checks helper generation, worksite ownership and the completed animation, then projects one outcome',async()=>{
@@ -149,11 +169,14 @@ test('the cognition model may skip or propose a farm action, and old weather can
   const s=fixture(), now=date(16,8), at=new Date(now).toISOString();
   s.life=createInitialState('main',at);
   s.life.constraints={paused:false,permissions:[],remainingBudget:5,capabilities:[{name:'farm.tend',enabled:true,physical:true}]};
-  advanceFarm(s,now,true,drySeed);
-  s.life.legacyContext={farm:farmFacts(s,now)};
+  advanceFarm(s,now,drySeed);
+  s.life.legacyContext={farm:{...farmFacts(s,now),inside:false}};
   let wantsToPlant=false;
   const model=createCognitiveModel({async *stream(request){
     const farm=JSON.parse(request.messages[0].content).当前.legacyContext.farm;
+    assert.match(request.system,/稻田天气是全局环境实况/);
+    assert.equal(farm.inside,false);
+    assert.equal(farm.weather,'sunny');
     assert.equal(farm.operation,'plant');
     assert.equal(farm.rawBowls,0);
     const action=wantsToPlant?{actionType:'farm.tend',parameters:{operation:'plant',seedPurchase:farm.seedPurchase},priority:50,interruptPolicy:'interruptible',requiredCapabilities:['farm.tend'],sourceIds:[farm.weatherEventId]}:null;
@@ -177,7 +200,7 @@ test('the cognition model may skip or propose a farm action, and old weather can
 
 test('a season takes 24 bundles, existing seed stock is used first, and a shortage requires a current purchase quote',()=>{
   const s=fixture(),now=date(16,8);
-  advanceFarm(s,now,true,drySeed);
+  advanceFarm(s,now,drySeed);
   s.legacy.wallet.balance=23.99;
   assert.equal(farmFacts(s,now).operation,null);
   assert.throws(()=>completeFarmOperation(s,{operation:'plant'},'sow',now),/种子或饭钱不足/);

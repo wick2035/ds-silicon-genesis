@@ -167,7 +167,7 @@ export async function main():Promise<void> {
     executors.set('image.observe',createImageObserver(store,budget,model));
     const actions=new ActionCoordinator(unitOfWork,projectBody);
     const service=createLegacyServiceActions(store,lease,unitOfWork,actions,dispatcher);
-    const speech=createEmbodiedSpeech(store,lease,unitOfWork,actions,dispatcher,async(id)=>worksite.act(id,'resume-work'),
+    const speech=createEmbodiedSpeech({loadEnvelope:farm.settle},lease,unitOfWork,actions,dispatcher,async(id)=>worksite.act(id,'resume-work'),
       id=>worksite.act(id,'leave-voluntary'),id=>worksite.act(id,'request-entry'),id=>worksite.act(id,'stop-work'));
     let memeSource:MemeSource=async()=>[];
     const replyMemes=new Map<string,string>();
