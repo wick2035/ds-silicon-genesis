@@ -16,7 +16,7 @@ function fixture(){
   const store={loadEnvelope:async()=>structuredClone(state)},uow={apply:async(_id,version,change)=>{assert.equal(version,state.version);const draft=structuredClone(state);change(draft);draft.version++;state=draft;return draft;}};
   const domain=new LegacyDomain(store,uow,gate,{}),humanity=new CanonicalHumanityAdapter(store,uow,gate,{},{});
   const adapter=createLegacyRequestAdapter({store,gate,domain,humanity,resolvePet:()=>({petId:'main',name:'测试'})});
-  const companion=createCompanionManagement(adapter,domain,()=>{});
+  const companion=createCompanionManagement(adapter,domain,()=>{},store.loadEnvelope);
   const api=createLifeApi({authorize:()=>true,petId:()=> 'main',getState:async()=>{throw Error('unexpected');},companion});
   const post=async input=>{const response=await api(new Request('http://localhost/api/life/companion',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({requestId:randomUUID(),...input})}));return {status:response.status,...await response.json()}};
   return {post,companion,state:()=>state,store,gate,uow};
@@ -46,6 +46,19 @@ test('身体调整的冲突和照料拒绝会返回失败，不伪装成成功',
   assert.equal((await f.post({operation:'adjust',stats:{pain:30},expectedRevision:revision})).status,409);
   assert.equal((await f.post({operation:'care',action:'not-real'})).status,409);
   assert.equal((await f.post({operation:'job',kind:'help'})).status,409);
+});
+test('照料从一次已提交读取生成页面，无需调用写入接口',async()=>{
+  const f=fixture();
+  let reads=0;
+  const manager=createCompanionManagement(()=>assert.fail('unexpected adapter call'),undefined,()=>{},async id=>{
+    reads++;
+    return f.store.loadEnvelope(id);
+  });
+  const page=await manager.read('main',f.gate.signal);
+  assert.equal(reads,1);
+  assert.equal(page.body.stats.pain,f.state().humanity.stats.pain);
+  assert.equal(page.config.intelligence,f.state().legacy.config.intelligence);
+  assert.equal(page.diaryRevisionGuard,true);
 });
 test('日记编辑有并发检查，未知接口与无效请求被拒绝',async()=>{
   const f=fixture();f.state().legacy.diaries['2026-01-01']={text:'原文'};

@@ -22,17 +22,21 @@ test('日记只读取香港当天记录，念头及其原话不会被账本采�
 test('补写的日记归到日记日期，保留实际整理时间',async()=>{
   const source=await readFile(new URL('../src/ui/app.js',import.meta.url),'utf8');
   const helpers=source.slice(source.indexOf('const esc='),source.indexOf('function settings('));
-  const data={diaries:{'2026-11-14':{canonicalMemoryId:'diary-memory'}},memories:[{id:'diary-memory',content:'本鱼心里还没顺过来。',createdAt:'2026-11-15T08:00:00Z',kind:'autobiographical',sourceIds:[],valid:true}]};
-  const html=runInNewContext(helpers+'\ngrowth(data)',{data,Date,Intl});
-  assert.match(html,/日记 · 2026-11-14 · 整理于/);
-  const day=html.indexOf('datetime="2026-11-14"');assert.ok(day>=0);assert.ok(html.indexOf('本鱼心里还没顺过来。')>day);
+  const data={diaryDates:{'diary-memory':'2026-11-14'},memories:[{id:'diary-memory',content:'本鱼心里还没顺过来。',createdAt:'2026-11-15T08:00:00Z',kind:'autobiographical',sourceIds:[],valid:true}]};
+  const [html,entry]=runInNewContext(helpers+"\n[growth(data),deferredDayRecords.get('2026-11-14')?.()]",{data,Date,Intl,view:{addEventListener(){}}});
+  assert.match(html,/datetime="2026-11-14"/);
+  assert.match(entry??html,/日记 · 2026-11-14 · 整理于/);
+  assert.match(entry??html,/本鱼心里还没顺过来。/);
 });
 
 test('每日浏览显示最新日期与最新内容，保留空白日期，不改写聊天事件顺序',async()=>{
   const source=await readFile(new URL('../src/ui/app.js',import.meta.url),'utf8');
-  const helpers=source.slice(source.indexOf('function recordDay('),source.indexOf('function timeline('));
+  const helpers=source.slice(source.indexOf('const recordCalendar='),source.indexOf('function timeline('));
   const items=[{at:'2026-11-12T23:00:00Z',text:'旧记录'},{at:'2026-11-14T23:00:00Z',text:'较早'},{at:'2026-11-15T02:00:00Z',text:'最新'}],original=structuredClone(items);
-  const html=runInNewContext(helpers+"\ndailyRows(items,e=>e.text,'at','记忆')",{items,rows:(arr,fn)=>arr.map(fn).join(''),empty:String,Date,Intl});
-  assert.ok(html.indexOf('最新')<html.indexOf('较早'));assert.ok(html.indexOf('较早')<html.indexOf('旧记录'));
-  assert.match(html,/2026-11-14/);assert.match(html,/这一天没有记忆记录/);assert.deepEqual(items,original);
+  const [html,newest,gap,old]=runInNewContext(helpers+
+    "\n[dailyRows(items,e=>e.text,'at','记忆'),deferredDayRecords.get('2026-11-15')?.(),deferredDayRecords.get('2026-11-14')?.(),deferredDayRecords.get('2026-11-13')?.()]",
+    {items,rows:(arr,fn)=>arr.map(fn).join(''),empty:String,Date,Intl,view:{addEventListener(){}}});
+  assert.match(newest??html,/最新较早/);
+  assert.match(html,/2026-11-14/);assert.equal(gap,'这一天没有记忆记录。');assert.equal(old,'旧记录');
+  assert.doesNotMatch(html,/旧记录/);assert.deepEqual(items,original);
 });

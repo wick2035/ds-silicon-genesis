@@ -26,7 +26,7 @@ try {
   const wrapped={connect:async()=>({query:async(sql,values)=>client.query(sql==='BEGIN'?'SAVEPOINT companion_check':sql==='COMMIT'?'RELEASE SAVEPOINT companion_check':sql==='ROLLBACK'?'ROLLBACK TO SAVEPOINT companion_check':sql,values),release(){}})};
   const uow=new UnitOfWork(wrapped,gate),domain=new LegacyDomain(reader,uow,gate,{}),humanity=new CanonicalHumanityAdapter(reader,uow,gate,{},{});
   const adapter=createLegacyRequestAdapter({store:reader,gate,domain,humanity,resolvePet:()=>({petId:id,name:'大肥鱼'})});
-  const companion=createCompanionManagement(adapter,domain,()=>{}),api=createLifeApi({authorize:()=>true,petId:()=>id,getState:async()=>{throw Error('unexpected read')},companion});
+  const companion=createCompanionManagement(adapter,domain,()=>{},reader.loadEnvelope),api=createLifeApi({authorize:()=>true,petId:()=>id,getState:async()=>{throw Error('unexpected read')},companion});
   const get=async()=>{const r=await api(new Request('http://localhost/api/life/companion'));assert.equal(r.status,200);return (await r.json()).value};
   const post=async(input,expected=200)=>{const r=await api(new Request('http://localhost/api/life/companion',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...input,requestId:randomUUID()})}));const body=await r.json();assert.equal(r.status,expected,body.error);return body};
   const before=await get();

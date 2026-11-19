@@ -11,6 +11,11 @@ const identifier = (value: string) => typeof value === 'string' && /^[a-zA-Z0-9:
 const humanRestChanged=(before:HumanState,after:HumanState)=>before.restingUntil!==after.restingUntil;
 const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
+export function describeHumanitySnapshot(human:HumanState|undefined,now=Date.now()):HumanState {
+  if(!human?.stats||!human?.emotions||!Number.isFinite(human.updatedAt))throw Error('生命身体状态不存在或无效');
+  return describeHumanity(structuredClone(human),now);
+}
+
 /** All mutation and receipts are committed to one envelope before this API resolves.
  * Callers must await success before rendering, replying or performing any effect.
  * The host must inject this asynchronous interface into migrated routes; it is not
@@ -47,9 +52,8 @@ export class CanonicalHumanityAdapter {
     return this.apply(petId, (human, now) => { const state = advanceHumanity(human, now); return {state, result:state}; });
   }
   async snapshot(petId: string): Promise<HumanState> {
-    const envelope=await this.reader.loadEnvelope(petId),human=envelope?.humanity;
-    if(!human?.stats||!human?.emotions||!Number.isFinite(human.updatedAt))throw Error('生命身体状态不存在或无效');
-    return describeHumanity(structuredClone(human),this.now());
+    const envelope=await this.reader.loadEnvelope(petId);
+    return describeHumanitySnapshot(envelope?.humanity,this.now());
   }
   async prompt(petId: string): Promise<string> { const state = await this.get(petId); return humanityPrompt(state, this.now()); }
   async act(petId: string, action: string, requestId: string): Promise<HumanState> {

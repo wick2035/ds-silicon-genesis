@@ -6,10 +6,11 @@ if (initialToken && /^[A-Za-z0-9_-]{43}$/.test(initialToken)) {
   history.replaceState(null,'',location.pathname+location.search);
 }
 async function fetchResult(url, options = {}) {
+  const {signal,...fetchOptions}=options;
   const controller=new AbortController();
   const timer=setTimeout(()=>controller.abort(),120000);
   try {
-    const response=await fetch(url,{credentials:'same-origin',...options,signal:controller.signal});
+    const response=await fetch(url,{credentials:'same-origin',...fetchOptions,signal:signal?AbortSignal.any([signal,controller.signal]):controller.signal});
     const data=await response.json().catch(()=>null);
     if(!response.ok||!data?.ok)throw Error(data?.error||data?.message||`生命系统请求失败 (${response.status})`);
     return data;
@@ -24,7 +25,6 @@ async function request(route, options = {}) {
   if(token) headers.set('x-dsh-pet-token',token);
   return (await fetchResult(`/api/life/${route}`,{...options,headers})).value;
 }
-let initialSnapshot;
 window.lifeApi = Object.freeze({
   chat: async (text, requestId, attachments = [], onPartial, onUsage, onMeme) => {
     const token=sessionStorage.getItem('life-token'),headers={'content-type':'application/json','accept':'text/event-stream'};if(token)headers['x-dsh-pet-token']=token;
@@ -48,32 +48,28 @@ window.lifeApi = Object.freeze({
   openFarm: () => request('farm', {method:'POST'}),
   setFarmWeather: weather => request('farm-weather', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({weather})}),
   openWorksite: () => request('worksite', {method:'POST'}),
-  getSnapshot: () => {if(initialSnapshot){const snapshot=initialSnapshot;initialSnapshot=undefined;return Promise.resolve(snapshot);}return request('snapshot');},
-  getGoals: () => request('goals'),
-  getTimeline: () => request('timeline'),
-  getRelationships: () => request('relationships'),
-  getGrowth: async () => {const [growth,companion]=await Promise.all([request('growth'),request('companion').catch(()=>null)]);return {...growth,diaries:companion?.diaries};},
+  getSnapshot: signal => request('snapshot',{signal}),
+  getGoals: signal => request('goals',{signal}),
+  getTimeline: signal => request('timeline?view=page',{signal}),
+  getChatHistory: signal => request('chat-history',{signal}),
+  getRelationships: signal => request('relationships',{signal}),
+  getGrowth: (section,signal) => request('growth?view='+encodeURIComponent(section),{signal}),
   searchMemories: query => request('memory-search?q='+encodeURIComponent(query)),
   getMemoryGraph: query => request('memory-graph?q='+encodeURIComponent(query||'')),
-  getSettings: () => request('settings'),
-  getFinance: () => request('finance'),
+  getSettings: signal => request('settings',{signal}),
+  getFinance: signal => request('finance',{signal}),
   updateFinance: input => request('finance', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(input)}),
-  getCompanion: () => request('companion'),
+  getCompanion: signal => request('companion',{signal}),
   updateCompanion: input => request('companion', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(input)}),
-  getModel: () => request('model'),
+  getModel: signal => request('model',{signal}),
   updateModel: input => request('model', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(input)}),
   manage: command => request('manage', { method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(command) })
 });
 
-// Establish the host's same-origin session cookie before importing modules.
-// Module requests cannot attach the token header themselves.
-void (async()=>{
-  try {
-    initialSnapshot=await window.lifeApi.getSnapshot();
-    await import('./app.js');
-  } catch(error) {
-    document.querySelector('#connection').textContent='连接不可用';
-    document.querySelector('#connection-detail').textContent='请重新从桌宠打开';
-    const notice=document.querySelector('#notice');notice.textContent=error?.message||'无法连接生命系统，请重新从桌宠打开。';notice.hidden=false;
-  }
-})();
+// Life UI scripts are public to the local host. Data requests still use
+// the existing token header and establish the session cookie for media.
+void import('./app.js').catch(error=>{
+  document.querySelector('#connection').textContent='连接不可用';
+  document.querySelector('#connection-detail').textContent='请重新从桌宠打开';
+  const notice=document.querySelector('#notice');notice.textContent=error?.message||'无法连接生命系统，请重新从桌宠打开。';notice.hidden=false;
+});

@@ -10,14 +10,15 @@ const costNames=['chat','whisper','feed','diary','explore'] as const;
 /** All writes go through the existing per-pet transaction and operation receipt. */
 export function createFinanceManagement(store:Reader,gate:PetGate,domain:LegacyDomain) {
   return {
-    read:(id:string)=>gate.run(id,async()=>{
+    read:async(id:string)=>{
+      gate.signal.throwIfAborted();
       const envelope=await store.loadEnvelope(id);if(!envelope)throw Error('饭钱状态不可用');
       const p=envelope.legacy as Record<string,any>, labor=p.labor||{},contracts=Array.isArray(labor.contracts)?labor.contracts:[];
       const pending=contracts.filter((c:any)=>['offered','working','paused','queued'].includes(c.status) && c.done<c.trips);
       const seedShop=farmSeedShop(envelope.legacy);
       return {wallet:p.wallet,costs:{...p.config?.costs,riceSeed:seedShop.price},seedShop,labor:{current:pending[0]||null,queue:pending.slice(1),history:contracts.filter((c:any)=>['paid','declined','cancelled','unpaid'].includes(c.status)).slice().reverse(),execution:labor.execution||null},
         events:(Array.isArray(p.events)?p.events:[]).filter((e:any)=>['wallet','wallet-spend','labor'].includes(e.kind)).slice(-30).reverse().map((e:any)=>({id:e.id,text:e.text,ts:e.ts}))};
-    }),
+    },
     write:async(id:string,input:Record<string,unknown>)=>{
       const requestId=input.requestId;
       if(typeof requestId!=='string'||!/^[a-zA-Z0-9:-]{8,140}$/.test(requestId))throw Error('操作编号无效');

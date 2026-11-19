@@ -87,6 +87,10 @@ test('说说沿用认知调用和成长接口，撤下来源失效的内容', as
   assert.equal(moments.length, 1);
   assert.equal(moments[0].text, accepted.candidates.moment.text);
   assert.equal(moments[0].context, '给稻田浇了水');
+  assert.deepEqual(await get('growth?view=moments'),{moments});
+  const archive=await get('growth?view=archive');
+  assert.equal(archive.memories[0].id,memory.id);
+  assert.equal(Object.hasOwn(archive,'moments'),false);
   assert.ok(!(await get('timeline')).some(item=>item.type===momentEventType));
   assert.equal(state.memories.length, 1);
   const posted = structuredClone(state);
@@ -97,4 +101,24 @@ test('说说沿用认知调用和成长接口，撤下来源失效的内容', as
   const manage = createLifeManagement(reader, gate, uow, projectBody);
   await manage('main', {kind:'memory', action:'delete', id:memory.id, expectedContent:memory.content, version:state.version, reason:'不再保留这个念头'});
   assert.deepEqual((await get('growth')).moments, []);
+});
+
+test('聊天只返回有效私聊，轨迹简版仅保留页面字段',async()=>{
+  const now=Date.now(),state=createInitialState('main',new Date(now).toISOString());
+  state.events.push(
+    event('private','conversation.user',now,{text:'私聊内容',internal:'隐藏字段'},{source:'qq-c2c'}),
+    event('deleted','conversation.assistant',now,{text:'已删除'},{source:'desktop'}),
+    event('group','conversation.user',now,{text:'群聊内容'},{source:'qq-group'}),
+    event('post',momentEventType,now,{text:'说说内容'})
+  );
+  state.invalidSources.deleted='用户删除';
+  const api=createLifeApi({authorize:request=>request.headers.get('x-test')==='yes',petId:()=> 'main',getState:async()=>state});
+  const get=async path=>(await (await api(new Request('http://localhost/api/life/'+path,{headers:{'x-test':'yes'}}))).json()).value;
+  const unauthorized=await api(new Request('http://localhost/api/life/chat-history'));
+  assert.equal(unauthorized.status,403);
+  assert.deepEqual(await get('chat-history'),[{id:'private',role:'user',text:'私聊内容',at:new Date(now).toISOString()}]);
+  const compact=await get('timeline?view=page');
+  assert.deepEqual(compact.map(row=>row.description),['私聊内容','已删除','群聊内容']);
+  assert.ok(compact.every(row=>!Object.hasOwn(row,'payload')));
+  assert.equal((await get('timeline'))[0].payload.internal,'隐藏字段');
 });

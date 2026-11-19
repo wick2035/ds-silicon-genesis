@@ -18,6 +18,7 @@ const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(
   value && typeof value === 'object' ? Object.fromEntries(Object.entries(value as Record<string, unknown>)
     .sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)])) : value;
 const equal = (left: unknown, right: unknown) => JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
+const budgetDay=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'});
 
 /** Host mutations and kernel mutations must both use this envelope and CAS. */
 export class PostgresKernelStore implements KernelStore {
@@ -46,8 +47,28 @@ export class PostgresKernelStore implements KernelStore {
     return rows.length?{legacy:rows[0].legacy,life:{actions:rows[0].actions??[]}}:null;
   }
 
-  async loadEnvelope(petId: string): Promise<CanonicalEnvelope | null> {
-    const result = await this.db.query(
+  loadEnvelope(petId: string): Promise<CanonicalEnvelope | null> {
+    return this.readEnvelope(this.db,petId);
+  }
+
+  loadCommittedEnvelope(petId: string): Promise<CanonicalEnvelope | null> {
+    return this.readEnvelope(this.reads,petId);
+  }
+
+  async loadLifeSettings(petId:string) {
+    const {rows}=await this.reads.query(
+      `SELECT version::text AS version, payload#>'{life,constraints,paused}' AS paused,
+        payload#>'{life,constraints,permissions}' AS permissions,
+        payload#>'{legacy,config,qqGroupBlocked}' AS "groupChatBlocked"
+        FROM silicon_genesis.life_state WHERE pet_id=$1`,[petId]);
+    const row=rows[0],version=Number(row?.version);
+    if(!Number.isSafeInteger(version)||typeof row?.paused!=='boolean'||!Array.isArray(row.permissions))
+      throw Error('生命设置不可用');
+    return {version,paused:row.paused as boolean,permissions:row.permissions as string[],groupChatBlocked:row.groupChatBlocked===true};
+  }
+
+  private async readEnvelope(db:Queryable,petId:string):Promise<CanonicalEnvelope|null> {
+    const result = await db.query(
       'SELECT version::text AS version, payload FROM silicon_genesis.life_state WHERE pet_id=$1', [petId]);
     if (!result.rows.length) return null;
     const { payload } = result.rows[0];
@@ -66,14 +87,17 @@ export class PostgresKernelStore implements KernelStore {
   }
 
   projectEnvelope(envelope:CanonicalEnvelope):LifeState {
-    const petId=envelope.petId;
-    const projection = this.projectBody(envelope);
-    const life=structuredClone(envelope.life), legacy=envelope.legacy as Record<string,any>;
-    const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+    return {...structuredClone(this.projectReadState(envelope)),legacyContext:this.projectLegacy(envelope)};
+  }
+
+  /** Shares archive arrays with the envelope. Use only for read-only views. */
+  projectReadState(envelope:CanonicalEnvelope):Omit<LifeState,'legacyContext'> {
+    const life=envelope.life, constraints={...life.constraints}, legacy=envelope.legacy as Record<string,any>;
+    const day=budgetDay.format(new Date());
     const limit=legacy.config?.learning?.dailyModelCalls, used=legacy.usage?.[day]?.totalCalls ?? 0;
     if(Number.isSafeInteger(limit) && limit>=0 && Number.isSafeInteger(used) && used>=0)
-      life.constraints.remainingBudget=Math.max(0,Math.max(0,limit-2)-used);
-    return { ...life, petId, version: envelope.version, ...projection, legacyContext:this.projectLegacy(envelope) };
+      constraints.remainingBudget=Math.max(0,Math.max(0,limit-2)-used);
+    return {...life,constraints,petId:envelope.petId,version:envelope.version,...this.projectBody(envelope)};
   }
 
   async commitEnvelope(petId: string, expectedVersion: number, next: CanonicalEnvelope): Promise<boolean> {

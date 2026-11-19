@@ -198,7 +198,17 @@ export async function main():Promise<void> {
     const retrieval=new CanonicalMemoryRetrieval(lease,desktopIdle,reranker,memoryIndex,embedding), chat=new CanonicalChat(store,lease,unitOfWork,budget,model,(id,q,snapshot)=>retrieval.search(id,q,12,snapshot),(id,key,input)=>domain.laborAction(id,key,input),(id,input)=>service(id,input),id=>worksiteWake(id),grounding,waitForWorksiteStep,resumeWorkAfterChat);
     let requestShutdown=()=>{};
     let companionManagement:ReturnType<typeof createCompanionManagement>;
-    const lifeApi=createLifeApi({authorize:()=>true,petId:()=>petId,getState:id=>kernel.getState(id),shutdown:()=>requestShutdown(),openWorksite:id=>helper.requestWorksiteOpen(id),farm,attachments,finance:createFinanceManagement(store,lease,domain),
+    const loadCommitted=(id:string)=>store.loadCommittedEnvelope(id);
+    const lifeApi=createLifeApi({authorize:()=>true,petId:()=>petId,getState:async(id,view)=>{
+      const envelope=await loadCommitted(id);
+      if(!envelope)throw Error('生命状态不存在');
+      const state=store.projectReadState(envelope);
+      if(view!=='archive')return state;
+      const diaries=(envelope.legacy.diaries??{}) as Record<string,{deleted?:boolean;canonicalMemoryId?:string}>;
+      const diaryDates=Object.fromEntries(Object.entries(diaries).filter(([,entry])=>entry&&!entry.deleted)
+        .map(([day,entry])=>[entry.canonicalMemoryId||'legacy:diary:'+day,day]));
+      return {...state,diaryDates};
+    },getLifeSettings:id=>store.loadLifeSettings(id),shutdown:()=>requestShutdown(),openWorksite:id=>helper.requestWorksiteOpen(id),farm,attachments,finance:createFinanceManagement({loadEnvelope:loadCommitted},lease,domain),
       companion:{read:(id,signal)=>companionManagement.read(id,signal),write:(id,input,signal)=>companionManagement.write(id,input,signal)},
       model:{read:async()=>model!.getSettings(),write:async(id,input)=>{
         if(input.operation==='save'){const {operation,...settings}=input;return model!.saveSettings(settings);}
@@ -207,7 +217,6 @@ export async function main():Promise<void> {
         if(input.operation==='models')return model!.discoverModels();
         throw Error('模型操作无效');
       }},
-      groupChatBlocked:async id=>{const state=await store.loadEnvelope(id);return !state||groupChatBlocked(state);},
       manage:createLifeManagement(store,lease,unitOfWork,projectBody,id=>dispatcher.interrupt(id),blocked=>qq?.setGroupBlocked(blocked)),
       searchMemories:async(id,q)=>retrieval.search(id,q,12,await kernel.getState(id)),memoryGraph:async(id,q)=>({...memoryGraph(await kernel.getState(id),q),reranker:reranker.status(),embedding:embedding.status()}),links:{play:`/dsh-pet-7340/humanity?pet=${encodeURIComponent(petId)}`}});
     const chatApi=createChatHttp(chat,()=>true,()=>petId);
@@ -220,7 +229,7 @@ export async function main():Promise<void> {
     let waitCareResponse:((eventId:string)=>Promise<string|undefined>)|undefined;
     const adapter=createLegacyRequestAdapter({store,gate:lease,domain,humanity,service,development,responses,waitCareResponse:eventId=>waitCareResponse?.(eventId)??Promise.resolve(undefined),interrupt:id=>dispatcher.interrupt(id),tokenSnapshot:id=>tokens.snapshot(id),providers:{search:true,fetch:true,bili:true,image:true,model:true},view:id=>commandChannel.view(id),resolvePet:url=>{
       const selected=url.searchParams.get('pet')||petId;if(selected!==petId)throw Error('宠物不存在');return {petId,name:'大肥鱼'};}});
-    companionManagement=createCompanionManagement(adapter,domain,id=>dispatcher.interrupt(id));
+    companionManagement=createCompanionManagement(adapter,domain,id=>dispatcher.interrupt(id),loadCommitted);
     const cognitionSpeech={async *stream(options:any){const pool=await memeSource(petId,'whisper');yield* model!.llm.stream({...options,system:options.system+(pool.length?'\n若决定 self.express，可按当前语境自选一张表情，把名称放在 parameters.meme；可以不选，不用图推断实际行动完成。可用名称和画面描述：'+JSON.stringify(pool):'')});}};
     const cognition=new Cognition(createCognitiveModel(cognitionSpeech,()=>model!.agentDefaultModel.currentSelection()),budget,retrieval);
     let publishWhisper:((text:string,image?:string,surface?:string)=>void)|undefined;

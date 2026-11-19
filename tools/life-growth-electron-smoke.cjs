@@ -22,15 +22,27 @@ const goals={items:[
 ]}],sources};
 const growth={sources,worldModel:{facts:[{topic:'farm.weather',value:'雨水补足了两次浇水。',day:'2026-11-19',valid:true,sourceIds:['weather']}]},
   selfModel:{habits:[{label:'work:rest',value:'休息之后再去搬完。',valid:true,sourceIds:['receipt']}]},memories:[],plans:[],observations:[],beliefs:[]};
-let server,empty=false;
+let server,empty=false,holdSnapshot=false,currentCancelled=false;
+const requests=[];
 const deadline=setTimeout(()=>app.exit(1),20000);
 app.whenReady().then(async()=>{
   server=http.createServer((req,res)=>{
     const route=new URL(req.url,'http://localhost');
     if(route.pathname.startsWith('/api/life/')){
       const endpoint=route.pathname.split('/').at(-1);
-      const data={goals:empty?{items:[],plans:[],sources}:goals,growth:empty?{...growth,worldModel:{facts:[]},selfModel:{habits:[]}}:growth,
-        snapshot:{sources,runtime:{paused:false}},'memory-graph':{nodes:[],edges:[]}};
+      const section=route.searchParams.get('view');
+      requests.push(section?endpoint+':'+section:endpoint);
+      if(endpoint==='snapshot'&&holdSnapshot){
+        res.once('close',()=>{currentCancelled=true;});
+        return;
+      }
+      const archive=empty?{...growth,worldModel:{facts:[]},selfModel:{habits:[]}}:growth;
+      const data={goals:empty?{items:[],plans:[],sources}:goals,growth:section==='moments'?{moments:[]}:archive,
+        snapshot:{sources,runtime:{paused:false}},'memory-graph':{nodes:[],edges:[]},
+        timeline:[{description:'昨天的轨迹',occurredAt:new Date(Date.now()-86_400_000).toISOString(),evidenceLevel:'observed'}],
+        'chat-history':[{id:'message',role:'user',text:'在这里聊天'}],relationships:[],
+        finance:{wallet:{balance:100,frozen:false},costs:{}},
+        settings:{paused:false,permissions:[],groupChatBlocked:false}};
       res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({ok:true,value:data[endpoint]??{sources}}));return;
     }
     const name=route.pathname==='/life/'?'index.html':route.pathname.split('/').at(-1);
@@ -55,8 +67,32 @@ app.whenReady().then(async()=>{
   };
   const noOverflow=()=>evaluate('document.documentElement.scrollWidth <= window.innerWidth+1');
   const url='http://127.0.0.1:'+server.address().port+'/life/';
+  holdSnapshot=true;
   await win.loadURL(url);
+  for(let attempt=0;attempt<120&&!requests.includes('snapshot');attempt++)await new Promise(resolve=>setTimeout(resolve,30));
+  assert.ok(requests.includes('snapshot'));
+  await open('chat','在这里聊天');
   await waitFor("document.querySelector('#connection').textContent==='已连接'");
+  for(let attempt=0;attempt<120&&!currentCancelled;attempt++)await new Promise(resolve=>setTimeout(resolve,30));
+  assert.equal(currentCancelled,true);
+  assert.deepEqual(requests,['snapshot','chat-history']);
+  holdSnapshot=false;
+  await open('current','身体状态');
+  await open('companion','照料与成长');
+  await waitFor("document.querySelector('#view').textContent.includes('好好照顾她')");
+  await open('timeline','生命轨迹');
+  await waitFor("document.querySelectorAll('.record-day').length>1");
+  assert.equal(await evaluate("document.querySelector('#view').textContent.includes('昨天的轨迹')"),false);
+  await evaluate("document.querySelector('.record-day:not([open]) summary').click()");
+  await waitFor("document.querySelector('#view').textContent.includes('昨天的轨迹')");
+  assert.ok(requests.includes('timeline:page'));
+  await open('relationships','还没有关系记录');
+  await open('finance','模拟饭钱余额');
+  await open('settings','可以看群消息');
+  await open('growth','大肥鱼的说说');
+  await waitFor("document.querySelector('.moments-empty')");
+  assert.ok(requests.includes('growth:moments'));
+  assert.ok(!requests.includes('growth:archive'));
   for(const width of [1180,390]){
     win.setSize(width,720);
     await open('goals','等待确认');
@@ -66,11 +102,12 @@ app.whenReady().then(async()=>{
     assert.equal(await noOverflow(),true);
     await open('growth','成长档案');
     await evaluate("(()=>{const archive=document.querySelector('[data-growth-section=archive]');if(archive.getAttribute('aria-pressed')!=='true')archive.click()})()");
-    await waitFor("document.querySelector('#view').textContent.includes('她记住的稻田')");
+    await waitFor("!document.querySelector('#refresh').disabled&&document.querySelector('#view').textContent.includes('她记住的稻田')");
     assert.ok(await evaluate("document.querySelector('#view').textContent.includes('先恢复再搬')"));
     assert.equal(await noOverflow(),true);
     await evaluate('window.scrollTo(0,0)');
     await waitFor("document.querySelector('[data-growth-section=archive]')?.getAttribute('aria-pressed')==='true'");
+    await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
     await fs.promises.writeFile(path.join(profile,`growth-${width}.png`),(await win.webContents.capturePage()).toPNG());
   }
   empty=true;
@@ -81,5 +118,5 @@ app.whenReady().then(async()=>{
   await evaluate("document.querySelector('[data-growth-section=archive]').click()");
   await waitFor("document.querySelector('#view').textContent.includes('这里会积累她能用上的经验')");
   win.destroy();
-  console.log('目标与成长页面通过 1180px / 390px 渲染检查，截图目录 '+profile);
+  console.log('侧栏切换、请求取消、按需展开与 1180px / 390px 渲染检查通过，截图目录 '+profile);
 }).then(()=>{clearTimeout(deadline);server?.close();app.exit(0);}).catch(error=>{console.error(error);clearTimeout(deadline);server?.close();app.exit(1);});

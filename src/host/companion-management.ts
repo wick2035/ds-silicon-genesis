@@ -1,10 +1,14 @@
 import type { LegacyDomain } from './legacy-domain.js';
+import type { CanonicalEnvelope } from '../storage/postgres.js';
+import { describeHumanitySnapshot } from './humanity-adapter.js';
+import { projectCompanionDetails } from './legacy-snapshot.js';
 
 type Adapter = (url:string, method:string, body?:string, signal?:AbortSignal)=>Promise<{status:number;obj:unknown}>;
 type Obj = Record<string,any>;
 
 /** Authenticated life UI access to the same domain operations as the desktop. */
-export function createCompanionManagement(adapter:Adapter, domain:LegacyDomain, interrupt:(id:string)=>void) {
+export function createCompanionManagement(adapter:Adapter, domain:LegacyDomain, interrupt:(id:string)=>void,
+  loadCommitted:(id:string)=>Promise<CanonicalEnvelope|null>) {
   const call=async(path:string, method:string, input:Obj|undefined, signal:AbortSignal):Promise<Obj>=>{
     const result=await adapter('/dsh-pet-7340/humanity/'+path,method,input?JSON.stringify(input):undefined,signal);
     const data=result.obj as Obj;
@@ -12,10 +16,13 @@ export function createCompanionManagement(adapter:Adapter, domain:LegacyDomain, 
     return data;
   };
   return {
-    async read(_id:string,signal:AbortSignal) {
-      const [body,companion]=await Promise.all([call('state','GET',undefined,signal),call('companion/state','GET',undefined,signal)]);
-      const p=companion.state||{};
-      return {body:{stats:body.state?.stats,adjustmentRevision:body.state?.adjustmentRevision},config:p.config,learning:p.learning,abilities:p.abilities,wishes:p.wishes,diaries:p.diaries,persona:p.growth?.persona,diaryRevisionGuard:true};
+    async read(id:string,signal:AbortSignal) {
+      signal.throwIfAborted();
+      const envelope=await loadCommitted(id);
+      signal.throwIfAborted();
+      if(!envelope)throw Error('生命状态不存在');
+      const body=describeHumanitySnapshot(envelope.humanity),p=envelope.legacy as Obj;
+      return {body:{stats:body.stats,adjustmentRevision:body.adjustmentRevision},config:p.config,...projectCompanionDetails(p),wishes:p.wishes,diaries:p.diaries,persona:p.growth?.persona,diaryRevisionGuard:true};
     },
     async write(id:string,input:Obj,signal:AbortSignal) {
       if(typeof input.requestId!=='string'||!/^[A-Za-z0-9-]{16,80}$/.test(input.requestId))throw Error('操作标识无效');

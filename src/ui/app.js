@@ -10,7 +10,8 @@ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const head=p=>`<div class="page-head"><div><h1>${esc(p[1])}</h1><p>${esc(p[2])}</p></div></div>`;
 const empty=(text='还没有记录。')=>`<div class="empty">${esc(text)}</div>`;
 const card=(name,content,cls='',sub='')=>`<section class="card ${cls}"><h2>${esc(name)}</h2>${sub?`<div class="card-sub">${esc(sub)}</div>`:''}${content}</section>`;
-const date=v=>{if(!v)return '时间未知';const d=new Date(v);return Number.isNaN(d.valueOf())?String(v):new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(d)};
+const recordClock=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+const date=v=>{if(!v)return '时间未知';const d=new Date(v);return Number.isNaN(d.valueOf())?String(v):recordClock.format(d)};
 const status=v=>({active:'进行中',paused:'已暂停',deferred:'已延期',completed:'已完成',failed:'未完成',abandoned:'已放弃',PROPOSED:'已提出',VALIDATED:'已验证',PENDING:'等待执行',DISPATCHED:'执行中',COMPLETED:'已完成',FAILED:'未完成',CANCELLED:'已取消',UNKNOWN:'结果待确认',pending:'待开始',in_progress:'进行中',awaiting_receipt:'结果待确认'}[v]||v||'状态未知');
 const evidence=v=>({observed:'观察所得',verified:'已验证',reported:'他人报告',inferred:'推测',fictional:'虚构'}[v]||'来源未标注');
 const kind=v=>({episodic:'经历',semantic:'知识',procedural:'经验',autobiographical:'个人历程',social:'社交',commitment:'承诺'}[v]||v||'未分类');
@@ -65,7 +66,8 @@ function availableLinks(links){if(!links||typeof links!=='object')return '';cons
 function spiritCard(s){if(!s)return card('精神力',empty('精神状态尚未同步。'),'full');const mode={awake:'醒着',sleep:'睡眠恢复中',nap:'打盹中'}[s.mode]||'状态待确认';const elapsed=s.sleepStartedAt?Math.max(0,(Date.now()-s.sleepStartedAt)/3600000):0;return card('精神力',`<div class="metrics">${metric(mode,s.value)}</div><p class="state-note">${s.mode==='sleep'?`这一觉已睡 ${num(elapsed)} 小时。${s.sleepRecoveryAt?'调整后，精神会从新数值继续恢复。':`睡满 ${num(s.config.sleepHours)} 小时恢复充沛。`}`:s.mode==='nap'?'眯一会儿，慢慢缓过来。打盹不替代整夜睡眠。':`上次睡了 ${num(s.lastSleepHours)} 小时。聊天与行动会消耗精神，连续睡满 ${num(s.config.sleepHours)} 小时回满。`}</p><div class="actions spirit-actions"><button class="secondary" data-spirit="/休息" ${s.mode!=='awake'?'disabled':''}>睡一觉</button><button class="secondary" data-spirit="/打盹" ${s.mode!=='awake'?'disabled':''}>打盹 20 分钟</button><button class="secondary" data-spirit="/醒来" ${s.mode==='awake'?'disabled':''}>叫醒她</button><button class="secondary" data-spirit="/甜食" ${s.mode!=='awake'?'disabled':''}>吃点甜食</button></div><p class="state-note">甜食花费四分之一碗饭的钱，补充少量精神，也会更饿；每 ${num(s.config.sweetCooldownHours)} 小时一次。</p><form id="spirit-adjust-form" class="spirit-adjust"><div class="spirit-adjust-copy"><label for="spirit-value">主动调整精神力</label><p>提高时，她会记得吃了一个金色 token；降低时，她会觉得发生了一些变故。</p></div><div class="spirit-adjust-controls"><input id="spirit-value" type="number" min="0" max="100" step="0.01" value="${esc(num(s.value))}" required aria-describedby="spirit-adjust-result"><button class="primary" type="submit">应用调整</button></div><p id="spirit-adjust-result" role="status"></p></form>`,'full spirit-card')}
 function current(d){d=d||{};const waits=[];if(d.runtime?.paused)waits.push('自主活动已暂停，可在右上角恢复');if(d.body?.sleeping)waits.push('她正在睡觉，醒来后继续');if(d.body?.restrained)waits.push('身体正被抓住或桌宠连接未确认，松开并等待连接恢复');if(d.body?.injured)waits.push('身体需要恢复，部分活动会等待');if(d.runtime?.remainingBudget===0)waits.push('今日自主模型额度已用完');if(Array.isArray(d.runtime?.permissions)&&!d.runtime.permissions.includes('network'))waits.push('联网学习尚未授权，可在设置中查看');if((d.actions||[]).some(a=>a.status==='UNKNOWN'&&Date.now()-Date.parse(a.updatedAt)<300000))waits.push('最近有行动结果待确认，其他行动可继续');const identity=d.identity||{};const name=identity.name||'大肥鱼';return `<div class="grid"><div id="current-live" style="display:contents"><section class="card hero full"><div class="hero-copy"><p class="hero-intro">${esc(identity.role||'大肥鱼的生命空间')}</p><h2>你好，${esc(name)}。</h2><p>每一次相遇，每一段经历，<br>都在这里延续。</p><span class="runtime-label">${d.runtime?.paused===true?'自主行为已暂停':d.runtime?.paused===false?'自主行为运行中':'运行状态暂不可用'}</span></div><img src="/assets/main-character.png" alt="大肥鱼" onerror="this.hidden=true"></section>${waits.length?card('正在等待',`<ul>${waits.map(w=>`<li>${esc(w)}</li>`).join('')}</ul>`,'full'):''}${spiritCard(d.spirit)}${bodyCard(d.body)}${emotionCard(d.emotions)}${card('正在惦记',goalsList(d.activeGoals,false,d.sources),'two-thirds','当前进行中的目标')}${card('此刻的行动',actionList(d.actions,d.sources),'third')}</div>${card('分享图片','<form id="image-form"><label for="image-file">选择图片</label> <input id="image-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" required><div class="actions"><button type="submit" class="secondary">分享图片</button></div><p id="image-result" role="status"></p></form>','full')}${availableLinks(d.links)?card('继续相处',availableLinks(d.links),'full'):''}</div>`}
 // Calendar days use the same timezone as automatic diaries, independent of the device timezone.
-function recordDay(value){const stamp=new Date(value);return value&&Number.isFinite(stamp.getTime())?new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).format(stamp):null;}
+const recordCalendar=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'});
+function recordDay(value){const stamp=new Date(value);return value!=null&&Number.isFinite(stamp.getTime())?recordCalendar.format(stamp):null;}
 const momentClock=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Hong_Kong',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
 const momentDayLabel=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Hong_Kong',dateStyle:'long'});
 function momentsFeed(moments){
@@ -93,25 +95,38 @@ function momentsFeed(moments){
         </article>`).join(''):'<p class="moments-empty">今天她还没发说说。</p>'}
     </section>`).join('')}</div>`;
 }
-function renderGrowth(data){
+function renderGrowth(data,placeholder){
   const tabs=[['moments','说说'],['archive','成长档案']];
   const showMoments=growthSection==='moments';
   return `<div class="growth-heading${showMoments?' is-moments':''}">
     <h1>${showMoments?'大肥鱼的说说':'成长档案'}</h1>
     <div class="growth-switch" role="group" aria-label="成长内容">${tabs.map(([id,label])=>`<button type="button" data-growth-section="${id}" aria-pressed="${growthSection===id}">${label}</button>`).join('')}</div>
-  </div>${showMoments?momentsFeed(data?.moments):`<div class="grid growth-evidence">${growthEvidence(data||{})}</div>`+memoryGraphMarkup()+growth(data)}`;
+  </div>${placeholder??(showMoments?momentsFeed(data?.moments):`<div class="grid growth-evidence">${growthEvidence(data||{})}</div>`+memoryGraphMarkup()+growth(data))}`;
 }
+const deferredDayRecords=new Map();
 function dailyRows(items,render,timestamp,label){
   if(!Array.isArray(items))return empty('数据暂不可用。');
-  const today=recordDay(new Date().toISOString()),groups=new Map([[today,[]]]);
-  for(const item of [...items].sort((a,b)=>new Date(b[timestamp])-new Date(a[timestamp]))){const day=recordDay(item[timestamp]);if(!day)continue;if(!groups.has(day))groups.set(day,[]);groups.get(day).push(item);}
+  const today=recordDay(new Date()),groups=new Map([[today,[]]]);
+  for(const item of items){const time=Date.parse(item[timestamp]),day=recordDay(time);if(!day)continue;if(!groups.has(day))groups.set(day,[]);groups.get(day).push({item,time});}
   const earliest=[...groups.keys()].sort()[0];
   for(let day=today;day>earliest;){const previous=new Date(day+'T00:00:00Z');previous.setUTCDate(previous.getUTCDate()-1);day=previous.toISOString().slice(0,10);if(!groups.has(day))groups.set(day,[]);}
-  return `<div class="daily-records">${[...groups].sort(([a],[b])=>b.localeCompare(a)).map(([day,entries],index)=>`<details class="record-day"${index===0?' open':''}><summary><span>${day===today?'今天 · ':''}<time datetime="${day}">${day}</time></span><span class="record-count">${entries.length} 条${label}</span></summary>${entries.length?rows(entries,render):empty(day===today?'今天还没有'+label+'记录。新记录会在这里显示。':'这一天没有'+label+'记录。')}</details>`).join('')}</div>`;
+  return `<div class="daily-records">${[...groups].sort(([a],[b])=>b.localeCompare(a)).map(([day,entries],index)=>{
+    const content=()=>entries.length?rows(entries.sort((a,b)=>b.time-a.time),entry=>render(entry.item)):empty(day===today?'今天还没有'+label+'记录。新记录会在这里显示。':'这一天没有'+label+'记录。');
+    if(index!==0)deferredDayRecords.set(day,content);
+    return `<details class="record-day" data-record-day="${day}"${index===0?' open':''}><summary><span>${day===today?'今天 · ':''}<time datetime="${day}">${day}</time></span><span class="record-count">${entries.length} 条${label}</span></summary>${index===0?content():''}</details>`;
+  }).join('')}</div>`;
 }
-function timeline(data){return dailyRows(data,e=>{const p=e.payload&&typeof e.payload==='object'?e.payload:{};const description=[p.title,p.summary,p.text,p.description,p.message].find(v=>typeof v==='string'&&v.trim());return line(description||e.type||'未命名事件',`${esc(date(e.occurredAt))} · ${esc(evidence(e.evidenceLevel))}${e.source?' · 来源：'+esc(e.source):''}${e.actorId?' · 参与者：'+esc(e.actorId):''}`)},'occurredAt','轨迹')}
+view.addEventListener('toggle',event=>{
+  const details=event.target,day=details.dataset?.recordDay;
+  const content=details.open&&details.isConnected&&deferredDayRecords.get(day);
+  if(!content)return;
+  details.insertAdjacentHTML('beforeend',content());
+  deferredDayRecords.delete(day);
+  if(view.hasAttribute('data-stale'))details.querySelectorAll('button').forEach(button=>{button.disabled=true});
+},true);
+function timeline(data){return dailyRows(data,e=>line(e.description||e.type||'未命名事件',`${esc(date(e.occurredAt))} · ${esc(evidence(e.evidenceLevel))}${e.source?' · 来源：'+esc(e.source):''}${e.actorId?' · 参与者：'+esc(e.actorId):''}`),'occurredAt','轨迹')}
 function relations(data){return rows(data,r=>line(readable(r.personId)||'未命名人物',`熟悉度 ${esc(num(r.familiarity))} · 信任度 ${esc(num(r.trust))} · ${esc(countSources(r.sourceIds))}`),'还没有关系记录。')}
-function growth(d){d=d||{};const diaryDates=new Map(Object.entries(d.diaries||{}).filter(([,entry])=>!entry.deleted).map(([day,entry])=>[entry.canonicalMemoryId||'legacy:diary:'+day,day]));const memories=Array.isArray(d.memories)?d.memories.map(m=>({...m,diaryDate:diaryDates.get(m.id),recordedAt:diaryDates.has(m.id)?diaryDates.get(m.id)+'T04:00:00Z':m.createdAt})):d.memories;const interests=rows(d.selfModel?.interests,i=>line(i.label||'兴趣',`${esc(i.value||'')} · ${esc(countSources(i.sourceIds))}`,i.valid===false?'已失效':''),'还没有经过证据支持的兴趣。');const plans=rows(d.plans,p=>`<article class="row"><div><strong>${esc(p.steps?.[0]?.description||'生活计划')}</strong><p>${esc(status(p.status))}${p.reason?' · '+esc(p.reason):''}</p>${sourceDetails(p.sourceIds,d.sources)}<div class="plan-steps">${(p.steps||[]).map((step,i)=>`<p>${i+1}. ${esc(step.description)} · ${esc(status(step.status))}</p>`).join('')}</div></div></article>`,'还没有计划记录。');return `<div class="grid">${card('每天的成长',dailyRows(memories,m=>`<article class="row"><div><strong>${esc(m.content||'未填写内容')}</strong><p>${m.diaryDate?'日记 · '+esc(m.diaryDate)+' · 整理于 ':esc(kind(m.kind))+' · '}${esc(date(m.createdAt))} · ${esc(evidence(m.evidenceLevel))} · ${esc(countSources(m.sourceIds))}</p>${m.valid?`<div class="entry-actions"><button class="secondary" data-command="memory-correct" data-id="${esc(m.id)}" data-expected="${esc(m.content)}">纠正</button><button class="secondary" data-command="memory-delete" data-id="${esc(m.id)}" data-expected="${esc(m.content)}">删除</button></div>`:''}</div>${m.valid===false?'<span class="tag">已失效</span>':''}</article>`,'recordedAt','记忆'),'full','按天回看真实记忆，最新内容在前；日记与反思会在整理后收录')}${card('兴趣',interests,'third')}${card('计划进展',plans,'two-thirds','每一步由真实行动回执推进')}${card('查找记忆','<form id="memory-search" class="search-form"><label for="memory-query">按内容查找真实记录</label><div class="actions"><input id="memory-query" maxlength="500" type="search" required><button class="primary" type="submit">搜索</button></div></form><div id="memory-results"></div>','full')}${card('认知',rows(d.beliefs,b=>line(b.subject||'未命名认知',`${esc(b.value||'暂无内容')} · 可信度 ${esc(num(b.confidence))} · ${esc(countSources(b.sourceIds))}`,b.valid===false?'已失效':''),'还没有认知记录。'),'two-thirds')}${card('策略经验',rows(d.observations,o=>line(o.strategy||'未命名策略',`${esc(o.context||'情境未记录')} · ${esc(countSources(o.sourceIds))}`,o.valid===false?'已失效':o.success?'有成功记录':'未成功'),'还没有策略经验记录。'),'third')}</div>`}
+function growth(d){d=d||{};const diaryDates=new Map(Object.entries(d.diaryDates||{}));const memories=Array.isArray(d.memories)?d.memories.map(m=>({...m,diaryDate:diaryDates.get(m.id),recordedAt:diaryDates.has(m.id)?diaryDates.get(m.id)+'T04:00:00Z':m.createdAt})):d.memories;const interests=rows(d.selfModel?.interests,i=>line(i.label||'兴趣',`${esc(i.value||'')} · ${esc(countSources(i.sourceIds))}`,i.valid===false?'已失效':''),'还没有经过证据支持的兴趣。');const plans=rows(d.plans,p=>`<article class="row"><div><strong>${esc(p.steps?.[0]?.description||'生活计划')}</strong><p>${esc(status(p.status))}${p.reason?' · '+esc(p.reason):''}</p>${sourceDetails(p.sourceIds,d.sources)}<div class="plan-steps">${(p.steps||[]).map((step,i)=>`<p>${i+1}. ${esc(step.description)} · ${esc(status(step.status))}</p>`).join('')}</div></div></article>`,'还没有计划记录。');return `<div class="grid">${card('每天的成长',dailyRows(memories,m=>`<article class="row"><div><strong>${esc(m.content||'未填写内容')}</strong><p>${m.diaryDate?'日记 · '+esc(m.diaryDate)+' · 整理于 ':esc(kind(m.kind))+' · '}${esc(date(m.createdAt))} · ${esc(evidence(m.evidenceLevel))} · ${esc(countSources(m.sourceIds))}</p>${m.valid?`<div class="entry-actions"><button class="secondary" data-command="memory-correct" data-id="${esc(m.id)}" data-expected="${esc(m.content)}">纠正</button><button class="secondary" data-command="memory-delete" data-id="${esc(m.id)}" data-expected="${esc(m.content)}">删除</button></div>`:''}</div>${m.valid===false?'<span class="tag">已失效</span>':''}</article>`,'recordedAt','记忆'),'full','按天回看真实记忆，最新内容在前；日记与反思会在整理后收录')}${card('兴趣',interests,'third')}${card('计划进展',plans,'two-thirds','每一步由真实行动回执推进')}${card('查找记忆','<form id="memory-search" class="search-form"><label for="memory-query">按内容查找真实记录</label><div class="actions"><input id="memory-query" maxlength="500" type="search" required><button class="primary" type="submit">搜索</button></div></form><div id="memory-results"></div>','full')}${card('认知',rows(d.beliefs,b=>line(b.subject||'未命名认知',`${esc(b.value||'暂无内容')} · 可信度 ${esc(num(b.confidence))} · ${esc(countSources(b.sourceIds))}`,b.valid===false?'已失效':''),'还没有认知记录。'),'two-thirds')}${card('策略经验',rows(d.observations,o=>line(o.strategy||'未命名策略',`${esc(o.context||'情境未记录')} · ${esc(countSources(o.sourceIds))}`,o.valid===false?'已失效':o.success?'有成功记录':'未成功'),'还没有策略经验记录。'),'third')}</div>`}
 function groupChatControl(d){const blocked=d.groupChatBlocked===true,available=typeof d.groupChatBlocked==='boolean';return card('QQ 群聊',`<div class="form-row group-chat-control"><div><strong>${available?(blocked?'群聊已禁止':'可以看群消息'):'群聊状态暂不可用'}</strong><p class="card-sub" id="group-chat-description">${blocked?'她暂时看不到新群消息，也不能参与群聊。':'禁止后，她将看不到新群消息，也不能参与群聊。'}她会知道这是爸爸的决定。</p><p class="card-sub">私聊照常，恢复后只接收新消息。</p></div><button type="button" class="secondary" data-command="group-chat" data-value="${!blocked}" aria-describedby="group-chat-description" ${available?'':'disabled'}>${blocked?'恢复群聊':'禁止群聊'}</button></div>`,'full');}
 function farmWeatherControl(){
   return card('稻田天气', `<form id="farm-weather-form" class="form-row">
@@ -126,10 +141,9 @@ function farmWeatherControl(){
 }
 function settings(d){if(typeof d?.paused!=='boolean')return `<div class="grid">${card('自主行为',empty('设置暂不可用。'),'full')}</div>`;const permissions=rows(d.permissions,p=>`<article class="row"><strong>${esc(readable(p))}</strong><button class="secondary" data-command="revoke" data-id="${esc(p)}">撤销权限</button></article>`,'当前没有已授权的权限。');return `<div class="grid">${card('自主行为',`<div class="form-row"><div><strong>自主行为${d.paused?'已暂停':'运行中'}</strong><p class="card-sub">暂停会阻止发起新的自主行动。</p></div><button class="secondary" data-command="pause" data-value="${!d.paused}">${d.paused?'恢复自主行为':'暂停自主行为'}</button></div>`,'full')}${groupChatControl(d)}${farmWeatherControl()}${card('权限',permissions,'full','撤销后，相关行动会在执行前重新校验')}</div>`}
 let chatDraft='',chatFile=null,chatSending=false,chatFeedback='',pendingChat=null,chatSyncedSignature='',chatSyncing=false;
-function ownerChatMessages([events,snapshot]){const sources=snapshot?.sources||{};return (Array.isArray(events)?events:[]).filter(e=>Object.hasOwn(sources,e.eventId)&&['conversation.user','conversation.assistant'].includes(e.type)&&['desktop','legacy','qq-c2c'].includes(e.source)&&typeof e.payload?.text==='string').slice(-100).map(e=>({id:e.eventId,role:e.type==='conversation.user'?'user':'assistant',text:e.payload.text,at:e.occurredAt,usage:e.payload.tokenUsage,meme:e.payload.meme}));}
 function chatMessageMarkup(items){return items.map(m=>`<article class="chat-message ${m.role==='user'?'is-user':'is-assistant'}"><div class="chat-meta">${m.role==='user'?'我':'大肥鱼'}${m.at?' · '+esc(date(m.at)):''}${m.usage?.inputTokens?' · 输入 '+esc(m.usage.inputTokens)+' / 输出 '+esc(m.usage.outputTokens)+' tokens':''}</div><div class="chat-bubble">${esc(m.text)}${m.role==='assistant'&&typeof m.meme==='string'&&m.meme.length<=120&&!/[\/\\:\x00-\x1f]/u.test(m.meme)?`<img class="chat-meme" src="/dsh-pet-7340/pic/memes/${encodeURIComponent(m.meme)}.png" alt="${esc(m.meme)}" loading="lazy" onerror="this.hidden=true">`:''}</div></article>`).join('');}
 function chatPanel(data){
-  const messages=ownerChatMessages(data);chatSyncedSignature=JSON.stringify(messages);
+  const messages=Array.isArray(data)?data:[];chatSyncedSignature=JSON.stringify(messages);
   const items=messages;
   const pendingVisible=pendingChat&&!messages.some(m=>m.role==='user'&&m.text===pendingChat.text&&Date.parse(m.at)>=pendingChat.startedAt-1000);
   return `<section class="chat-panel" aria-label="聊天面板"><div class="chat-heading"><div class="chat-avatar"><img src="/assets/main-character.png" alt=""></div><div><h2>大肥鱼</h2><p>你们的对话</p></div></div><div class="chat-messages" id="chat-messages" role="log" aria-label="聊天记录">${items.length||pendingVisible?chatMessageMarkup(items):'<div class="chat-empty"><strong>从一句话开始</strong><p>想说的、想分享的，都可以留在这里。</p></div>'}${pendingVisible?`<article class="chat-message is-user" data-pending-user><div class="chat-meta">我 · 发送中</div><div class="chat-bubble">${esc(pendingChat.text)}</div></article>`:''}${chatSending?'<p class="chat-pending" role="status">正在等待大肥鱼回复…</p>':''}</div><form id="chat-form" class="chat-composer"><div id="chat-quote">${chatQuoteMarkup()}</div><label for="chat-text">想对她说的话</label><textarea id="chat-text" maxlength="${6000-momentReplyPrefix(chatMoment).length}" placeholder="写下想说的话…" required>${esc(chatDraft)}</textarea><div class="chat-tools"><div><label for="chat-image" class="chat-attach">附上图片</label><input id="chat-image" type="file" accept="image/png,image/jpeg,image/webp,image/gif"><span id="chat-file-name">${chatFile?esc(chatFile.name):'支持 PNG、JPEG、WebP、GIF，最大 5 MB'}</span></div><button class="primary" type="submit" ${chatSending?'disabled':''}>${chatSending?'等待回复…':'发送消息'}</button></div><p id="chat-result" role="status">${esc(chatFeedback)}</p></form></section>`;
@@ -170,37 +184,59 @@ async function sendChat(form){
 }
 function render(data){if(page==='chat')return head(pages.chat)+chatPanel(data);if(page==='current')return head(pages[page])+current(data);if(page==='settings')return head(pages[page])+settings(data)+renderModel(data?.model);if(page==='finance')return head(pages[page])+renderFinance(data);if(page==='companion')return head(pages[page])+renderCompanion(data);if(page==='growth')return renderGrowth(data);const content=page==='goals'?goalsList(data?.items,true,data?.sources,data?.plans):page==='timeline'?timeline(data):relations(data);const label={goals:'全部目标',timeline:'生命轨迹',relationships:'关系记录'}[page];return head(pages[page])+`<div class="grid">${card(label,content,'full')}</div>`}
 const pageCache=new Map();
+const refresh=document.querySelector('#refresh'),updated=document.querySelector('#updated');
+let pageRequest;
+const pageKey=()=>page==='growth'?'growth:'+growthSection:page;
+const pageLoaders={
+  chat:(api,signal)=>api.getChatHistory(signal),current:(api,signal)=>api.getSnapshot(signal),goals:(api,signal)=>api.getGoals(signal),
+  timeline:(api,signal)=>api.getTimeline(signal),relationships:(api,signal)=>api.getRelationships(signal),growth:(api,signal,section)=>api.getGrowth(section,signal),
+  settings:async (api,signal)=>{const [settings,model]=await Promise.all([api.getSettings(signal),api.getModel(signal)]);return {...settings,model}},
+  finance:(api,signal)=>api.getFinance(signal),companion:(api,signal)=>api.getCompanion(signal)
+};
+function replaceView(html){
+  const activeSection=document.activeElement?.dataset.growthSection;
+  view.innerHTML=html;
+  if(activeSection)view.querySelector('[aria-pressed="true"][data-growth-section]')?.focus({preventScroll:true});
+}
+function showPlaceholder(title,message){
+  deferredDayRecords.clear();
+  view.removeAttribute('data-stale');
+  const content=`<div class="grid">${card(title,empty(message),'full')}</div>`;
+  replaceView(page==='growth'?renderGrowth(undefined,content):head(pages[page])+content);
+}
 function showPage(data,{stale=false}={}){
   currentVersion=stale?null:(Number.isSafeInteger(data?.version)?data.version:null);
-  view.innerHTML=render(data);
+  deferredDayRecords.clear();
+  replaceView(render(data));
   view.toggleAttribute('data-stale',stale);
   if(page==='chat')setupChat();
   if(page==='growth'&&growthSection==='archive'&&!stale)setupMemoryGraph(view);
-  if(stale)view.querySelectorAll('button,input,select,textarea').forEach(control=>{control.disabled=true});
+  if(stale)view.querySelectorAll('button:not([data-growth-section]),input,select,textarea').forEach(control=>{control.disabled=true});
 }
 async function load(mode){
-  const requestedPage=page,id=++requestId,cached=mode==='navigate'?pageCache.get(page):undefined;
-  document.querySelector('#refresh').disabled=true;notice.hidden=true;
-  if(cached){showPage(cached,{stale:true});document.querySelector('#updated').textContent='显示上次同步 · 正在更新';}
-  else{view.removeAttribute('data-stale');view.innerHTML=head(pages[page])+`<div class="grid">${card('正在同步',empty('正在读取生命状态…'),'full')}</div>`;}
+  const requestedPage=page,section=growthSection,key=pageKey(),id=++requestId,cached=mode==='navigate'?pageCache.get(key):undefined;
+  pageRequest?.abort();
+  const controller=pageRequest=new AbortController();
+  currentVersion=null;refresh.disabled=true;notice.hidden=true;
+  if(cached){showPage(cached,{stale:true});updated.textContent='显示上次同步 · 正在更新';}
+  else{showPlaceholder('正在同步','正在读取生命状态…');updated.textContent='正在同步';}
   try{
-    const api=window.lifeApi;if(!api)throw new Error('生命系统接口未连接');
-    const method={chat:'getTimeline',current:'getSnapshot',goals:'getGoals',timeline:'getTimeline',relationships:'getRelationships',growth:'getGrowth',settings:'getSettings',finance:'getFinance',companion:'getCompanion'}[requestedPage];
-    if(typeof api[method]!=='function')throw new Error('当前页面的数据接口不可用');
-    const data=requestedPage==='chat'?await Promise.all([api.getTimeline(),api.getSnapshot()]):requestedPage==='settings'?await Promise.all([api.getSettings(),api.getModel()]).then(([settings,model])=>({...settings,model})):await api[method]();
+    const data=await pageLoaders[requestedPage](window.lifeApi,controller.signal,section);
     if(id!==requestId||requestedPage!==page)return;
-    pageCache.set(page,data);
+    pageCache.set(key,data);
     if(page==='current'&&typeof data?.runtime?.paused==='boolean')setPaused(data.runtime.paused);
     if(page==='settings'&&typeof data?.paused==='boolean')setPaused(data.paused);
     showPage(data);
-    document.querySelector('#connection').textContent='已连接';document.querySelector('#connection-detail').textContent='生命状态可用';document.querySelector('.status-dot').classList.add('online');document.querySelector('#updated').textContent='已同步 '+new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'});
+    document.querySelector('#connection').textContent='已连接';document.querySelector('#connection-detail').textContent='生命状态可用';document.querySelector('.status-dot').classList.add('online');updated.textContent='已同步 '+new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'});
   }catch(err){
     if(id!==requestId||requestedPage!==page)return;
     document.querySelector('#connection').textContent='连接不可用';document.querySelector('#connection-detail').textContent='请检查生命系统';document.querySelector('.status-dot').classList.remove('online');
-    if(cached)document.querySelector('#updated').textContent='更新失败 · 显示上次同步';
-    else view.innerHTML=head(pages[page])+`<div class="grid">${card('无法读取',empty('当前数据不可用，请检查连接后刷新。'),'full')}</div>`;
+    if(cached)updated.textContent='更新失败 · 显示上次同步';
+    else{showPlaceholder('无法读取','当前数据不可用，请检查连接后刷新。');updated.textContent='同步失败';}
     notice.textContent=(cached?'显示的是上次同步内容，请刷新后操作。':'')+(err?.message||String(err));notice.hidden=false;
-  }finally{if(id===requestId)document.querySelector('#refresh').disabled=false}
+  }finally{
+    if(id===requestId){pageRequest=undefined;refresh.disabled=false;}
+  }
 }
 view.addEventListener('submit',async event=>{if(event.target.id==='spirit-adjust-form'){event.preventDefault();const form=event.target,input=form.querySelector('#spirit-value'),result=form.querySelector('#spirit-adjust-result'),button=form.querySelector('button');if(!input.reportValidity())return;button.disabled=true;button.textContent='保存中…';try{await window.lifeApi.manage({kind:'spirit',value:Number(input.value),requestId:crypto.randomUUID(),reason:'主动调整精神力',version:currentVersion});await load();notice.textContent='精神力已调整';notice.hidden=false}catch(error){result.textContent=error.message||'调整未完成，请刷新后重试。'}finally{if(button.isConnected){button.disabled=false;button.textContent='应用调整'}}return}if(event.target.id==='image-form'){event.preventDefault();const file=event.target.querySelector('#image-file').files[0],result=event.target.querySelector('#image-result'),button=event.target.querySelector('button');if(!file)return;if(file.size>5000000){result.textContent='图片不能超过 5 MB';return}button.disabled=true;button.textContent='分享中…';try{await window.lifeApi.uploadImage(file);result.textContent='图片已分享，可用于观察。';event.target.reset()}catch(error){result.textContent=error.message||'分享失败'}finally{button.disabled=false;button.textContent='分享图片'}return}if(event.target.id==='chat-form'){event.preventDefault();void sendChat(event.target);return}if(event.target.id!=='memory-search')return;event.preventDefault();const target=document.querySelector('#memory-results'),query=document.querySelector('#memory-query').value.trim(),button=event.target.querySelector('button');if(!query)return;button.disabled=true;try{const results=await window.lifeApi.searchMemories(query);target.innerHTML=rows(results,m=>line(m.content||'未填写内容',`${m.diaryDate?'日记 · '+esc(m.diaryDate)+' · 整理于 ':esc(kind(m.kind))+' · '}${esc(date(m.createdAt))} · ${esc(evidence(m.evidenceLevel))}`),'没有找到匹配的记忆。')}catch(error){target.textContent=error?.message||'搜索不可用，请稍后重试。'}finally{button.disabled=false}});
 view.addEventListener('submit',async event=>{
@@ -237,14 +273,33 @@ view.addEventListener('click',event=>{const b=event.target.closest('[data-comman
 document.querySelector('#global-pause').addEventListener('click',()=>{const b=document.querySelector('#global-pause');b.dataset.command='pause';b.dataset.value=String(!paused);void chooseCommand(b)});
 document.querySelector('#edit-cancel').addEventListener('click',()=>dialog.close());
 form.addEventListener('submit',async event=>{event.preventDefault();if(!pendingCommand)return;const reason=document.querySelector('#edit-reason').value.trim(),content=document.querySelector('#edit-content').value.trim();if(!reason||(!document.querySelector('#content-label').hidden&&!content)){document.querySelector('#dialog-error').textContent='请填写完整内容';return}save.disabled=true;save.textContent='保存中…';try{await submitCommand(commandFrom(pendingCommand,reason,document.querySelector('#content-label').hidden?undefined:content));dialog.close()}catch(error){document.querySelector('#dialog-error').textContent=error.message||'保存失败，请重试'}finally{save.disabled=false;save.textContent='保存'}});
-async function refreshHeader(){try{const data=await window.lifeApi.getSnapshot();if(typeof data.runtime?.paused==='boolean')setPaused(data.runtime.paused);if(Number.isSafeInteger(data.version))currentVersion=data.version;if(page==='current'&&!view.hasAttribute('data-stale')&&!view.querySelector('#spirit-adjust-form:focus-within')){const target=view.querySelector('#current-live');if(target){const holder=document.createElement('div');holder.innerHTML=current(data);const fresh=holder.querySelector('#current-live');if(fresh)target.replaceWith(fresh)}}}catch{}}
-document.addEventListener('visibilitychange',()=>{if(!document.hidden)void refreshHeader()});setInterval(()=>{if(!document.hidden)void refreshHeader()},30000);
+async function refreshHeader(){
+  const revision=requestId,onCurrent=page==='current';
+  try{
+    const data=await (onCurrent?window.lifeApi.getSnapshot():window.lifeApi.getSettings());
+    if(revision!==requestId)return;
+    const nextPaused=onCurrent?data.runtime?.paused:data.paused;
+    if(typeof nextPaused==='boolean')setPaused(nextPaused);
+    if(Number.isSafeInteger(data.version))currentVersion=data.version;
+    if(onCurrent&&!view.hasAttribute('data-stale')&&!view.querySelector('#spirit-adjust-form:focus-within')){
+      const target=view.querySelector('#current-live');
+      if(target){
+        const holder=document.createElement('div');holder.innerHTML=current(data);
+        const fresh=holder.querySelector('#current-live');if(fresh)target.replaceWith(fresh);
+      }
+    }
+  }catch{}
+}
+function pollHeader(){if(!document.hidden&&!refresh.disabled)void refreshHeader();}
+document.addEventListener('visibilitychange',pollHeader);
+setInterval(pollHeader,30000);
 async function syncOpenChat(){
-  if(document.hidden||page!=='chat'||chatSending||chatSyncing)return;
+  if(document.hidden||page!=='chat'||chatSending||chatSyncing||refresh.disabled)return;
   const revision=requestId;chatSyncing=true;
-  try{const data=await Promise.all([window.lifeApi.getTimeline(),window.lifeApi.getSnapshot()]);
+  try{const data=await window.lifeApi.getChatHistory();
     if(document.hidden||page!=='chat'||chatSending||revision!==requestId)return;
-    const items=ownerChatMessages(data),signature=JSON.stringify(items),messages=view.querySelector('#chat-messages');
+    const items=Array.isArray(data)?data:[],signature=JSON.stringify(items),messages=view.querySelector('#chat-messages');
+    pageCache.set('chat',items);
     if(!messages||signature===chatSyncedSignature)return;
     const atBottom=messages.scrollHeight-messages.scrollTop-messages.clientHeight<80;
     messages.innerHTML=items.length?chatMessageMarkup(items):'<div class="chat-empty"><strong>从一句话开始</strong><p>想说的、想分享的，都可以留在这里。</p></div>';
@@ -259,7 +314,12 @@ document.querySelector('#close-cancel').addEventListener('click',()=>closeDialog
 closeConfirm.addEventListener('click',async()=>{closeConfirm.disabled=true;closeConfirm.textContent='正在关闭…';try{await window.lifeApi.shutdown();closeDialog.close();document.querySelector('#connection').textContent='正在关闭';document.querySelector('#connection-detail').textContent='新版实例正在退出';notice.textContent='已收到关闭请求。';notice.hidden=false;document.querySelector('#close-life').disabled=true}catch(error){document.querySelector('#close-error').textContent=error.message||'关闭请求未完成，请重试。'}finally{closeConfirm.disabled=false;closeConfirm.textContent='确认关闭'}});
 function navigate(nextPage){
   page=nextPage;
-  document.querySelectorAll('nav button').forEach(button=>button.classList.toggle('active',button.dataset.page===page));
+  document.querySelectorAll('nav button').forEach(button=>{
+    const active=button.dataset.page===page;
+    button.classList.toggle('active',active);
+    if(active)button.setAttribute('aria-current','page');
+    else button.removeAttribute('aria-current');
+  });
   document.querySelector('#crumb').textContent=pages[page][0];
   return load('navigate');
 }
@@ -267,13 +327,12 @@ view.addEventListener('click',async event=>{
   const section=event.target.closest('[data-growth-section]');
   if(section&&section.dataset.growthSection!==growthSection){
     growthSection=section.dataset.growthSection;
-    showPage(pageCache.get('growth'));
-    view.querySelector('[aria-pressed="true"][data-growth-section]')?.focus();
+    void load('navigate');
     return;
   }
   const postButton=event.target.closest('[data-moment-id]');
   if(postButton){
-    const post=pageCache.get('growth')?.moments?.find(item=>item.id===postButton.dataset.momentId);
+    const post=pageCache.get('growth:moments')?.moments?.find(item=>item.id===postButton.dataset.momentId);
     if(!post)return;
     chatMoment=post.text;
     await navigate('chat');
@@ -288,7 +347,7 @@ view.addEventListener('click',async event=>{
   }
 });
 document.querySelectorAll('nav button').forEach(button=>button.addEventListener('click',()=>void navigate(button.dataset.page)));
-document.querySelector('#refresh').addEventListener('click',load);
-load();
+refresh.addEventListener('click',()=>load());
+void navigate('current');
 
 view.addEventListener('click',async event=>{const button=event.target.closest('[data-spirit]');if(!button)return;const command=button.dataset.spirit;button.disabled=true;try{const reply=await window.lifeApi.chat(command,crypto.randomUUID());await load();notice.textContent=reply;notice.hidden=false;}catch(error){notice.textContent=error.message||'暂时没能完成，请稍后再试。';notice.hidden=false;}finally{if(button.isConnected)button.disabled=false;}});

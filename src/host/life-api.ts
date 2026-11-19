@@ -1,16 +1,20 @@
 import {setGoalPlanStatus} from '../kernel/goal-lifecycle.js';
 import { randomUUID } from 'node:crypto';
 import { advanceSpirit } from '../kernel/spirit.js';
-import type { LifeState } from '../kernel/types.js';
+import type { LifeEvent, LifeState } from '../kernel/types.js';
 import { invalidateDependents } from '../kernel/index.js';
 import { momentEventType, readMoments } from '../kernel/moments.js';
 import type { CanonicalEnvelope, BodyProjection } from '../storage/postgres.js';
 import type { PetGate, UnitOfWork } from '../storage/uow.js';
+import { isOwnerPrivateConversation } from './chat-identity.js';
+
+type PageState = LifeState & {diaryDates?:Record<string,string>};
 
 export interface LifeApiHost {
   authorize(request: Request): Promise<boolean> | boolean;
   petId(): Promise<string> | string;
-  getState(petId: string): Promise<LifeState>;
+  getState(petId: string, view?:'archive'): Promise<PageState>;
+  getLifeSettings?(petId:string):Promise<{version:number;paused:boolean;permissions:string[];groupChatBlocked:boolean}>;
   groupChatBlocked?(petId:string):Promise<boolean>;
   /** Uses the same per-pet gate and UOW as the dispatcher. */
   manage?(petId: string, command: ManagementCommand): Promise<void>;
@@ -127,12 +131,72 @@ export function createLifeManagement(reader: Reader, gate: PetGate, uow: UnitOfW
   };
 }
 const response=(status:number,data:unknown)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});
+
+function eventPayload(event:LifeEvent):Record<string,unknown> {
+  return event.payload&&typeof event.payload==='object'?event.payload as Record<string,unknown>:{};
+}
+
+function chatHistory(state:PageState) {
+  return state.events.filter(e=>isOwnerPrivateConversation(e)&&!Object.hasOwn(state.invalidSources,e.eventId)&&typeof eventPayload(e).text==='string')
+    .slice(-100).map(e=>{
+      const {text,tokenUsage:usage,meme}=eventPayload(e);
+      return {id:e.eventId,role:e.type==='conversation.user'?'user':'assistant',text,at:e.occurredAt,usage,meme};
+    });
+}
+
+function timelineRow(event:LifeEvent) {
+  const {title,summary,text,description,message}=eventPayload(event);
+  return {occurredAt:event.occurredAt,evidenceLevel:event.evidenceLevel,source:event.source,actorId:event.actorId,type:event.type,
+    description:[title,summary,text,description,message].find(value=>typeof value==='string'&&value.trim())};
+}
+
+function viewSources(state:PageState) {
+  const sourceIds=new Set([
+    ...state.goals.flatMap(g=>g.sourceIds),
+    ...(state.cognitivePlans??[]).flatMap(p=>[...p.sourceIds,...p.steps.flatMap(step=>step.receiptEventId?[step.receiptEventId]:[])]),
+    ...(state.worldModel?.facts??[]).filter(f=>f.valid).slice(-15).flatMap(f=>f.sourceIds),
+    ...(state.selfModel?.habits??[]).filter(h=>h.valid).flatMap(h=>h.sourceIds),
+    ...(state.selfModel?.interests??[]).filter(i=>i.valid).flatMap(i=>i.sourceIds),
+    ...(state.selfModel?.autobiography??[]).filter(m=>m.valid).slice(-12).flatMap(m=>m.sourceIds)
+  ]);
+  const events=state.events.filter(e=>e.type!==momentEventType&&!Object.hasOwn(state.invalidSources,e.eventId));
+  for(const event of events.slice(-500))sourceIds.add(event.eventId);
+  const actions=new Map(state.actions.map(action=>[action.id,action]));
+  return Object.fromEntries(events.filter(e=>sourceIds.has(e.eventId)).map(e=>{
+    const payload=eventPayload(e),action=typeof payload.actionId==='string'?actions.get(payload.actionId):undefined;
+    const text=[payload.text,payload.summary,payload.message,payload.description].find(value=>typeof value==='string'&&value.trim())
+      ||(action?.actionType==='learning.observe'&&typeof action.parameters.query==='string'?'探索资料：'+action.parameters.query:e.type);
+    return [e.eventId,{text,at:e.occurredAt}];
+  }));
+}
+
+function growthArchive(state:PageState) {
+  const receipts=new Map<string,unknown>(), cancelled=new Map<unknown,unknown>(), failed=new Map<unknown,unknown>();
+  for(const receipt of state.receipts) {
+    if(['FAILED','CANCELLED'].includes(receipt.status)&&!receipts.has(receipt.actionId))receipts.set(receipt.actionId,receipt.details?.reason);
+  }
+  for(const event of state.events) {
+    if(event.type==='action.cancelled') {
+      const {actionId,reason}=eventPayload(event);
+      if(!cancelled.has(actionId))cancelled.set(actionId,reason);
+    } else if(event.type==='plan.failed') {
+      const {planId,reason}=eventPayload(event);
+      if(!failed.has(planId))failed.set(planId,reason);
+    }
+  }
+  const plans=(state.cognitivePlans??[]).map(plan=>({...plan,reason:plan.steps
+    .map(step=>step.actionId?(receipts.get(step.actionId)||cancelled.get(step.actionId)):undefined).find(reason=>typeof reason==='string')
+    ||failed.get(plan.id)||(plan.status==='paused'?'计划已暂停':plan.status==='failed'?'行动未完成，请重新规划':undefined)}));
+  return {version:state.version,sources:viewSources(state),memories:state.memories,beliefs:state.beliefs,observations:state.observations,
+    selfModel:state.selfModel,worldModel:state.worldModel,plans,diaryDates:state.diaryDates};
+}
+
 export function createLifeApi(host:LifeApiHost) {
   return async(request:Request):Promise<Response|undefined>=>{
     const url=new URL(request.url);if(!url.pathname.startsWith('/api/life/'))return undefined;
     if(!await host.authorize(request))return response(403,{ok:false,error:'没有访问权限'});
     const endpoint=url.pathname.slice('/api/life/'.length);
-    if(!['snapshot','goals','timeline','relationships','growth','settings','manage','memory-search','memory-graph','shutdown','attachment','finance','companion','model','worksite','farm','farm-weather'].includes(endpoint))return response(404,{ok:false,error:'没有这个接口'});
+    if(!['snapshot','goals','timeline','relationships','growth','settings','chat-history','manage','memory-search','memory-graph','shutdown','attachment','finance','companion','model','worksite','farm','farm-weather'].includes(endpoint))return response(404,{ok:false,error:'没有这个接口'});
     if(request.method!=='GET' && !(request.method==='POST' && ['manage','shutdown','attachment','finance','companion','model','worksite','farm','farm-weather'].includes(endpoint)) || request.method==='GET' && ['manage','shutdown','attachment','worksite','farm','farm-weather'].includes(endpoint))return response(405,{ok:false,error:'请求方法不受支持'});
     try {
       if(endpoint==='shutdown') {if(!host.shutdown)return response(503,{ok:false,error:'关闭入口不可用'});setTimeout(host.shutdown,100);return response(200,{ok:true,value:{closing:true}});}
@@ -178,20 +242,47 @@ export function createLifeApi(host:LifeApiHost) {
       }
       if(endpoint==='memory-search'){if(!host.searchMemories)return response(503,{ok:false,error:'记忆检索不可用'});const query=url.searchParams.get('q')||'';if(query.length>500)return response(400,{ok:false,error:'搜索内容过长'});return response(200,{ok:true,value:await host.searchMemories(id,query)});}
       if(endpoint==='memory-graph'){if(!host.memoryGraph)return response(503,{ok:false,error:'记忆星图不可用'});const query=url.searchParams.get('q')||'';if(query.length>500)return response(400,{ok:false,error:'搜索内容过长'});return response(200,{ok:true,value:await host.memoryGraph(id,query)});}
-      const state=await host.getState(id), timeline=state.events.filter(e=>e.type!==momentEventType), goalSources=new Set([
-        ...state.goals.flatMap(g=>g.sourceIds),
-        ...(state.cognitivePlans??[]).flatMap(p=>[...p.sourceIds,...p.steps.flatMap(step=>step.receiptEventId?[step.receiptEventId]:[])]),
-        ...(state.worldModel?.facts??[]).filter(f=>f.valid).slice(-15).flatMap(f=>f.sourceIds),
-        ...(state.selfModel?.habits??[]).filter(h=>h.valid).flatMap(h=>h.sourceIds),
-        ...(state.selfModel?.interests??[]).filter(i=>i.valid).flatMap(i=>i.sourceIds),
-        ...(state.selfModel?.autobiography??[]).filter(m=>m.valid).slice(-12).flatMap(m=>m.sourceIds)
-      ]), validEvents=timeline.filter(e=>!Object.hasOwn(state.invalidSources,e.eventId)), recentIds=new Set(validEvents.slice(-500).map(e=>e.eventId)), sources=Object.fromEntries(validEvents.filter(e=>recentIds.has(e.eventId)||goalSources.has(e.eventId)).map(e=>{const payload=e.payload&&typeof e.payload==='object'?e.payload as Record<string,unknown>:{};const action=state.actions.find(a=>a.id===payload.actionId);const text=[payload.text,payload.summary,payload.message,payload.description].find(x=>typeof x==='string'&&x.trim())||(action?.actionType==='learning.observe'&&typeof action.parameters.query==='string'?`探索资料：${action.parameters.query}`:e.type);return [e.eventId,{text,at:e.occurredAt}];})), views:Record<string,unknown>={
-        snapshot:{version:state.version,sources,identity:state.identity,spirit:state.spirit,body:state.body,emotions:state.emotions,activeGoals:state.goals.filter(g=>g.status==='active'),actions:state.actions.filter(a=>!['COMPLETED','FAILED','CANCELLED'].includes(a.status)),runtime:{paused:state.constraints.paused,remainingBudget:state.constraints.remainingBudget,budgetDay:state.constraints.budgetDay,interactiveRemaining:state.constraints.interactiveRemaining,permissions:state.constraints.permissions},links:host.links},
-        goals:{version:state.version,items:state.goals,plans:state.cognitivePlans??[],sources},timeline,relationships:state.relationships,
-        growth:{version:state.version,sources,moments:endpoint==='growth'?readMoments(state):[],memories:state.memories,beliefs:state.beliefs,observations:state.observations,selfModel:state.selfModel,worldModel:state.worldModel,plans:(state.cognitivePlans||[]).map(plan=>({...plan,reason:plan.steps.map(step=>state.receipts.find(r=>r.actionId===step.actionId && ['FAILED','CANCELLED'].includes(r.status))?.details?.reason || (state.events.find(e=>e.type==='action.cancelled'&&(e.payload as any)?.actionId===step.actionId)?.payload as any)?.reason).find(reason=>typeof reason==='string') || (state.events.find(e=>e.type==='plan.failed'&&(e.payload as any)?.planId===plan.id)?.payload as any)?.reason || (plan.status==='paused'?'计划已暂停':plan.status==='failed'?'行动未完成，请重新规划':undefined)}))},
-        settings:{version:state.version,paused:state.constraints.paused,permissions:state.constraints.permissions,groupChatBlocked:endpoint==='settings'&&host.groupChatBlocked?await host.groupChatBlocked(id):false}
-      };
-      return response(200,{ok:true,value:endpoint==='manage'?{version:state.version}:views[endpoint]});
+      const view=url.searchParams.get('view');
+      if((endpoint==='settings'||endpoint==='manage')&&host.getLifeSettings){
+        const settings=await host.getLifeSettings(id);
+        return response(200,{ok:true,value:endpoint==='settings'?settings:{version:settings.version}});
+      }
+      const state=await host.getState(id,endpoint==='growth'&&view!=='moments'?'archive':undefined);
+      request.signal.throwIfAborted();
+      let value:unknown;
+      switch(endpoint){
+        case 'settings':
+          value={version:state.version,paused:state.constraints.paused,permissions:state.constraints.permissions,
+            groupChatBlocked:host.groupChatBlocked?await host.groupChatBlocked(id):false};
+          break;
+        case 'manage':
+          value={version:state.version};
+          break;
+        case 'chat-history':
+          value=chatHistory(state);
+          break;
+        case 'timeline': {
+          const events=state.events.filter(e=>e.type!==momentEventType);
+          value=view==='page'?events.map(timelineRow):events;
+          break;
+        }
+        case 'relationships':
+          value=state.relationships;
+          break;
+        case 'growth':
+          value=view==='moments'?{moments:readMoments(state)}:view==='archive'?growthArchive(state):{...growthArchive(state),moments:readMoments(state)};
+          break;
+        case 'goals':
+          value={version:state.version,items:state.goals,plans:state.cognitivePlans??[],sources:viewSources(state)};
+          break;
+        case 'snapshot':
+          value={version:state.version,sources:viewSources(state),identity:state.identity,spirit:state.spirit,body:state.body,emotions:state.emotions,
+            activeGoals:state.goals.filter(g=>g.status==='active'),actions:state.actions.filter(a=>!['COMPLETED','FAILED','CANCELLED'].includes(a.status)),
+            runtime:{paused:state.constraints.paused,remainingBudget:state.constraints.remainingBudget,budgetDay:state.constraints.budgetDay,
+              interactiveRemaining:state.constraints.interactiveRemaining,permissions:state.constraints.permissions},links:host.links};
+          break;
+      }
+      return response(200,{ok:true,value});
     }catch(error){return response(409,{ok:false,error:['finance','companion','model','farm','farm-weather'].includes(endpoint) && error instanceof Error ? error.message : '操作未完成或状态已变化，请刷新后重试'});}
   };
 }
