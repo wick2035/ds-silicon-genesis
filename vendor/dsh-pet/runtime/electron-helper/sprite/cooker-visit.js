@@ -2,7 +2,6 @@
 
 Object.assign(PetSprite.prototype, {
   attachRiceCooker() {
-    this.cookerAttached = true;
     const bridge = window.petBridge;
     const unsubscribe = bridge.onRiceCookerUpdate(({ visit, reply }) => {
       if (visit) this.visitRiceCooker(visit);

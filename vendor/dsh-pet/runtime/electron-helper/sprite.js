@@ -98,6 +98,7 @@ class PetSprite {
     this.initPanels();
     this.buildDom();
     this.bindEvents();
+    if (window.petBridge?.worksiteOnly) this.attachRiceCooker();
   }
 
   dispose() {

@@ -89,6 +89,5 @@ Object.assign(PetSprite.prototype, {
       toScreen(fit.offsetX),
       toScreen(fit.offsetY),
     );
-    if (window.petBridge.worksiteOnly && !this.cookerAttached) this.attachRiceCooker();
   },
 });
