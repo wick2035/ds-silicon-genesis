@@ -62,7 +62,10 @@
     if(!this.dragState.active||!this.tokenPointer)return;
     this.tokenPointer=[toLocal(e.screenX),toLocal(e.screenY)];
     this.startTokenGrab();
-    if(this.tokenGrab)this.tokenScene.sample(...this.tokenPointer);
+    if(this.tokenGrab){
+      for(const point of e.getCoalescedEvents?.()||[])this.tokenScene.sample(toLocal(point.screenX),toLocal(point.screenY));
+      this.tokenScene.sample(...this.tokenPointer);
+    }
   };
   proto.pollTokenSoon=function(){for(const delay of [200,600,1200])setTimeout(()=>{if(!this.ac.signal.aborted)void this.pollBody();},delay);};
   proto.onPointerUp=function(e){

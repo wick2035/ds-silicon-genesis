@@ -29,7 +29,73 @@ function createTokenScene(options) {
   const host=options.host, nodes=new Map(), abort=new AbortController(),native=options.surface==='desktop';
   let overlayTimer,noteTimer,noticeUntil=0,lastAnnouncement='';
   let stopped=false, timer, heartbeat, sample, lastDrop=-Infinity, queue=[], processing=false, mutations=0, tokens=null, dragging=false, space=false,readEpoch=0,lastError='';
-  let nativeSpace,fallFrame,droppedAtGrab;
+  let nativeSpace,fallFrame,droppedAtGrab,confirmed,shakeBatch,clickBatch,clickTimer,retryTimer,sending=false;
+  const storageKey='desktop-token-batches:'+options.petId;
+  let batches=[];
+  if(native){
+    try{const saved=JSON.parse(localStorage.getItem(storageKey)||'[]');if(Array.isArray(saved))batches=saved;}catch{}
+  }
+  function rememberBatches(){
+    try{
+      if(batches.length)localStorage.setItem(storageKey,JSON.stringify(batches));
+      else localStorage.removeItem(storageKey);
+    }catch{} // The live queue also works when browser storage is unavailable.
+  }
+  function newBatch(){
+    const batch={batchId:crypto.randomUUID(),drops:[],claims:[]};
+    batches.push(batch);
+    return batch;
+  }
+  function project(data){
+    if(!native||!batches.length)return data;
+    const coins=new Map(data.coins.map(c=>[c.id,c]));
+    const settled=new Set(data.settledIds);
+    let reserved=0;
+    for(const batch of batches){
+      for(const d of batch.drops)if(!coins.has(d.id) && !settled.has(d.id)){
+        coins.set(d.id,{...d,status:'floor',surface:'desktop',value:100});
+        reserved+=100;
+      }
+      for(const id of batch.claims)coins.delete(id);
+    }
+    return {...data,coins:[...coins.values()],balance:Math.max(0,data.balance-reserved),dropped:(data.dropped||0)+reserved};
+  }
+  function queueClaim(id){
+    if(clickBatch?.claims.length>=24){clickBatch=null;void sendBatches();}
+    const batch=shakeBatch && shakeBatch.claims.length<24 ? shakeBatch : (clickBatch??=newBatch());
+    batch.claims.push(id);
+    rememberBatches();
+    sync(confirmed);
+    options.onCollect?.(id);
+    if(batch===clickBatch){
+      clearTimeout(clickTimer);
+      clickTimer=setTimeout(()=>{clickBatch=null;void sendBatches();},450);
+    }
+  }
+  async function sendBatches(){
+    if(sending||stopped||!confirmed)return;
+    sending=true;
+    try{
+      while(batches.length && !stopped){
+        const batch=batches[0];
+        if(batch===shakeBatch || batch===clickBatch)break;
+        const d=await window.petBridge.reportInteraction('tokens',{action:'batch',surface:'desktop',...batch});
+        if(!d?.ok || !d.tokens)throw Error('饭钱尚未同步');
+        batches.shift();
+        rememberBatches();
+        sync(d.tokens);
+        if(batch.claims.length){
+          const count=d.result.collected.length;
+          announce(count===batch.claims.length?`已收走 ${count*100} token`:`这次收走 ${count*100} token，其余饭钱已不在地上`);
+        }else if(d.result.dropped.length<batch.drops.length)announce('已按实际余额和地上空位结算饭钱');
+      }
+    }catch{
+      if(!stopped){
+        announce('饭钱尚未同步，正在重试');
+        clearTimeout(retryTimer);retryTimer=setTimeout(sendBatches,1500);
+      }
+    }finally{sending=false;}
+  }
   const layer=document.createElement('div');layer.className='pet-token-layer';layer.setAttribute('aria-label','地上的饭钱');host.append(layer);
   const status=document.createElement('div');status.className='pet-token-status';status.hidden=native;
   const balance=document.createElement('span'), hint=document.createElement('span'), retry=document.createElement('button');
@@ -38,12 +104,15 @@ function createTokenScene(options) {
   const note=document.createElement('p');note.className='pet-token-note';note.setAttribute('role','status');host.append(note);
   const url=options.base+'/humanity/companion/tokens?pet='+encodeURIComponent(options.petId);
   const scene={get tokens(){return tokens;},get dragging(){return dragging;},get space(){return nativeSpace??space;},nodes};
-  scene.canPickUp=id=>!tokens || (tokens.coins.some(c=>c.id===id && c.surface===options.surface) && !nodes.get(id)?.el.disabled);
+  scene.canPickUp=id=>!batches.some(b=>b.claims.includes(id)) && (!tokens || (tokens.coins.some(c=>c.id===id && c.surface===options.surface) && !nodes.get(id)?.el.disabled));
   function updateSpace(pressed, physical=false) {
     const wasPressed=scene.space;
     if(physical)nativeSpace=pressed;
     else space=pressed;
-    if(wasPressed!==scene.space)sample=null;
+    if(wasPressed!==scene.space){
+      sample=null;
+      if(native && !scene.space && shakeBatch){shakeBatch=null;void sendBatches();}
+    }
     paintOverlay();
   }
   scene.setNativeSpace=pressed=>updateSpace(pressed,true);
@@ -87,7 +156,9 @@ function createTokenScene(options) {
     paintOverlay();
   }
   function sync(data) {
-    if(stopped||data.version<tokens?.version)return;
+    if(stopped||!data)return;
+    if(!confirmed || !(data.version<confirmed.version))confirmed=data;
+    data=project(confirmed);
     const previous=tokens;
     const previousFloor=previous?.coins.filter(c=>c.surface===options.surface).length||0;tokens=data;options.onState?.(data);
     balance.textContent='饭钱 '+(data.balance||0).toLocaleString('zh-CN')+' token';
@@ -99,7 +170,7 @@ function createTokenScene(options) {
     const view=options.viewport?.()||{w:innerWidth,h:innerHeight};
     const layout=tokenFloorLayout(floor,options.workAreas?.()||[{x:0,y:0,width:view.w,height:view.h}],view);
     const changed=layout.filter(p=>{const c=floor.find(c=>c.id===p.id);return Math.abs(c.x-p.x)>.0001||Math.abs(c.y-p.y)>.0001;});
-    if(changed.length){for(const p of changed)Object.assign(floor.find(c=>c.id===p.id),p);void safePost('layout',{positions:changed});}
+    if(changed.length){for(const p of changed)Object.assign(floor.find(c=>c.id===p.id),p);if(!native || !batches.length)void safePost('layout',{positions:changed});}
     for(const [id,entry] of nodes)if(!floor.some(c=>c.id===id)){entry.el.remove();nodes.delete(id);}
     for(const coin of floor) {
       if(nodes.has(coin.id)){nodes.get(coin.id).coin=coin;continue;}
@@ -108,6 +179,7 @@ function createTokenScene(options) {
       const collect=async e=>{
         e.stopPropagation();if(e.type==='pointerdown'&&e.button!==0||el.disabled)return;
         el.disabled=true;options.onOverlay?.();
+        if(native){queueClaim(coin.id);return;}
         try{
           const claim=post('collect',{id:coin.id});
           options.onCollect?.(coin.id);
@@ -115,7 +187,7 @@ function createTokenScene(options) {
           announce(d.result?.status==='collected'?'已收走 100 token':'这片钱已经被她捡回了');
         }
         catch(error){el.disabled=false;announce(error.message);}
-        finally{if(tokens)sync(tokens);}
+        finally{if(confirmed)sync(confirmed);}
       };
       // Take the coin on press; a pet/window move between down and up cannot eat the click.
       el.addEventListener('pointerdown',collect);el.addEventListener('click',collect);
@@ -130,6 +202,7 @@ function createTokenScene(options) {
     const r=await fetch(url,{...(body?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...body,surface:options.surface})}:{}),cache:'no-store',signal:AbortSignal.any([abort.signal,AbortSignal.timeout(35000)])});
     const d=await r.json();if(!r.ok||!d.ok)throw Error(d.message||'饭钱未能同步，请重试');
     if(body||Number.isSafeInteger(d.tokens?.version)||epoch===readEpoch)sync(d.tokens);
+    if(native && !body && batches.length && !retryTimer)void sendBatches();
     return d;
   }
   async function drain() {
@@ -139,25 +212,35 @@ function createTokenScene(options) {
   }
   function post(action,body={}) {
     mutations++;readEpoch++;
-    // A visible desktop coin already has a committed ID. Its claim must reach
-    // the host even while a release or layout acknowledgement is outstanding.
-    if(native&&action==='collect')return request({action,...body}).finally(()=>{mutations--;});
     const pending=new Promise((resolve,reject)=>{const item={action,body,resolve,reject};if(action==='collect')queue.unshift(item);else queue.push(item);});
     void drain();return pending;
   }
   const safePost=(action,body)=>post(action,body).catch(e=>{if(!stopped)announce(e.message);});
   scene.begin=(x,y)=>{
-    if(dragging)return;dragging=true;droppedAtGrab=tokens?.dropped??0;sample=tokenShakeSample(null,x,y,performance.now());announce('');flash();
+    if(dragging)return;
+    if(clickBatch){clearTimeout(clickTimer);clickBatch=null;void sendBatches();}
+    dragging=true;droppedAtGrab=tokens?.dropped??0;sample=tokenShakeSample(null,x,y,performance.now());announce('');flash();
     void safePost('hold');heartbeat=setInterval(()=>void safePost('hold'),2000);options.onHold?.(true);
   };
   scene.sample=(x,y)=>{
     if(!dragging||!scene.space)return;const now=performance.now();sample=tokenShakeSample(sample,x,y,now);
     if(sample.drop&&now-lastDrop>260){lastDrop=now;const g=options.geometry();
       const spread=(Math.random()-.5)*.22,fromX=Math.max(.03,Math.min(.97,g.x)),fromY=Math.max(.03,Math.min(.97,g.y));
-      void safePost('drop',{key:crypto.randomUUID(),x:Math.max(.045,Math.min(.955,fromX+spread)),y:g.floorY,fromX,fromY});
+      const point={x:Math.max(.045,Math.min(.955,fromX+spread)),y:g.floorY,fromX,fromY};
+      if(!native){void safePost('drop',{key:crypto.randomUUID(),...point});return;}
+      if(!tokens || Date.now()-(tokens.lastDrop||0)<240 || tokens.balance<100 || tokens.coins.length>=24 || (shakeBatch?.drops.length||0)>=24)return;
+      const coin={id:crypto.randomUUID(),ts:Date.now(),...point};
+      const view=options.viewport?.()||{w:innerWidth,h:innerHeight};
+      const areas=options.workAreas?.()||[{x:0,y:0,width:view.w,height:view.h}];
+      const floor=tokens.coins.filter(c=>c.surface==='desktop');
+      Object.assign(coin,tokenFloorLayout([...floor,coin],areas,view).at(-1));
+      if(!shakeBatch && clickBatch){clearTimeout(clickTimer);clickBatch=null;void sendBatches();}
+      (shakeBatch??=newBatch()).drops.push(coin);
+      rememberBatches();
+      sync(confirmed);
     }
   };
-  scene.release=()=>{if(!dragging)return;dragging=false;sample=null;clearInterval(heartbeat);options.onHold?.(false);flash();void safePost('release');};
+  scene.release=()=>{if(!dragging)return;dragging=false;sample=null;clearInterval(heartbeat);shakeBatch=null;if(native)void sendBatches();options.onHold?.(false);flash();void safePost('release');};
   scene.post=post;scene.paint=paint;scene.announce=announce;
   retry.addEventListener('click',()=>{retry.disabled=true;void post('recover').catch(e=>announce(e.message)).finally(()=>retry.disabled=false);});
   const typing=e=>e.target?.closest?.('input,textarea,[contenteditable=true]');
@@ -169,7 +252,7 @@ function createTokenScene(options) {
   async function poll(){try{if(native||!mutations)await request();}catch(e){if(!stopped)announce(e.message);}finally{if(!stopped)timer=setTimeout(poll,900);}}
   void poll();
   status.addEventListener('focusout',()=>queueMicrotask(()=>{flash();}));
-  scene.dispose=()=>{if(stopped)return;if(dragging)void fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'release',surface:options.surface}),keepalive:true}).catch(()=>{});stopped=true;abort.abort();cancelAnimationFrame(fallFrame);clearTimeout(timer);clearTimeout(overlayTimer);clearTimeout(noteTimer);clearInterval(heartbeat);layer.remove();status.remove();note.remove();nodes.clear();};
+  scene.dispose=()=>{if(stopped)return;if(dragging)void fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'release',surface:options.surface}),keepalive:true}).catch(()=>{});stopped=true;clearTimeout(clickTimer);clearTimeout(retryTimer);abort.abort();cancelAnimationFrame(fallFrame);clearTimeout(timer);clearTimeout(overlayTimer);clearTimeout(noteTimer);clearInterval(heartbeat);layer.remove();status.remove();note.remove();nodes.clear();};
   return scene;
 }
 const PET_TOKEN_CSS=`

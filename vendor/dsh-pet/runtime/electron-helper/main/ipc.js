@@ -39,7 +39,7 @@ function registerIpc({ ipcMain, petWindows, shell, openTarget, petRoute, hostReq
     if(!petId||!current||current.sender!==event.sender||current.failed||!['semantic','labor-disturb','tokens','space','pet','feed','collision','impact','knock','utensil','sleep','wake'].includes(input?.kind))throw Error('桌宠互动来源无效');
     // Collecting a floor coin needs an authenticated window, but does not
     // depend on the order of body grip/release observations.
-    if(input.kind==='tokens'&&input.detail?.action==='collect')await current.ready;
+    if(input.kind==='tokens'&&['collect','batch'].includes(input.detail?.action))await current.ready;
     else await current.chain;
     const payload={epoch:current.windowEpoch,petId,eventId:require('node:crypto').randomUUID(),kind:input.kind,detail:input.detail};
     const response=await hostRequest('POST','/__silicon/interaction',JSON.stringify(payload));

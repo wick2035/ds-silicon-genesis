@@ -45,6 +45,7 @@ app.whenReady().then(async () => {
   const authority = {};
   const tokens = createHelperTokens(store, new LegacyDomain(store, uow, gate, authority), authority);
   const actions = [];
+  const batches = [];
   const receipts = [];
   ipcMain.handle('pet:action-receipt', (_event, receipt) => {receipts.push(receipt);return {ok:true};});
   let watch,finishRelease;
@@ -54,6 +55,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('pet:interaction', async (_event, { kind, detail }) => {
     assert.equal(kind, 'tokens');
     actions.push(detail.action);
+    if(detail.action==='batch')batches.push(detail);
     const result=await tokens.handle('main', 'smoke-token-' + actions.length, detail);
     if(detail.action==='release')await new Promise(resolve=>{finishRelease=resolve;});
     return result;
@@ -98,7 +100,11 @@ app.whenReady().then(async () => {
   await until(() => tokens.held('main'));
   await render('sprite.onPointerMove({ screenX: 500, screenY: 300 })');
   await render('sprite.onPointerMove({ screenX: 400, screenY: 300 })');
-  await until(() => state.legacy.wallet.balance === 9900);
+  await wait(280);
+  await render('sprite.onPointerMove({ screenX: 500, screenY: 300 }); sprite.onPointerMove({ screenX: 400, screenY: 300 })');
+  assert.equal(await render('document.querySelectorAll(".pet-token-coin").length'),2);
+  assert.equal(batches.length,0);
+  assert.equal(state.legacy.wallet.balance,10000);
   await until(() => render('document.querySelector(".pet-token-face")?.textContent === "100"'));
   watch.sender.send('pet:token-space', watch.id, false);
   await until(async () => await render('sprite.tokenScene.space') === false);
@@ -107,6 +113,7 @@ app.whenReady().then(async () => {
   await render('sprite.pollTokenSoon = () => {}; sprite.onPointerUp()');
   await until(() => !watch && !tokens.held('main'));
   await until(()=>!!finishRelease);
+  await until(()=>state.legacy.tokens.coins.length===2);
   const id=state.legacy.tokens.coins[0].id;
   const point=await render(`(() => {
     const el=document.querySelector('.pet-token-coin'),r=el.getBoundingClientRect();
@@ -117,14 +124,18 @@ app.whenReady().then(async () => {
   const {x,y}=point;
   win.webContents.sendInputEvent({type:'mouseDown',button:'left',x,y,clickCount:1});
   win.webContents.sendInputEvent({type:'mouseUp',button:'left',x,y,clickCount:1});
-  await until(()=>state.legacy.tokens.collected===100);
+  await until(()=>render('document.querySelectorAll(".pet-token-coin").length===1'));
+  await render('document.querySelector(".pet-token-coin").click()');
+  assert.equal(await render('document.querySelectorAll(".pet-token-coin").length'),0);
+  await until(()=>state.legacy.tokens.collected===200);
+  assert.deepEqual(batches.map(b=>[b.drops.length,b.claims.length]),[[2,0],[0,2]]);
   finishRelease();
   await until(()=>render('!document.querySelector(".pet-token-coin")'));
   assert.equal(await render('sprite.tokenScene.canPickUp('+JSON.stringify(id)+')'),false);
   const stalePickup={source:'tokens',id:'late-pickup',actionId:'late-pickup',coinId:id,index:1,steps:[{action:'walk'},{action:'pickup'}]};
   await render('sprite.executeBody('+JSON.stringify(stalePickup)+',{})');
   assert.deepEqual(receipts.map(r=>[r.coinId,r.status]),[[id,'interrupted']]);
-  assert.equal(state.legacy.wallet.balance,9900);
+  assert.equal(state.legacy.wallet.balance,9800);
   assert.equal(state.legacy.tokens.recovered,0);
   assert.equal(state.life.memories.filter(m=>m.content.includes('爸爸抢走了')).length,1);
 
@@ -135,10 +146,10 @@ app.whenReady().then(async () => {
   assert.equal(await render('sprite.dragState.sling'), true);
   await render('sprite.onPointerUp()');
   await until(() => !watch);
-  assert.deepEqual(actions, ['hold', 'drop', 'release','collect']);
-  assert.equal(state.legacy.wallet.balance, 9900);
+  assert.equal(actions.includes('drop') || actions.includes('collect'),false);
+  assert.equal(state.legacy.wallet.balance, 9800);
   win.destroy();
   clearTimeout(deadline);
-  console.log('Space drag dropped 100; mouse press collected it before release replied. Wallet 9900, collected 100, recovered 0, one memory.');
+  console.log('Two local drops and two consecutive clicks settled in two batches. Wallet 9800, collected 200, recovered 0, one collection memory.');
   app.exit(0);
 }).catch(error => { console.error(error); app.exit(1); });

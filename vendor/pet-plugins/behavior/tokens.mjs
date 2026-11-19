@@ -5,31 +5,51 @@ const cut = v => String(v?.message || v || '').slice(0, 240);
 const stateOf = p => p.tokens ||= { coins: [], dropped: 0, collected: 0, recovered: 0, lastDrop: 0, plan: [], error: null };
 const unit = v => { if (!Number.isFinite(v) || v < 0 || v > 1) throw Error('碎片位置无效'); return v; };
 const surfaceOf = s => { if (!['web', 'desktop'].includes(s)) throw Error('活动端无效'); return s; };
+function dropIn(store,p,o,now,id) {
+  const surface=surfaceOf(o.surface), x=unit(o.x), y=unit(o.y), fromX=unit(o.fromX), fromY=unit(o.fromY);
+  const t=stateOf(p), key='token-drop:'+o.key;
+  if(p.seen.includes(key) || t.coins.some(c=>c.id===id) || t.coins.filter(c=>c.status==='floor').length>=24 ||
+    p.wallet.balance<TOKEN_VALUE || now-t.lastDrop<240)return null;
+  p.wallet.balance-=TOKEN_VALUE;
+  t.dropped+=TOKEN_VALUE;
+  t.lastDrop=now;
+  const coin={id,value:TOKEN_VALUE,surface,x,y,fromX,fromY,ts:now,status:'floor'};
+  t.coins.push(coin);
+  t.coins=t.coins.filter(c=>c.status==='floor').concat(t.coins.filter(c=>c.status!=='floor').slice(-256));
+  store.eventIn(p,'token','爸爸晃动我，一片 100 token 饭钱掉到地上，可用饭钱已扣除',key,{coin:id},now);
+  return coin;
+}
+function collectIn(store,p,coin) {
+  if(coin.status!=='floor')return coin;
+  coin.status='collected';
+  coin.settled=store.clock();
+  stateOf(p).collected+=coin.value;
+  store.eventIn(p,'token','爸爸收走了地上的一片 100 token，不能再捡回','token-collect:'+coin.id,{coin:coin.id});
+  return coin;
+}
 export function attachTokenStore(Store) {
-  Store.prototype.dropToken = function(id, o) {
-    if (typeof o.key !== 'string' || !/^[a-zA-Z0-9-]{8,80}$/.test(o.key)) throw Error('掉落编号无效');
-    const surface = surfaceOf(o.surface), x = unit(o.x), y = unit(o.y), fromX = unit(o.fromX), fromY = unit(o.fromY);
-    return this.update(id, p => {
-      const t = stateOf(p), key = 'token-drop:' + o.key;
-      if (p.seen.includes(key)) return null;
-      const now = this.clock();
-      if (t.coins.filter(c => c.status === 'floor').length >= 24 || p.wallet.balance < TOKEN_VALUE || now - t.lastDrop < 240) return null;
-      // Dropped money is escrow, removed from spendable balance even if routine costs are frozen.
-      p.wallet.balance -= TOKEN_VALUE; t.dropped += TOKEN_VALUE; t.lastDrop = now;
-      const coin = { id: randomUUID(), value: TOKEN_VALUE, surface, x, y, fromX, fromY, ts: now, status: 'floor' };
-      t.coins.push(coin); t.coins = t.coins.filter(c => c.status === 'floor').concat(t.coins.filter(c => c.status !== 'floor').slice(-256));
-      this.eventIn(p, 'token', '爸爸晃动我，一片 100 token 饭钱掉到地上，可用饭钱已扣除', key, { coin: coin.id });
-      return coin;
+  Store.prototype.dropToken=function(id,o){
+    if(typeof o.key!=='string' || !/^[a-zA-Z0-9-]{8,80}$/.test(o.key))throw Error('掉落编号无效');
+    return this.update(id,p=>dropIn(this,p,o,this.clock(),randomUUID()));
+  };
+  Store.prototype.collectToken=function(id,coinId){
+    return this.update(id,p=>{
+      const coin=stateOf(p).coins.find(c=>c.id===coinId);
+      if(!coin)throw Error('这片 token 已不存在');
+      return collectIn(this,p,coin);
     });
   };
-  Store.prototype.collectToken = function(id, coinId) {
-    return this.update(id, p => {
-      const t = stateOf(p), c = t.coins.find(c => c.id === coinId);
-      if (!c) throw Error('这片 token 已不存在');
-      if (c.status !== 'floor') return c;
-      c.status = 'collected'; c.settled = this.clock(); t.collected += TOKEN_VALUE;
-      this.eventIn(p, 'token', '爸爸收走了地上的一片 100 token，不能再捡回', 'token-collect:' + c.id, { coin: c.id });
-      return c;
+  Store.prototype.settleDesktopTokens=function(petId,drops,claims){
+    return this.update(petId,p=>{
+      const dropped=[],collected=[];
+      for(const d of drops){
+        if(dropIn(this,p,{...d,key:d.id,surface:'desktop'},d.ts,d.id))dropped.push(d.id);
+      }
+      for(const id of claims){
+        const coin=stateOf(p).coins.find(c=>c.id===id && c.surface==='desktop' && c.status==='floor');
+        if(coin)collected.push(collectIn(this,p,coin).id);
+      }
+      return {dropped,collected,value:TOKEN_VALUE};
     });
   };
 }

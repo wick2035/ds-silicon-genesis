@@ -99,6 +99,16 @@ export class LegacyDomain {
           tokenChange={coinId:coin.id,amount:coin.value,balance:pet.wallet.balance};
           descriptions[kind]=`爸爸抢走了你掉在地上的一片 ${coin.value} token 饭钱。这片碎片已经归爸爸，可用余额仍是 ${pet.wallet.balance} token，你只能拾取还在地上的碎片。`;
         }
+        if(kind==='token-batch' && coin){
+          const dropped=coin.dropped.length, collected=coin.collected.length;
+          const changes=[];
+          if(dropped)changes.push(`爸爸晃掉了你 ${dropped} 片饭钱，共 ${dropped*coin.value} token`);
+          if(collected)changes.push(`爸爸抢走了你地上的 ${collected} 片饭钱，共 ${collected*coin.value} token，已经归爸爸，不能再捡回`);
+          if(changes.length){
+            descriptions[kind]=changes.join('。')+`。可用余额 ${pet.wallet.balance} token。`;
+            tokenChange={dropped:coin.dropped,collected:coin.collected,balance:pet.wallet.balance};
+          }
+        }
         if(kind==='wallet'){
           const action=(Array.isArray(input)?input[0]:input) as Obj;
           walletChange={action:action.action,before:{balance:walletBefore.balance,frozen:walletBefore.frozen===true},after:{balance:pet.wallet.balance,frozen:pet.wallet.frozen===true},delta:Math.round((pet.wallet.balance-walletBefore.balance)*100)/100};
@@ -273,6 +283,17 @@ export class LegacyDomain {
     });
   }
   /** A dropped fragment must be an authenticated observed physical event. */
+  settleTokens(petId:string, batchId:string, drops:Obj[], claims:string[], authority:object):Promise<unknown> {
+    const uuid=(v:unknown)=>typeof v==='string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(v);
+    if(authority!==this.#observerAuthority || !uuid(batchId) || !Array.isArray(drops) || !Array.isArray(claims) ||
+      drops.length>24 || claims.length>24 || !(drops.length||claims.length) || !claims.every(uuid))throw Error('桌面饭钱批次无效');
+    const now=this.clock();
+    for(const drop of drops){
+      if(!drop || !uuid(drop.id) || !Number.isSafeInteger(drop.ts) || drop.ts<=0 || drop.ts>now+1000 ||
+        ![drop.x,drop.y,drop.fromX,drop.fromY].every(v=>Number.isFinite(v)&&v>=0&&v<=1))throw Error('掉落记录无效');
+    }
+    return this.mutate(petId,'token-batch:'+batchId,'token-batch',{drops,claims},store=>store.settleDesktopTokens(petId,drops,claims));
+  }
   dropToken(petId: string, requestId: string, input: Record<string, unknown>, authority: object): Promise<unknown> {
     if (authority !== this.#observerAuthority) throw new Error('饭钱掉落缺少可信观察');
     return this.mutate(petId,requestId,'token-drop',input,store => store.dropToken(petId,input));

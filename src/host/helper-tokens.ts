@@ -10,6 +10,7 @@ export function createHelperTokens(store:Reader,domain:LegacyDomain,authority:ob
     const state=await (store.loadTokenScene?store.loadTokenScene(id):store.loadEnvelope(id));if(!state)throw Error('生命状态不存在');
     const pet=state.legacy as Record<string,any>,t=pet.tokens??{};
     return {version:state.version,coins:(t.coins??[]).filter((c:any)=>c.status==='floor'),balance:pet.wallet?.balance,
+      settledIds:(t.coins??[]).filter((c:any)=>c.status!=='floor').map((c:any)=>c.id),
       dropped:t.dropped??0,collected:t.collected??0,recovered:t.recovered??0,lastDrop:t.lastDrop??0,
       value:100,held:(holds.get(id)||0)>Date.now(),thinking:false,plan:[],error:null};
   };
@@ -18,6 +19,7 @@ export function createHelperTokens(store:Reader,domain:LegacyDomain,authority:ob
     if(body.action==='hold')holds.set(id,Date.now()+5000);
     else if(body.action==='release')holds.delete(id);
     else if(body.action==='drop'){if((holds.get(id)||0)<=Date.now())throw Error('需要按住空格拖动身体');result=await domain.dropToken(id,requestId,body,authority);}
+    else if(body.action==='batch')result=await domain.settleTokens(id,body.batchId,body.drops,body.claims,authority);
     else if(body.action==='collect')result=await domain.collectToken(id,requestId,body.id,authority);
     else if(body.action==='layout')result=await domain.tokenLayout(id,requestId,body.positions,authority);
     else if(body.action==='recover'){if((holds.get(id)||0)>Date.now())throw Error('请先松开身体');result={status:'queued'};}

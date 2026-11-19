@@ -83,7 +83,7 @@ export function companionContext(envelope:Readonly<CanonicalEnvelope>, now=Date.
   const knownEvents=(envelope.life.events??[]).filter(e=>live(e.eventId)&&(!e.causationId||live(e.causationId))&&Date.parse(e.occurredAt)<=now);
   const moneyEvents=knownEvents.filter(e=>e.type==='wallet'||e.type==='social.labor.payment'||e.type==='interaction.operation'&&(e.payload as any)?.operation==='wallet')
     .slice(-6).map(e=>({id:e.eventId,at:e.occurredAt,type:e.type,detail:e.payload}));
-  const tokenEvents=knownEvents.filter(e=>e.type==='interaction.operation'&&['token-drop','token-collect'].includes((e.payload as any)?.operation))
+  const tokenEvents=knownEvents.filter(e=>e.type==='interaction.operation'&&['token-drop','token-collect','token-batch'].includes((e.payload as any)?.operation))
     .slice(-6).map(e=>({id:e.eventId,at:e.occurredAt,detail:e.payload}));
   const floorTokens=Array.isArray(pet.tokens?.coins)?pet.tokens.coins.reduce((sum:number,c:any)=>c.status==='floor'&&finite(c.value)?sum+c.value:sum,0):0;
   const moneyTalk=(envelope.life.events??[]).filter(e=>live(e.eventId)&&(!e.causationId||live(e.causationId))&&

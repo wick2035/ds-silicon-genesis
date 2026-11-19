@@ -145,8 +145,11 @@ export async function main():Promise<void> {
       async(id,requestId,detail)=>{const action=(detail as any)?.action;
         if(action==='hold')commandChannel.cancelToken(id);
         if(action==='collect'&&typeof (detail as any).id==='string')commandChannel.cancelToken(id,(detail as any).id);
+        if(action==='batch' && Array.isArray((detail as any).claims)){
+          for(const coin of (detail as any).claims.slice(0,24))if(typeof coin==='string')commandChannel.cancelToken(id,coin);
+        }
         const result=await tokens.handle(id,requestId,detail);
-        if(action==='release'||action==='recover'||action==='collect')wakeTokenPickup(id);
+        if(action==='release'||action==='recover'||action==='collect'||action==='batch')wakeTokenPickup(id);
         return result;
       },
       async(id,requestId,detail)=>{const d=detail as any;if(!d||typeof d.id!=='string'||typeof d.key!=='string'||![d.fromX,d.toX].every((n:unknown)=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=1))throw Error('搬砖拖动观察无效');await domain.laborAction(id,requestId,{action:'disturb',id:d.id,key:d.key,surface:'desktop',fromX:d.fromX,toX:d.toX},observerAuthority);const state=await store.loadEnvelope(id);if(!state)throw Error('状态不可用');return projectLegacySnapshot(state).labor;},
