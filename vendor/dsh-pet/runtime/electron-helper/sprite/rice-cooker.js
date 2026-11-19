@@ -3,9 +3,9 @@
 const COOKER_ASSETS = '../../assets/rice-cooker/';
 
 class DesktopRiceCooker {
-  constructor(pet) {
-    this.pet = pet;
-    this.source = window.petBridge;
+  constructor(root, source) {
+    this.root = root;
+    this.source = source;
     this.count = 1;
     this.generation = 0;
     this.reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
@@ -16,12 +16,13 @@ class DesktopRiceCooker {
     this.launcher.setAttribute('aria-label', '电饭锅');
     this.launcher.innerHTML = `
       <span class="rice-cooker-art">
-        <img class="rice-cooker-body" alt="">
+        <img class="rice-cooker-body" alt="" draggable="false">
         <span class="rice-cooker-fill" aria-hidden="true" hidden><img class="rice-cooker-mound" alt=""></span>
         <span class="rice-cooker-steam" aria-hidden="true"><i></i><i></i></span>
       </span>
       <span class="rice-cooker-caption"></span>`;
     this.image = this.launcher.querySelector('.rice-cooker-body');
+    this.art = this.launcher.querySelector('.rice-cooker-art');
     this.fill = this.launcher.querySelector('.rice-cooker-fill');
     this.mound = this.fill.querySelector('img');
     this.mound.src = COOKER_ASSETS+'mound.png';
@@ -33,7 +34,7 @@ class DesktopRiceCooker {
     this.panel.innerHTML = `
       <div class="rice-cooker-header">
         <h2 id="rice-cooker-title">大肥鱼的电饭锅</h2>
-        <button type="button" class="rice-cooker-close" aria-label="收起电饭锅详情">×</button>
+        <button type="button" class="rice-cooker-close" aria-label="收起电饭锅详情"></button>
       </div>
       <div class="rice-cooker-facts">
         <strong class="rice-cooker-status" role="status"></strong>
@@ -56,38 +57,70 @@ class DesktopRiceCooker {
     this.closeButton = this.panel.querySelector('.rice-cooker-close');
     this.message = this.panel.querySelector('.rice-cooker-message');
     [this.minus,this.plus] = this.quantity.querySelectorAll('button');
-    const {signal} = pet.ac;
-    this.launcher.addEventListener('click', () => this.expanded ? this.close() : this.open(), {signal});
-    this.closeButton.addEventListener('click', () => this.close(), {signal});
+    this.launcher.addEventListener('click', event => {
+      if (event.detail && this.suppressClick) return;
+      if (this.expanded) this.close();
+      else this.open();
+    });
+    this.closeButton.addEventListener('click', () => this.close());
+    this.launcher.addEventListener('pointerdown', event => this.startDrag(event));
+    this.launcher.addEventListener('pointermove', event => this.moveDrag(event));
+    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+      this.launcher.addEventListener(name, event => this.endDrag(event));
+    }
+    root.addEventListener('pointermove', () => this.source.pointer());
     this.quantity.addEventListener('click', event => {
       if (!event.target.dataset.step) return;
       this.count += Number(event.target.dataset.step);
       this.paint();
-    }, {signal});
-    this.submit.addEventListener('click', () => void this.act(), {signal});
-    window.addEventListener('resize', () => {
+    });
+    this.submit.addEventListener('click', () => void this.act());
+    source.onOpen(() => this.open());
+    source.onPanelSide(below => {
+      if (this.panelBelow === below) return;
+      this.panelBelow = below;
+      root.classList.toggle('panel-below', below);
       this.layout();
-      this.pet.syncInputRegions();
-    }, {signal});
+    });
     for (const element of [this.launcher,this.panel]) {
       element.addEventListener('keydown', event => {
         if (event.key !== 'Escape' || !this.expanded) return;
         event.stopPropagation();
         this.close();
-      }, {signal});
+      });
     }
     this.launcher.hidden = this.panel.hidden = true;
-    pet.el.append(this.launcher,this.panel);
-    this.pollTimer = setInterval(() => void this.poll(), 1250);
-    this.clockTimer = setInterval(() => this.paintClock(), 250);
+    root.append(this.panel, this.launcher);
+    const artSize = Number(new URLSearchParams(location.search).get('size'));
+    this.launcher.style.width = (artSize > 0 ? artSize : 150) + 'px';
+    this.layout();
+    setInterval(() => void this.poll(), 1250);
+    setInterval(() => this.paintClock(), 250);
     void this.poll();
   }
 
-  dispose() {
-    clearInterval(this.pollTimer);
-    clearInterval(this.clockTimer);
-    this.launcher.remove();
-    this.panel.remove();
+  startDrag(event) {
+    if (event.button !== 0 || this.drag) return;
+    this.suppressClick = false;
+    this.drag = { id: event.pointerId, x: event.screenX, y: event.screenY };
+    this.launcher.setPointerCapture(event.pointerId);
+    this.source.drag('start', event.screenX, event.screenY);
+  }
+
+  moveDrag(event) {
+    const drag = this.drag;
+    if (drag?.id !== event.pointerId) return;
+    if (!this.suppressClick && Math.hypot(event.screenX - drag.x, event.screenY - drag.y) < 4) return;
+    this.suppressClick = true;
+    this.launcher.classList.add('is-dragging');
+    this.source.drag('move', event.screenX, event.screenY);
+  }
+
+  endDrag(event) {
+    if (this.drag?.id !== event.pointerId) return;
+    this.drag = null;
+    this.launcher.classList.remove('is-dragging');
+    this.source.drag('end', event.screenX, event.screenY);
   }
 
   open() {
@@ -95,7 +128,7 @@ class DesktopRiceCooker {
     this.expanded = true;
     this.feedback('');
     this.paint();
-    this.source.requestKeyboardFocus();
+    this.source.focus();
     this.closeButton.focus({preventScroll:true});
     void this.poll();
   }
@@ -115,8 +148,8 @@ class DesktopRiceCooker {
     this.polling = true;
     const generation = this.generation;
     try {
-      const state = await this.source.riceCooker({action:'snapshot'});
-      if (generation === this.generation && !this.pet.ac.signal.aborted) this.accept(state);
+      const state = await this.source.request({action:'snapshot'});
+      if (generation === this.generation) this.accept(state);
     } catch {
       if (generation === this.generation) {
         this.connected = false;
@@ -144,7 +177,6 @@ class DesktopRiceCooker {
     if (this.hasFood()) this.manual = false;
     if (!this.hasFood() && !this.manual) this.expanded = false;
     this.paint();
-    void this.reply();
   }
 
   async act() {
@@ -158,9 +190,8 @@ class DesktopRiceCooker {
     this.paint();
     try {
       // Reuse the request ID if the helper disconnected after committing.
-      const send = () => this.source.riceCooker(request);
+      const send = () => this.source.request(request);
       const state = await send().catch(send);
-      if (this.pet.ac.signal.aborted) return;
       if (state.ok === false) this.feedback(state.message);
       else {
         this.count = 1;
@@ -171,38 +202,14 @@ class DesktopRiceCooker {
       this.feedback('刚才没连上电饭锅，请稍后再试。');
     } finally {
       this.busy = false;
-      if (!this.pet.ac.signal.aborted) {
-        this.paint();
-        void this.poll();
-      }
+      this.paint();
+      void this.poll();
     }
   }
 
   feedback(text) {
     this.message.textContent = text;
     this.message.hidden = !text;
-  }
-
-  async reply() {
-    const reply = this.state.replies?.[0], now=Date.now();
-    if (!reply || this.acking || document.hidden || this.pet.sleeping || this.pet.todoOpen || now<(this.replyAfter??0)) return;
-    if (this.lastSpokenId!==reply.id) {
-      if (now<(this.pet.careBubbleUntil??0)) return;
-      const text = reply.remaining===0
-        ? `爸盛走了${reply.bowls}碗，锅都空啦`
-        : `爸盛走了${reply.bowls}碗，剩的${reply.remaining}碗给本鱼留着嘛`;
-      this.pet.showCareReaction(text,6500);
-      this.lastSpokenId = reply.id;
-    }
-    this.acking = true;
-    try {
-      const result=await this.source.riceCooker({action:'ack',requestId:reply.id});
-      if (result.ok!==false) this.replyAfter = Date.now()+6500;
-    } catch {
-      // Keep the durable reply pending until the desktop is available again.
-    } finally {
-      this.acking = false;
-    }
   }
 
   paintClock() {
@@ -219,12 +226,11 @@ class DesktopRiceCooker {
       this.mound.style.setProperty('--rice-width',String(.66+.34*amount));
       this.mound.style.setProperty('--rice-height',String(.23+.77*amount));
     }
-    if (this.asset !== asset) {
+    const artChanged = this.asset !== asset;
+    if (artChanged) {
       this.asset = asset;
       this.image.src = COOKER_ASSETS+asset;
       this.launcher.dataset.lidClosed = String(closed);
-      this.layout();
-      this.pet.syncInputRegions();
     }
     let caption = '空锅', status = caption;
     if (batch) {
@@ -237,9 +243,11 @@ class DesktopRiceCooker {
       status = reserved ? `${caption} · ${reserved} 碗在吃` : caption;
     }
     if (!this.connected) status = '电饭锅暂未连接';
-    if (this.caption.textContent !== caption) this.caption.textContent = caption;
+    const captionChanged = this.caption.textContent !== caption;
+    if (captionChanged) this.caption.textContent = caption;
     if (this.status.textContent !== status) this.status.textContent = status;
     this.launcher.setAttribute('aria-label',batch?`电饭锅，正在煮 ${batch.bowls} 碗`:`电饭锅，${caption}`);
+    if (artChanged || captionChanged) this.layout();
   }
 
   paint() {
@@ -259,34 +267,26 @@ class DesktopRiceCooker {
     this.submit.textContent = count?`盛走 ${this.count} 碗`:reminderId?'已提醒':'提醒煮饭';
     this.paintClock();
     this.layout();
-    this.pet.syncInputRegions();
   }
 
   layout() {
-    if (this.launcher.hidden) return;
-    const pet = this.pet, clamp = pet.visibleClampRect();
-    if (!clamp) return;
-    const {x:ox,y:oy} = pet.winOffset;
-    const left = clamp.x-ox, right = left+clamp.w, top = clamp.y-oy, bottom = top+clamp.h;
-    const width = Math.min(clamp.w,Math.max(88,Math.min(122,pet.size*.29)));
-    const artHeight = this.asset==='closed.png' ? width*.82 : width;
-    const height = artHeight+24, foot = pet.bottomPad+pet.height*S.FEET_Y/S.CANVAS_H;
-    const besideRight = pet.hitRect.x+pet.hitRect.w+4, besideLeft = pet.hitRect.x-width-4;
-    const rightRoom = right-besideRight, leftRoom = besideLeft+width-left;
-    const preferred = rightRoom>=width || leftRoom<width && rightRoom>=leftRoom ? besideRight : besideLeft;
-    const fit = (value,min,max) => Math.min(Math.max(min,max),Math.max(min,value));
-    const x = fit(preferred,left,right-width), y = fit(foot-artHeight,top,bottom-height);
-    const placement = [x,y,width].join(',');
-    if (placement!==this.placement) {
-      this.placement = placement;
-      Object.assign(this.launcher.style,{left:x+'px',top:y+'px',width:width+'px'});
+    let layout = { visible: false };
+    if (!this.launcher.hidden) {
+      const measure = element => element.getBoundingClientRect().toJSON();
+      const { width, height } = measure(this.root);
+      const art = measure(this.art);
+      // Match the clickable area to the opaque portion of the cooker artwork.
+      const grip = { x: art.x + art.width * .12, y: art.y + art.width * .025,
+        width: art.width * .76, height: art.height - art.width * .06 };
+      layout = { visible: true, width, height, art, grip, launcher: measure(this.launcher),
+        caption: measure(this.caption), panel: this.panel.hidden ? null : measure(this.panel),
+        panelBelow: Boolean(this.panelBelow) };
     }
-    if (this.panel.hidden) return;
-    const panelWidth = Math.min(236,clamp.w-8);
-    const panelX = fit(x+(width-panelWidth)/2,left+4,right-panelWidth-4);
-    this.panel.style.width = panelWidth+'px';
-    const panelHeight = this.panel.offsetHeight;
-    const panelY = fit(y-8-panelHeight>=top?y-8-panelHeight:y+height+8,top+4,bottom-panelHeight-4);
-    Object.assign(this.panel.style,{left:panelX+'px',top:panelY+'px'});
+    const key = JSON.stringify(layout);
+    if (key === this.layoutKey) return;
+    this.layoutKey = key;
+    this.source.layout(layout);
   }
 }
+
+const cooker = new DesktopRiceCooker(document.querySelector('#cooker'), window.cookerBridge);

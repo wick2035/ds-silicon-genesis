@@ -50,7 +50,6 @@ Object.assign(PetSprite.prototype, {
       area,
     });
     this.applyWinOffset(fit.offsetX, fit.offsetY);
-    this.riceCooker?.layout();
     return { x: fit.x, y: fit.y, width, height, offsetX: fit.offsetX, offsetY: fit.offsetY };
   },
 
@@ -90,5 +89,6 @@ Object.assign(PetSprite.prototype, {
       toScreen(fit.offsetX),
       toScreen(fit.offsetY),
     );
+    if (window.petBridge.worksiteOnly && !this.cookerAttached) this.attachRiceCooker();
   },
 });

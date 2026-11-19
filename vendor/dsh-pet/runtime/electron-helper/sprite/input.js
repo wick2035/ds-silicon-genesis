@@ -289,7 +289,6 @@ Object.assign(PetSprite.prototype, {
     // 控件矩形 = 主进程允许接收点击的区域，矩形外继续穿透。可点的余额气泡悬在余量区，不登记就点不到。
     const controls = [
       ...document.querySelectorAll('.dsh-pet-menu-column, .dsh-pet-chat, .dsh-pet-todo, .pet-bubble.is-clickable, .pet-rice-prop:not([hidden]), .pet-soft-choices:not([hidden]) button, .pet-token-coin, .pet-token-status button:not([hidden])'),
-      ...this.el.querySelectorAll('.rice-cooker-launcher:not([hidden]), .rice-cooker-panel:not([hidden])'),
     ];
     for (const el of this.inputRegionElements) {
       if (!controls.includes(el)) {

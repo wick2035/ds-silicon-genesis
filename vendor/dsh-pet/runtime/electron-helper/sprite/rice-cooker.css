@@ -1,7 +1,22 @@
+html, body {
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+#cooker {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  width: max-content;
+  padding: 12px;
+  user-select: none;
+}
+
+#cooker.panel-below .rice-cooker-panel { order: 1; }
+
 .rice-cooker-launcher,
 .rice-cooker-panel {
-  position: absolute;
-  pointer-events: auto;
   font: 500 12px/1.45 "Microsoft YaHei UI", system-ui, sans-serif;
   color: #182a40;
 }
@@ -12,15 +27,18 @@
 .rice-cooker-panel[hidden] { display: none; }
 
 .rice-cooker-launcher {
-  z-index: 5;
   display: grid;
   justify-items: center;
   min-width: 0;
   padding: 0;
   border: 0;
   background: transparent;
-  cursor: pointer;
+  cursor: grab;
+  touch-action: none;
 }
+
+.rice-cooker-launcher.is-dragging { cursor: grabbing; }
+.rice-cooker-launcher img { pointer-events: none; }
 
 .rice-cooker-art {
   position: relative;
@@ -112,12 +130,12 @@
 
 .rice-cooker-panel {
   box-sizing: border-box;
-  z-index: 21;
-  padding: 11px 12px 12px;
+  width: 236px;
+  padding: 7px 9px 12px 12px;
   border: 1px solid #d6e1eb;
   border-radius: 14px;
   background: linear-gradient(158deg, #ffffff, #eff5fb);
-  box-shadow: 0 7px 18px #101e3038, inset 0 1px #fff;
+  box-shadow: 0 5px 15px #0003, inset 0 1px #fff;
 }
 
 .rice-cooker-header,
@@ -142,7 +160,27 @@
 }
 .rice-cooker-panel button:focus-visible { outline: 2px solid #3479ad; outline-offset: 2px; }
 .rice-cooker-panel button:disabled { opacity: .53; cursor: default; }
-.rice-cooker-panel .rice-cooker-close { min-width: 24px; min-height: 24px; background: transparent; color: #52647b; font-size: 17px; }
+.rice-cooker-panel .rice-cooker-close {
+  position: relative;
+  flex: 0 0 36px;
+  min-height: 36px;
+  background: transparent;
+  color: #475d73;
+}
+.rice-cooker-close::before,
+.rice-cooker-close::after {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: 13px;
+  height: 1.6px;
+  border-radius: 2px;
+  background: currentColor;
+  content: "";
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+.rice-cooker-close::after { transform: translate(-50%, -50%) rotate(-45deg); }
+.rice-cooker-panel .rice-cooker-close:hover { background: #e2ebf4; color: #182a40; }
+.rice-cooker-panel .rice-cooker-close:active { background: #d2e0ef; }
 .rice-cooker-quantity { display: flex; align-items: center; gap: 3px; }
 .rice-cooker-quantity button { background: #e0ebf5; font-size: 15px; }
 .rice-cooker-quantity output { min-width: 16px; text-align: center; font-variant-numeric: tabular-nums; }

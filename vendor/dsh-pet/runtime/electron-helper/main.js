@@ -319,7 +319,7 @@ app.whenReady().then(() => {
   powerMonitor.on('resume', reassertTaskbar);
   powerMonitor.on('unlock-screen', reassertTaskbar);
 
-  registerIpc({ ipcMain, petWindows, shell, openTarget: OPEN_TARGET, petRoute: PET_ROUTE, hostRequest: bridge.hostRequest });
+  registerIpc({ ipcMain, petWindows, shell, openTarget: OPEN_TARGET, petRoute: PET_ROUTE, hostRequest: bridge.hostRequest, dpi });
   createDisplaySync({ screen, petWindows, dpi });
 
   // 冒烟自检（默认关闭）：DSH_PET_SMOKE=1 时延时截图到 DSH_PET_SMOKE_OUT 后退出，
