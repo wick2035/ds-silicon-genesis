@@ -51,13 +51,16 @@ test('认知必须实际收到解释记忆才可提出完成',async()=>{
   const result=await c.propose(s,new AbortController().signal,async()=>s);assert.equal(result.status,read?'proposed':'degraded');if(!read)assert.equal(result.reason,'unread_goal_explanation');
  }
 });
-test('接受认知时将理解记忆和完成状态一起写入存档',async()=>{
+test('同一轮自主思考可以留存新念想并完成有理解依据的旧目标',async()=>{
  let envelope={petId:'main',version:0,life:fixture(),legacy:{},humanity:{}};
  const gate={signal:new AbortController().signal,run:async(_id,fn)=>fn()};
  const uow={apply:async(_id,version,change)=>{assert.equal(version,envelope.version);const d=structuredClone(envelope);change(d);d.version++;envelope=d;}};
  const coordinator=new CognitiveResultCoordinator({loadEnvelope:async()=>structuredClone(envelope)},uow,gate,()=>({body:fixture().body,emotions:fixture().emotions}),{},{});
- await coordinator.accept('main',{status:'proposed',sourceVersion:0,proposal:null,candidates:output},gate.signal);
+ const goals=[{title:'想弄清怎样照顾刚到家的小动物',description:'从爸爸的解释里想到可以怎样照顾它们',sourceIds:['explanation']}];
+ await coordinator.accept('main',{status:'proposed',sourceVersion:0,proposal:null,candidates:{...output,goals}},gate.signal);
  assert.equal(envelope.life.goals[0].status,'completed');assert.ok(envelope.life.memories.some(m=>m.id.startsWith('memory:goal-understood:')));
+ assert.equal(envelope.life.goals[1].title,goals[0].title);assert.equal(envelope.life.goals[1].status,'active');
+ assert.deepEqual(envelope.life.goals[1].sourceIds,['explanation']);
 });
 test('模型上下文裁剪后不能引用已被移除的解释',async()=>{
  const s=fixture(),snapshot={...((await import('../dist/kernel/index.js')).workspace(s))};

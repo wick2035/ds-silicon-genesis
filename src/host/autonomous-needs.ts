@@ -12,6 +12,7 @@ import type {PetGate,UnitOfWork} from '../storage/uow.js';
 import type {DurableCognitiveBudget} from './cognitive-budget.js';
 
 type Model={agentDefaultModel:{currentSelection():{provider:string;model:string}};llm:{stream(options:any):AsyncIterable<any>}};
+export type NeedsDecision = 'idle' | 'busy' | 'cooldown' | 'handled';
 function signatureFor(state:CanonicalEnvelope):string {
  const pet=state.legacy as any,human=state.humanity as any;
  return JSON.stringify({balance:pet.wallet?.balance,frozen:pet.wallet?.frozen,price:pet.config?.costs?.feed,dailyCalls:pet.config?.learning?.dailyModelCalls,satietyBand:Math.floor(human.stats.satiety/10),sleeping:human.sleeping,inventory:riceInventory(state),cooker:cookerFacts(state),worksite:pet.worksite?.inside});
@@ -31,27 +32,30 @@ function waitingForOwner(state:CanonicalEnvelope,signature:string):boolean {
  * every choice and can continue from real tool receipts in the same turn. */
 export function createAutonomousNeeds(reader:{loadEnvelope(id:string):Promise<CanonicalEnvelope|null>},gate:PetGate,uow:UnitOfWork,budget:DurableCognitiveBudget,model:Model,publish:(text:string)=>void) {
  const running=new Set<string>();
- return {async run(petId:string,signal:AbortSignal):Promise<boolean>{
-  if(signal.aborted||running.has(petId))return false;
+ return {async run(petId:string,signal:AbortSignal):Promise<NeedsDecision>{
+  if(signal.aborted)return 'idle';
   let snapshot:CanonicalEnvelope|undefined;const requestId='needs:'+randomUUID();
-  const eligible=await gate.run(petId,async()=>{
-   const state=await reader.loadEnvelope(petId);if(!state)return false;
+  const decision=await gate.run(petId,async():Promise<NeedsDecision>=>{
+   if(running.has(petId))return 'busy';
+   const state=await reader.loadEnvelope(petId);if(!state)return 'idle';
    const pet=state.legacy as any,human=state.humanity as any;
    const cooking=canConsiderCooking(state)&&!human.sleeping&&!pet.worksite?.inside;
-   if(signal.aborted||state.life.constraints.paused||pet.config?.autonomousPaused||pet.growth?.stopAt||human.helperReady!==true||human.restrained||farmVisit(state)||hasForcedWork(state)||hasActiveConversation(state)||(!cooking&&!riceMotivation(human,pet.config??{}).mealDue))return false;
+   if(signal.aborted||state.life.constraints.paused||pet.config?.autonomousPaused||pet.growth?.stopAt||human.helperReady!==true||human.restrained||farmVisit(state)||hasForcedWork(state)||hasActiveConversation(state)||(!cooking&&!riceMotivation(human,pet.config??{}).mealDue))return 'idle';
    const signature=signatureFor(state);
-   if(pet.autonomousNeeds?.nextAt>Date.now()&&pet.autonomousNeeds.signature===signature)return pet.autonomousNeeds.status!=='failed';
-   if(state.life.actions.some(a=>['PENDING','DISPATCHED'].includes(a.status)))return false;
+   if(pet.autonomousNeeds?.nextAt>Date.now()&&pet.autonomousNeeds.signature===signature)return pet.autonomousNeeds.status==='failed'?'idle':'cooldown';
+   if(state.life.actions.some(a=>['PENDING','DISPATCHED'].includes(a.status)))return 'idle';
    await uow.apply(petId,state.version,draft=>{
     const at=new Date().toISOString();
     (draft.legacy as any).autonomousNeeds={id:requestId,status:'running',at:Date.now(),nextAt:Date.now()+600000,signature};
     draft.life.events.push({eventId:requestId,petId,type:'needs.observed',source:'scheduler',occurredAt:at,receivedAt:at,evidenceLevel:'observed',payload:{food:riceMotivation(draft.humanity as any,(draft.legacy as any).config??{}),considerCooking:cooking}});
     return {};
    });
-   snapshot=await reader.loadEnvelope(petId)??undefined;return true;
+   snapshot=await reader.loadEnvelope(petId)??undefined;
+   if(!snapshot)return 'idle';
+   running.add(petId);
+   return 'handled';
   });
-  if(!eligible||!snapshot)return eligible;
-  running.add(petId);
+  if(!snapshot)return decision;
   try {
    const selection=model.agentDefaultModel.currentSelection(),history=privateConversationHistory(snapshot.life).slice(-10).map(e=>({role:e.role,content:e.content}));let text='';const usage={inputTokens:0,outputTokens:0,cachedTokens:0};
    const reminderId=cookerFacts(snapshot).reminderId;
@@ -78,7 +82,7 @@ export function createAutonomousNeeds(reader:{loadEnvelope(id:string):Promise<Ca
     });
    });
    if(published&&!signal.aborted)publish(text);
-   return true;
+   return 'handled';
   }catch(error){
    await gate.run(petId,async()=>{const current=await reader.loadEnvelope(petId);if(!current)return;await uow.apply(petId,current.version,draft=>{const record=(draft.legacy as any).autonomousNeeds;if(record?.id===requestId){record.status='failed';record.error=error instanceof Error?error.message:'自主需要暂未完成';}return {};});});
    throw error;

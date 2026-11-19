@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {PgBoss} from 'pg-boss';
+import {LifeScheduler} from '../dist/scheduler/index.js';
+import {createInitialState} from '../dist/kernel/index.js';
 import {createAutonomousNeeds} from '../dist/host/autonomous-needs.js';
 import {createEmbodiedSpeech} from '../dist/host/embodied-speech.js';
 import {createHumanity} from '../vendor/dsh-pet/src/host/humanity.mjs';
@@ -46,7 +49,7 @@ test('autonomy can select a batch size before getting hungry',async()=>{
    yield {type:'text',text:'<needs-silent/>'};
   }
  }});
- assert.equal(await needs.run('main',f.gate.signal),true);
+ assert.equal(await needs.run('main',f.gate.signal),'handled');
  assert.deepEqual(f.dispatched,['service.cook-rice']);
  assert.equal(state.legacy.farm.rawBowls,2);
  assert.equal(state.legacy.riceCooker.batch.bowls,3);
@@ -55,8 +58,8 @@ test('autonomy can select a batch size before getting hungry',async()=>{
 test('hunger starts its own decision and buys then eats from receipts without a user message',async()=>{
  const f=fixture();let rounds=0;
  const needs=f.create({async *stream(o){rounds++;assert.match(o.system,/不是爸爸的新消息/);if(rounds===1)yield call('buy','service.buy-rice',{});else if(rounds===2){const t=JSON.parse(o.messages.at(-1).content);assert.equal(t.库存.find(i=>i.id==='old').status,'unconfirmed');yield call('eat','service.eat-rice',{itemId:t.库存.find(i=>i.status==='available').id});}else{const t=JSON.parse(o.messages.at(-1).content);assert.equal(t.food.satiety,32);yield {type:'text',text:'我自己买来吃了，还想再留一碗。'};}}});
- assert.equal(await needs.run('main',f.gate.signal),true);assert.deepEqual(f.dispatched,['service.buy-rice','service.eat-rice']);assert.equal(f.published.length,1);assert.equal(f.s.life.events.some(e=>e.type==='conversation.user'),false);assert.equal(f.s.legacy.autonomousNeeds.status,'completed');
- await needs.run('main',f.gate.signal);assert.equal(rounds,3);assert.equal(f.published.length,1);
+ assert.equal(await needs.run('main',f.gate.signal),'handled');assert.deepEqual(f.dispatched,['service.buy-rice','service.eat-rice']);assert.equal(f.published.length,1);assert.equal(f.s.life.events.some(e=>e.type==='conversation.user'),false);assert.equal(f.s.legacy.autonomousNeeds.status,'completed');
+ assert.equal(await needs.run('main',f.gate.signal),'cooldown');assert.equal(rounds,3);assert.equal(f.published.length,1);
 });
 test('autonomous need can ask the owner or choose silence without a prescribed purchase',async()=>{
  for(const text of ['爸爸，我还饿，想再要一碗饭。','<needs-silent/>']){
@@ -66,7 +69,7 @@ test('autonomous need can ask the owner or choose silence without a prescribed p
 });
 test('satisfied, paused and active private conversations do not trigger another autonomous decision',async()=>{
  for(const patch of [f=>{f.s.humanity.stats.satiety=80;f.s.humanity.lastFedAt=Date.now();},f=>{f.s.life.constraints.paused=true;},f=>{f.s.legacy.chatTurns={x:{status:'running',wakeRequested:true,at:Date.now()}};}]){
-  const f=fixture();patch(f);const needs=f.create({async *stream(){assert.fail('unexpected model call');}});assert.equal(await needs.run('main',f.gate.signal),false);
+  const f=fixture();patch(f);const needs=f.create({async *stream(){assert.fail('unexpected model call');}});assert.equal(await needs.run('main',f.gate.signal),'idle');
  }
 });
 
@@ -99,4 +102,39 @@ test('an owner response allows a new need request with unchanged resources',asyn
  f.s.life.events.push({eventId:'dad-response',type:'conversation.user',source:'desktop',actorId:'dad',occurredAt:new Date(Date.now()+1).toISOString(),payload:{text:'还饿吗'}});
  f.s.legacy.autonomousNeeds.nextAt=0;
  await needs.run('main',f.gate.signal);assert.equal(f.published.length,2);
+});
+
+test('食物冷却期间复核念想并保留新念想，失效的走动决定不执行',async t=>{
+ const f=fixture();
+ const needs=f.create({async *stream(){yield {type:'text',text:'<needs-silent/>'};}});
+ assert.equal(await needs.run('main',f.gate.signal),'handled');
+ let wake;
+ for(const [name,method] of Object.entries({
+  start:async()=>{},stop:async()=>{},createQueue:async()=>{},getQueue:async()=>({policy:'exclusive'}),
+  work:async(_name,handler)=>{wake=handler;},send:async()=>{},
+ }))t.mock.method(PgBoss.prototype,name,method);
+
+ const state=createInitialState('main',new Date().toISOString());
+ state.constraints.paused=false;
+ state.goals.push({id:'old',title:'弄明白旧问题',status:'active',sourceIds:[]});
+ const candidates={goals:[{title:'想弄明白新问题',sourceIds:['conversation']}],
+  goalUpdates:[{goalId:'old',kind:'understood',evidenceId:'explanation'}],plan:[]};
+ const proposal={actionType:'body.activity'};
+ const accepted=[];
+ let idle={seconds:130,generation:1},claims=0;
+ const scheduler=new LifeScheduler({getState:async()=>state},
+  {propose:async()=>{idle={seconds:0,generation:2};return {status:'proposed',proposal,candidates};}},
+  {needs,connectionString:'postgresql://localhost/unused',petId:'main',intervalSeconds:60,signal:f.gate.signal,
+   idle:{snapshot:()=>idle},assertExclusive:async()=>{},
+   wakeCoordinator:{claim:async()=>({cursor:'1',changed:false}),finish:async()=>{},release:async()=>{}},
+   deterministic:{run:async(_id,_signal,options)=>assert.equal(options.needsManaged,true)},
+   resultCoordinator:{resume:async()=>false,claimCognition:async()=>{claims++;return true;},accept:async(_id,result)=>accepted.push(result)}});
+ try{
+  await scheduler.start();
+  await wake([{data:{petId:'main'}}]);
+  assert.equal(claims,1);
+  assert.equal(accepted.length,1);
+  assert.equal(accepted[0].proposal,null);
+  assert.deepEqual(accepted[0].candidates,candidates);
+ }finally{await scheduler.stop();}
 });

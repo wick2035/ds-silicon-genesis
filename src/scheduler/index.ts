@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { Cognition, hasCognitiveDemand, type CognitiveResult } from '../cognition/index.js';
 import type { LifeKernel } from '../kernel/index.js';
 import type { CognitiveResultCoordinator } from '../host/cognitive-result.js';
+import type { NeedsDecision } from '../host/autonomous-needs.js';
 
 const queueFor = (petId: string) => 'life-wakeup-' + createHash('sha256').update(petId).digest('hex').slice(0, 24);
 const JOB_SCHEMA = 'silicon_genesis_jobs';
@@ -23,7 +24,7 @@ export interface SchedulerOptions {
   deterministic: DeterministicActivity;
   farm?:{settle(petId:string):Promise<unknown>};
   cooker?:{settle(petId:string):Promise<unknown>};
-  needs?: {run(petId:string,signal:AbortSignal):Promise<boolean>};
+  needs?: {run(petId:string,signal:AbortSignal):Promise<NeedsDecision>};
   groupConversation?: {run(petId:string,signal:AbortSignal):Promise<void>};
   resultCoordinator: CognitiveResultCoordinator;
   development?: {run(petId:string,signal:AbortSignal):Promise<void>};
@@ -91,25 +92,32 @@ export class LifeScheduler {
             if(this.options.cooker)await this.options.cooker.settle(this.options.petId);
             const before = await this.kernel.getState(this.options.petId);
             if (this.controller.signal.aborted) throw new Error('Scheduler stopped');
-            let needsHandled=false;
-            if(!before.constraints.paused&&this.options.needs){try{needsHandled=await this.options.needs.run(this.options.petId,this.controller.signal);}catch{this.report({status:'degraded',reason:'needs_unavailable'});}}
-            await this.options.deterministic.run(this.options.petId, this.controller.signal, { allowAutonomous: !before.constraints.paused,needsManaged:needsHandled });
+            let needsDecision:NeedsDecision='idle';
+            if(!before.constraints.paused&&this.options.needs){try{needsDecision=await this.options.needs.run(this.options.petId,this.controller.signal);}catch{this.report({status:'degraded',reason:'needs_unavailable'});}}
+            await this.options.deterministic.run(this.options.petId, this.controller.signal, { allowAutonomous: !before.constraints.paused,needsManaged:needsDecision!=='idle' });
             if(!before.constraints.paused&&this.options.groupConversation){try{await this.options.groupConversation.run(this.options.petId,this.controller.signal);}catch{this.report({status:'degraded',reason:'group_conversation_unavailable'});}}
             if (this.controller.signal.aborted) throw new Error('Scheduler stopped');
-            const resumed=needsHandled?false:await this.options.resultCoordinator.resume(this.options.petId,this.controller.signal);
+            // Cooling down still owns meal decisions, but leaves time for other plans and thoughts.
+            const needsBusy=needsDecision==='busy'||needsDecision==='handled';
+            const resumed=needsBusy?false:await this.options.resultCoordinator.resume(this.options.petId,this.controller.signal);
             const state = await this.kernel.getState(this.options.petId);
             if(!state.constraints.paused && this.options.development)await this.options.development.run(this.options.petId,this.controller.signal);
             const idleBefore=this.options.idle?.snapshot();
-            const ongoing=(state.cognitivePlans||[]).some(p=>p.status==='active'||p.status==='failed') || state.goals.some(g=>g.status==='active');
+            const ongoing=(state.cognitivePlans||[]).some(p=>p.status==='active'||p.status==='failed') || state.goals.some(g=>g.status==='active'&&g.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id)));
             const farmDemand=!!state.legacyContext?.farm?.operation && !state.body.sleeping && !state.body.restrained && !state.body.injured;
-            if (!needsHandled && !resumed && !state.constraints.paused && (claim.changed || farmDemand || hasCognitiveDemand(state) || ongoing || (idleBefore?.seconds??0)>=120) && await this.options.resultCoordinator.claimCognition(this.options.petId,this.options.cognitiveIntervalSeconds??1800,this.controller.signal)) {
+            if (!needsBusy && !resumed && !state.constraints.paused && (claim.changed || farmDemand || hasCognitiveDemand(state) || ongoing || (idleBefore?.seconds??0)>=120) && await this.options.resultCoordinator.claimCognition(this.options.petId,this.options.cognitiveIntervalSeconds??1800,this.controller.signal)) {
               const fresh=await this.kernel.getState(this.options.petId);
               const result = await this.cognition.propose(fresh, this.controller.signal, () => this.kernel.getState(this.options.petId));
               if (result.status === 'proposed' && !this.controller.signal.aborted) {
                 const idleAfter=this.options.idle?.snapshot();
-                const wantsWalk=result.proposal?.actionType==='body.activity' || result.candidates.plan.some(step=>step.actionType==='body.activity');
+                const plannedWalk=result.candidates.plan.some(step=>step.actionType==='body.activity');
+                const wantsWalk=result.proposal?.actionType==='body.activity';
+                const stillIdle=idleBefore && idleAfter && idleBefore.seconds>=120 && idleAfter.seconds>=120 && idleBefore.generation===idleAfter.generation;
                 // The system input or a direct interaction may have changed while the model was thinking.
-                if(!wantsWalk || (result.proposal?.actionType==='body.activity' && !result.candidates.plan.some(step=>step.actionType==='body.activity') && idleBefore && idleAfter && idleBefore.seconds>=120 && idleAfter.seconds>=120 && idleBefore.generation===idleAfter.generation))await this.options.resultCoordinator.accept(this.options.petId,result,this.controller.signal);
+                if(!plannedWalk && (!wantsWalk || stillIdle))await this.options.resultCoordinator.accept(this.options.petId,result,this.controller.signal);
+                else if(result.candidates.goals.length||result.candidates.goalUpdates.length){
+                  await this.options.resultCoordinator.accept(this.options.petId,{...result,proposal:null,candidates:{...result.candidates,plan:[]}},this.controller.signal);
+                }
               }
               this.report(result);
             }
