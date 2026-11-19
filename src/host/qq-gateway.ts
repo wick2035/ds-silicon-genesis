@@ -3,6 +3,7 @@ import { writeFileSync, renameSync } from 'node:fs';
 import { QQPetBridge } from '../../vendor/pet-plugins/behavior/qq-bridge.mjs';
 import { CanonicalQQ, createQQExecutor, QQPlatformRejection, type QQIncoming, type QQTransport } from './qq-canonical.js';
 import type { OutboxIntent, ExecutionReceipt } from '../storage/uow.js';
+import type {QQTurnResult} from './qq-sleep.js';
 
 interface QQConfig { enabled:boolean; appId:string; appSecret:string; petId?:string; sandbox?:boolean; ownerOpenid?:string; groupOpenid?:string; groupOwnerOpenid?:string; groupEnabled?:boolean; groupMode?:'owner'|'mentions'|'all'; pairingCode?:string; pairingExpiresAt?:number; groupPairingCode?:string; groupPairingExpiresAt?:number }
 export async function readQQConfig(path:string):Promise<QQConfig> {
@@ -14,7 +15,7 @@ export interface QQGatewayOptions {
   config:QQConfig; canonical:CanonicalQQ; ingressAuthority:object; signal:AbortSignal;
   /** Uses the same authenticated conversation/model boundary as desktop. */
   onTurn(input:{petId:string;scene:'c2c'|'group';messages:Array<{text:string;isOwner:boolean;eventId:string}>;
-    selectReplyTo?:(eventId:string)=>void},signal:AbortSignal):Promise<string|null>;
+    selectReplyTo?:(eventId:string)=>void;sleepCatchupId?:string},signal:AbortSignal):Promise<QQTurnResult>;
   /** Dispatches an already persisted outbox row, never directly sends. */
   dispatch(actionId:string):Promise<unknown>;
   onStatus?:(state:string)=>void;
@@ -31,7 +32,7 @@ function diagnostics(path?:string) {
     try {writeFileSync(path+'.tmp',JSON.stringify(latest,null,2)+'\n',{mode:0o600});renameSync(path+'.tmp',path);}catch{}
   };
 }
-type Item={text:string;isOwner:boolean;eventId:string;messageId:string;receivedAt:number};
+type Item={text:string;isOwner:boolean;eventId:string;messageId:string;receivedAt:number;sleepCatchupId?:string;deliveryAnchor?:{eventId:string;messageId:string}};
 const qqId=(value:unknown):value is string=>typeof value==='string'&&value.length>0&&value.length<=200&&!/[\s<>\x00-\x1f]/u.test(value);
 /** Reuses only original QQ gateway handshake, heartbeat and reconnection. All
  * application input, pairing and outbound delivery are overridden below. */
@@ -43,6 +44,11 @@ export class CanonicalQQGateway extends QQPetBridge {
   #batchStarted=0;
   #lastGroupReply=0;
   #groupPending=false;
+  #groupReplies:Array<{anchor:Item;text:string;epoch:number}>=[];
+  #replyTimer?:ReturnType<typeof setTimeout>;
+  #sendingGroup=false;
+  #catchupItems:Item[]=[];
+  #claimingSleep=false;
   #groupBlocked=false;
   #groupEpoch=0;
   #groupAbort=new AbortController();
@@ -67,7 +73,21 @@ export class CanonicalQQGateway extends QQPetBridge {
     if(this.#groupBlocked===blocked)return;
     this.#groupBlocked=blocked;this.#groupEpoch++;
     this.#groupAbort.abort();this.#groupAbort=new AbortController();
-    if(blocked){if(this.#timer)clearTimeout(this.#timer);this.#timer=undefined;this.#items=[];this.#batchStarted=0;}
+    if(blocked){if(this.#timer)clearTimeout(this.#timer);if(this.#replyTimer)clearTimeout(this.#replyTimer);this.#replyTimer=undefined;this.#timer=undefined;this.#items=[];this.#catchupItems=[];this.#groupReplies=[];this.#batchStarted=0;}
+  }
+  /** Called by committed wake observations; the canonical claim survives restarts. */
+  async resumeSleepInbox():Promise<void>{
+    if(this.#claimingSleep||this.#closed||this.#groupBlocked||this.#options.signal.aborted)return;
+    this.#claimingSleep=true;const epoch=this.#groupEpoch;
+    try{
+      const claim=await this.#options.canonical.claimSleepInbox(this.#options.config.petId||'main',this.#options.ingressAuthority);
+      if(!claim||this.#closed||this.#groupBlocked||epoch!==this.#groupEpoch)return;
+      const ids=new Set(claim.messages.map(m=>m.eventId));
+      this.#items=this.#items.filter(m=>!ids.has(m.eventId));
+      this.#batchStarted=this.#items[0]?.receivedAt??0;
+      this.#catchupItems.push(...claim.messages.map(m=>({...m,isOwner:false,receivedAt:Date.now(),sleepCatchupId:claim.id,deliveryAnchor:claim.anchor})));
+      this.scheduleGroup();
+    }finally{this.#claimingSleep=false;}
   }
   /** No legacy api() send is allowed; gateway uses only GET /gateway. */
   async api(route:string, body?:unknown):Promise<any> {
@@ -155,15 +175,15 @@ export class CanonicalQQGateway extends QQPetBridge {
   }
   private scheduleGroup():void {
     if(this.#timer)clearTimeout(this.#timer);
-    if(this.#closed || this.#groupBlocked || this.#groupPending || !this.#items.length)return;
+    if(this.#closed || this.#groupBlocked || this.#groupPending || this.#sendingGroup || this.#groupReplies.length || (!this.#items.length&&!this.#catchupItems.length))return;
     // Busy groups get one turn per four messages. Quiet groups still get a
     // chance to chat after a short pause, without waiting for more speakers.
-    const now=Date.now(), readyAt=this.#items.length>=4?now:Math.min(now+4000,this.#batchStarted+12000);
+    const now=Date.now(), readyAt=this.#catchupItems.length||this.#items.length>=4?now:Math.min(now+4000,this.#batchStarted+12000);
     const flushAt=Math.max(readyAt,this.#lastGroupReply+10000,this.#queuedTurns>=4?now+1000:now);
     this.#timer=setTimeout(()=>{
       this.#timer=undefined;
       if(this.#queuedTurns>=4){this.scheduleGroup();return;}
-      const items=this.#items.splice(0,4);
+      const items=this.#catchupItems.length?this.#catchupItems.splice(0,3):this.#items.splice(0,4);
       this.#batchStarted=this.#items[0]?.receivedAt??0;
       this.#groupPending=true;
       this.enqueueTurn('group',items);
@@ -189,13 +209,14 @@ export class CanonicalQQGateway extends QQPetBridge {
     if(scene==='group'&&(this.#groupBlocked||epoch!==this.#groupEpoch))return;
     items=items.filter(item=>Date.now()-item.receivedAt<=240000);
     if(!items.length||this.#closed||this.#options.signal.aborted)return;
-    let text:string|null,anchor=items.at(-1)!;
+    let text:QQTurnResult,anchor=items.at(-1)!;
     // Bound a single turn so a stalled model/gateway can never wedge the whole
     // serial queue; the next owner message is then free to proceed.
     const turnAbort=new AbortController();
     const turnSignal=AbortSignal.any([this.#options.signal,turnAbort.signal,AbortSignal.timeout(90000),...(scene==='group'?[this.#groupAbort.signal]:[])]);
     try {
       text=await this.#options.onTurn({petId:this.#options.config.petId||'main',scene,messages:items.map(({text,isOwner,eventId})=>({text,isOwner,eventId})),
+        ...(anchor.sleepCatchupId?{sleepCatchupId:anchor.sleepCatchupId}:{}),
         ...(scene==='group'?{selectReplyTo:(eventId:string)=>{anchor=items.find(item=>item.eventId===eventId)??anchor;}}:{})},turnSignal);
     } catch(error) {
       this.statusSafe('message-failed');
@@ -203,18 +224,42 @@ export class CanonicalQQGateway extends QQPetBridge {
       const walletEmpty=error instanceof Error && error.message==='模拟饭钱已用完，请先添加饭钱';
       text=scene==='c2c'&&walletEmpty?'我的饭钱用完啦，请先加一点。':'我暂时没接上，请稍后再试。';
     }
-    if(text?.trim()&&!this.#closed&&!this.#options.signal.aborted && (scene!=='group'||!this.#groupBlocked&&epoch===this.#groupEpoch)) await this.respond(scene,[anchor],text);
+    if(this.#closed||this.#options.signal.aborted||scene==='group'&&(this.#groupBlocked||epoch!==this.#groupEpoch))return;
+    if(typeof text==='string'){if(text.trim())await this.respond(scene,[anchor],text);}
+    else if(text&&scene==='group'){
+      for(const reply of text.replies){const target=items.find(item=>item.eventId===reply.anchorEventId);if(target&&reply.text.trim())this.#groupReplies.push({anchor:target,text:reply.text,epoch});}
+      await this.flushGroupReplies();
+    }
   }
   private async respond(scene:'c2c'|'group',items:Item[],text:string):Promise<void> {
+    if(scene==='group'){
+      const anchor=items.at(-1);if(!anchor||this.#closed||this.#groupBlocked)return;
+      this.#groupReplies.push({anchor,text,epoch:this.#groupEpoch});await this.flushGroupReplies();return;
+    }
+    await this.sendResponse(scene,items,text);
+  }
+  /** Only the timer waits for group cooldown; private turns keep their serial lane. */
+  private async flushGroupReplies():Promise<void>{
+    if(this.#sendingGroup||this.#closed||this.#groupBlocked)return;
+    if(this.#replyTimer)clearTimeout(this.#replyTimer);this.#replyTimer=undefined;
+    const delay=this.#lastGroupReply+10000-Date.now();
+    if(this.#groupReplies.length&&delay>0){this.#replyTimer=setTimeout(()=>{this.#replyTimer=undefined;void this.flushGroupReplies().catch(()=>this.statusSafe('message-failed'));},delay);return;}
+    const reply=this.#groupReplies.shift();if(!reply){this.scheduleGroup();return;}
+    this.#sendingGroup=true;
+    try{if(reply.epoch===this.#groupEpoch&&Date.now()-reply.anchor.receivedAt<=240000)await this.sendResponse('group',[reply.anchor],reply.text);}
+    finally{this.#sendingGroup=false;if(this.#groupReplies.length)this.#replyTimer=setTimeout(()=>{this.#replyTimer=undefined;void this.flushGroupReplies().catch(()=>this.statusSafe('message-failed'));},Math.max(0,this.#lastGroupReply+10000-Date.now()));else this.scheduleGroup();}
+  }
+  private async sendResponse(scene:'c2c'|'group',items:Item[],text:string):Promise<void> {
     const epoch=this.#groupEpoch;if(scene==='group'&&this.#groupBlocked)return;
     const last=items.at(-1); if(!last||this.#closed||this.#options.signal.aborted)return;
-    const action=await this.#options.canonical.enqueue(this.#options.config.petId||'main','reply:'+last.messageId,scene,text,last.eventId,last.messageId,this.#options.ingressAuthority);
-    if(!this.#closed&&!this.#options.signal.aborted && (scene!=='group'||!this.#groupBlocked&&epoch===this.#groupEpoch)) { await this.#options.dispatch(action); if(scene==='group')this.#lastGroupReply=Date.now(); }
+    const target=last.deliveryAnchor??last;
+    const action=await this.#options.canonical.enqueue(this.#options.config.petId||'main',(last.sleepCatchupId?last.sleepCatchupId+':':'reply:')+target.messageId,scene,text,target.eventId,target.messageId,this.#options.ingressAuthority);
+    if(!this.#closed&&!this.#options.signal.aborted && (scene!=='group'||!this.#groupBlocked&&epoch===this.#groupEpoch)) { try{await this.#options.dispatch(action);}finally{if(scene==='group')this.#lastGroupReply=Date.now();} }
   }
   stop():void {
     if(this.#closed)return; this.#closed=true;
     this.#groupAbort.abort();
-    if(this.#timer)clearTimeout(this.#timer); this.#items=[];
+    if(this.#timer)clearTimeout(this.#timer);if(this.#replyTimer)clearTimeout(this.#replyTimer);this.#items=[];this.#catchupItems=[];this.#groupReplies=[];
     this.#options.signal.removeEventListener('abort',this.#abort);
     super.stop();
   }

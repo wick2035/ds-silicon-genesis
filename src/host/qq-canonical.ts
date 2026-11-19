@@ -1,5 +1,6 @@
 import { createHash,randomUUID } from 'node:crypto';
 import {groupChatBlocked,groupMessageAllowed,assertGroupReplyAllowed} from './qq-group-access.js';
+import {groupSleeping,deferSleepingMessages,trustedGroupMessages,sleepReplyAnchor} from './qq-sleep.js';
 import {boundGroupId,groupProactiveState,assertGroupOpportunity,GROUP_OPENER_PRICE} from './qq-group-proactive-policy.js';
 import { redactDadNames } from '../../vendor/pet-plugins/behavior/memory-privacy.mjs';
 import { rebuildRelationships, validateProposal } from '../kernel/index.js';
@@ -134,7 +135,32 @@ export class CanonicalQQ {
       }:undefined;
       draft.life.events.push({eventId,petId,type:'social.message',source:'qq',actorId:message.scene==='group'?groupActorId(identity,message.actorOpenid):'dad',occurredAt:message.occurredAt,receivedAt:now,evidenceLevel:'observed',payload:{scene:message.scene,...(message.scene==='group'?{groupId:hash(identity.appId+':'+message.groupOpenid)}:{}),messageId:message.messageId,text:redactDadNames(message.text),isOwner,...(addressing&&Object.keys(addressing).length?{addressing}:{}),...(message.scene==='group' && typeof message.nickname==='string' && message.nickname.trim() && message.nickname.trim().length<=40 && !/[\x00-\x1f<>]/u.test(message.nickname) ? {nickname:message.nickname.trim()} : {})}});
       rebuildRelationships(draft.life);
+      if(message.scene==='group'&&!isOwner&&groupSleeping(draft)){
+        const event=draft.life.events.find(e=>e.eventId===eventId)!;
+        deferSleepingMessages(draft,[event]);
+      }
       return {value:{accepted:true,isOwner,eventId}};
+    });
+  }
+  /** Consume at most three sleep-time messages before starting a paid reply.
+   * A failed/unknown attempt is never automatically replayed after a restart. */
+  async claimSleepInbox(petId:string,authority:object):Promise<{id:string;messages:Array<{eventId:string;messageId:string;text:string}>;anchor:{eventId:string;messageId:string}}|null>{
+    if(authority!==this.#ingress)throw Error('QQ 通道凭据无效');
+    const current=await this.reader.loadEnvelope(petId);
+    if(!current||groupSleeping(current)||groupChatBlocked(current)||!(current.legacy as Obj).qq?.sleepInbox?.eventIds?.length)return null;
+    const livePending=(current.legacy as Obj).qq.sleepInbox.eventIds.some((id:string)=>{try{return trustedGroupMessages(current,[id])[0].actorId!=='dad';}catch{return false;}});
+    if(livePending&&!sleepReplyAnchor(current,[]))return null;
+    return this.change(petId,draft=>{
+      const qq=(draft.legacy as Obj).qq;
+      if(groupSleeping(draft)||groupChatBlocked(draft)||!qq?.identity?.groupEnabled||!qq.sleepInbox?.eventIds?.length)return {value:null};
+      const ids=qq.sleepInbox?.eventIds??[],events=[];
+      const groupId=hash(qq.identity.appId+':'+qq.identity.groupOpenid);
+      for(const id of ids){try{const [event]=trustedGroupMessages(draft,[id]);if(event.actorId!=='dad'&&(event.payload as Obj).groupId===groupId)events.push(event);}catch{/* Deleted and prohibited sources are retired. */}}
+      const selected=events.slice(-3),id='qq-wake:'+randomUUID();
+      const anchor=sleepReplyAnchor(draft,selected);
+      if(selected.length&&!anchor)return {value:null};
+      qq.sleepInbox={eventIds:[],lastClaim:{id,eventIds:selected.map(e=>e.eventId),replyAnchorId:anchor?.eventId}};
+      return {value:selected.length&&anchor?{id,messages:selected.map(e=>({eventId:e.eventId,messageId:String((e.payload as Obj).messageId),text:String((e.payload as Obj).text)})),anchor:{eventId:anchor.eventId,messageId:String((anchor.payload as Obj).messageId)}}:null};
     });
   }
   /** Queues a send, never sends it. Destination comes solely from the paired identity. */

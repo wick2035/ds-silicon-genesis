@@ -5,6 +5,7 @@ import {companionContext,COMPANION_PERSONALITY} from './companion-personality.js
 import {createInteractionReactions} from './interaction-reactions.js';
 import {createFeedbackLeafPublisher,createImmediateFeedback} from './operation-feedback.js';
 import {createCommitObservers} from './commit-observers.js';
+import {groupSleeping} from './qq-sleep.js';
 import {groupChatBlocked} from './qq-group-access.js';
 import {readMemeChoices,withMemeSpeech,type MemeSource} from './meme-speech.js';
 import {createEmbodiedSpeech} from './embodied-speech.js';
@@ -23,6 +24,7 @@ import {spawn} from 'node:child_process';
 import {randomUUID,createHash} from 'node:crypto';
 import {LifeKernel,invalidateDependents} from '../kernel/index.js';
 import type {LifeState} from '../kernel/types.js';
+import type {CanonicalEnvelope} from '../storage/postgres.js';
 import {Cognition} from '../cognition/index.js';
 import {LifeScheduler} from '../scheduler/index.js';
 import {OutboxDispatcher} from '../storage/uow.js';
@@ -354,6 +356,12 @@ export async function main():Promise<void> {
         await prepareQQTakeover({...shared,legacyHome:targetHome,stopHook:{stopAndVerify:async()=>await verifyOldQQAbsent(root)?'absent':'unknown'}});
       if(takeover.status==='ready') {
         qq=takeover.gateway;qq.setGroupBlocked(await canonical.groupBlocked(petId));executors.set('qq.send',takeover.executor);await qq.start();
+        const resumeSleepInbox=(state:CanonicalEnvelope)=>{
+          if(state.petId!==petId||lease.signal.aborted||groupSleeping(state)||!(state.legacy as any).qq?.sleepInbox?.eventIds?.length)return;
+          lease.detach(()=>{void qq?.resumeSleepInbox().catch(error=>console.error('QQ 睡醒补回暂未完成：'+(error instanceof Error?error.message:'未知错误')));});
+        };
+        observeCommits(resumeSleepInbox);
+        const sleepInboxState=await store.loadEnvelope(petId);if(sleepInboxState)resumeSleepInbox(sleepInboxState);
         groupConversation=createGroupProactive({canonical,authority:ingressAuthority,dispatch:id=>dispatcher.dispatch(id),generate:(snapshot,signal)=>budget.runAs(petId,'autonomous',()=>generateGroupOpener(snapshot,model!.llm,model!.agentDefaultModel.currentSelection(),signal,persona),'QQ群主动表达')});
         await canonical.enableRelay(petId);
         let signature='',running=false,dirty=false,timer:ReturnType<typeof setTimeout>|undefined;

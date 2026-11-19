@@ -20,6 +20,7 @@ import type {createSemanticGrounding} from './semantic-grounding.js';
 import {groupSpeaker} from './chat-identity.js';
 import {groupPeopleContext} from './group-people.js';
 import {groupAddressing} from './group-addressing.js';
+import {groupSleeping,trustedGroupMessages,recordSleepingReply,deferSleepingMessages,groupReplyWindow,type QQTurnResult} from './qq-sleep.js';
 import {projectBody} from './body-projection.js';
 import {blocksNewLabor} from './labor-pending.js';
 import type { LifeState, Memory } from '../kernel/types.js';
@@ -30,7 +31,8 @@ import type { DurableCognitiveBudget } from './cognitive-budget.js';
 interface Reader { loadEnvelope(petId:string):Promise<CanonicalEnvelope|null>; load(petId:string):Promise<LifeState|null>; projectEnvelope?(envelope:CanonicalEnvelope):LifeState }
 interface Model { agentDefaultModel:{currentSelection():{provider:string;model:string}}; llm:{embodiedTools?:boolean;stream(options:unknown):AsyncIterable<any>} }
 type GroupRouting={focus:ReturnType<typeof groupAddressing>['lines'][number];context:ReturnType<typeof groupAddressing>['context'];contextSources:string[]};
-interface Turn { requestId:string; petId:string; channel:'desktop'|'qq-c2c'|'qq-group'; text:string; actorId:string; sourceEventIds?:string[]; groupRouting?:GroupRouting; onPartial?:(text:string)=>void; onMeme?:(name:string)=>void; onUsage?:(usage:{inputTokens:number;outputTokens:number;cachedTokens:number})=>void; attachments?:Array<{petId:string;id:string;sourceEventId:string}> }
+interface Turn { requestId:string; petId:string; channel:'desktop'|'qq-c2c'|'qq-group'; text:string; actorId:string; sourceEventIds?:string[]; groupRouting?:GroupRouting; sleepCatchupId?:string; onPartial?:(text:string)=>void; onMeme?:(name:string)=>void; onUsage?:(usage:{inputTokens:number;outputTokens:number;cachedTokens:number})=>void; attachments?:Array<{petId:string;id:string;sourceEventId:string}> }
+class GroupSleepRoutingChanged extends Error {}
 const digest=(value:string)=>createHash('sha256').update(value).digest('hex');
 const safeId=(s:unknown):s is string=>typeof s==='string' && s.length>0 && s.length<=200 && !/[\x00-\x1f]/.test(s);
 const live=(state:LifeState,id:string)=>!Object.hasOwn(state.invalidSources,id);
@@ -90,6 +92,22 @@ export class CanonicalChat {
       if(!/^\/(?:休息|打盹|醒来|甜食)$/u.test(text))checkSimulatedSpending(draft,'chat');
       for(const attachment of input.attachments??[]) {const event=draft.life.events.find(e=>e.eventId===attachment.sourceEventId);if(!event||event.type!=='attachment.shared'||(event.payload as any)?.attachmentId!==attachment.id||Object.hasOwn(draft.life.invalidSources,attachment.sourceEventId))throw Error('图片附件来源无效');}
       for(const source of input.sourceEventIds??[]) if(!draft.life.events.some(e=>e.eventId===source)||Object.hasOwn(draft.life.invalidSources,source))throw new Error('对话来源不可用');
+      // Recheck under the write gate, before reserving any model budget.
+      if(input.channel==='qq-group'){
+        const events=trustedGroupMessages(draft,input.sourceEventIds??[]);
+        const members=events.filter(e=>e.actorId!=='dad');
+        if(groupSleeping(draft)&&members.length){
+          if(members.length!==events.length)throw new GroupSleepRoutingChanged();
+          deferSleepingMessages(draft,members);
+          return {reply:recordSleepingReply(draft,members.map(e=>e.eventId))};
+        }
+        if(input.sleepCatchupId){
+          const claim=(draft.legacy as any).qq?.sleepInbox?.lastClaim;
+          if(claim?.id!==input.sleepCatchupId||events.some(e=>!claim.eventIds.includes(e.eventId)))throw Error('睡醒补回来源无效');
+          const delivery=draft.life.events.find(e=>e.eventId===claim.replyAnchorId);
+          if(!delivery||!groupReplyWindow(delivery)){deferSleepingMessages(draft,events);return {reply:''};}
+        }
+      }
       const now=new Date().toISOString(),userId='chat-user:'+id;
       if(draft.life.events.some(e=>e.eventId===userId))throw Error('对话事件冲突');
       const anchor=draft.life.events.find(e=>e.eventId===anchorId);
@@ -334,17 +352,40 @@ export class CanonicalChat {
   }
   /** Host may bind this directly as QQGatewayOptions.onTurn. */
   async qqTurn(input:{petId:string;scene:'c2c'|'group';messages:Array<{text:string;isOwner:boolean;eventId:string}>;
-    selectReplyTo?:(eventId:string)=>void},signal:AbortSignal):Promise<string|null> {
+    selectReplyTo?:(eventId:string)=>void;sleepCatchupId?:string},signal:AbortSignal):Promise<QQTurnResult> {
+    if(signal.aborted||this.gate.signal.aborted)throw Error('对话已取消');
     if(!input.messages.length)return null;
     let messages=input.messages;const group=input.scene==='group';let actorId='dad';let text=messages.at(-1)!.text;
     let groupRouting:GroupRouting|undefined;
     if(group) {
       const state=await this.reader.loadEnvelope(input.petId);if(!state)throw Error('生命状态不可用');
-      const groupMessages=messages.map(m=>{const event=state.life.events.find(e=>e.eventId===m.eventId);
-        if(!event || event.source!=='qq' || event.type!=='social.message' || (event.payload as any)?.scene!=='group' || !event.actorId||Object.hasOwn(state.life.invalidSources,event.eventId))throw Error('群聊来源不可用');
-        return event;});
-      const groupId=(groupMessages[0].payload as any)?.groupId;
-      if(groupMessages.some(event=>(event.payload as any)?.groupId!==groupId))throw Error('群聊消息不在同一个群');
+      const groupMessages=trustedGroupMessages(state,messages.map(m=>m.eventId));
+      const claim=(state.legacy as any).qq?.sleepInbox?.lastClaim;
+      if(input.sleepCatchupId && (claim?.id!==input.sleepCatchupId || groupMessages.some(e=>!claim.eventIds.includes(e.eventId))))throw Error('睡醒补回来源无效');
+      const sleeping=groupSleeping(state);
+      const deferred=groupMessages.filter(e=>e.actorId!=='dad'&&(sleeping||!input.sleepCatchupId&&(e.payload as any)?.sleepDeferred===true));
+      if(deferred.length){
+        const ids=deferred.map(e=>e.eventId);
+        const text=await this.edit(input.petId,draft=>{
+          const events=trustedGroupMessages(draft,ids);
+          if(groupSleeping(draft))deferSleepingMessages(draft,events);
+          return recordSleepingReply(draft,ids);
+        });
+        const replies:Array<{anchorEventId:string;text:string}>=[];
+        const normalMessages=messages.filter(m=>!ids.includes(m.eventId));
+        if(normalMessages.length){
+          let anchorEventId=normalMessages.at(-1)!.eventId;
+          try{
+            const answer=await this.qqTurn({...input,messages:normalMessages,selectReplyTo:id=>{anchorEventId=id;}},signal);
+            if(typeof answer==='string'&&answer.trim())replies.push({anchorEventId,text:answer});
+            else if(answer&&typeof answer==='object')replies.push(...answer.replies);
+          }catch(error){
+            if(signal.aborted||this.gate.signal.aborted)throw error;
+            replies.push({anchorEventId,text:'我暂时没接上，请稍后再试。'});
+          }
+        }
+        replies.push({anchorEventId:ids.at(-1)!,text});return {replies};
+      }
       const {lines,context,contextSources}=groupAddressing(state,groupMessages);
       const latestFirst=[...lines].reverse();
       const focus=latestFirst.find(line=>line.addressedTo==='pet')??latestFirst.find(line=>line.addressedTo==='unspecified');
@@ -362,7 +403,9 @@ export class CanonicalChat {
       text=body.length===1?body[0].text:JSON.stringify(body);
     }
     const events=messages.map(m=>m.eventId);
-    const reply=await this.turn({requestId:'qq:'+digest(events.join('|')),petId:input.petId,channel:group?'qq-group':'qq-c2c',actorId,text,sourceEventIds:events,...(groupRouting?{groupRouting}:{})},signal);return reply||null;
+    try{
+      const reply=await this.turn({requestId:'qq:'+digest((input.sleepCatchupId??'')+events.join('|')),petId:input.petId,channel:group?'qq-group':'qq-c2c',actorId,text,sourceEventIds:events,...(groupRouting?{groupRouting}:{}),...(input.sleepCatchupId?{sleepCatchupId:input.sleepCatchupId}:{})},signal);return reply||null;
+    }catch(error){if(error instanceof GroupSleepRoutingChanged)return this.qqTurn(input,signal);throw error;}
   }
 }
 
