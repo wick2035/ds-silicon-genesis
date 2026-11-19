@@ -66,8 +66,11 @@
   proto.pollTokenSoon=function(){for(const delay of [200,600,1200])setTimeout(()=>{if(!this.ac.signal.aborted)void this.pollBody();},delay);};
   proto.onPointerUp=function(e){
     this.stopTokenSpaceWatch();
-    if(this.tokenGrab){this.tokenGrab=false;this.stopThrow();this.dragTrail=[];this.dragState.sling=false;this.tokenJustDragged=true;clearTimeout(this.tokenClickTimer);this.tokenClickTimer=setTimeout(()=>this.tokenJustDragged=false,400);this.tokenScene.release();this.pollTokenSoon();}
-    return old.onPointerUp.call(this,e);
+    if(!this.tokenGrab)return old.onPointerUp.call(this,e);
+    this.tokenGrab=false;this.stopThrow();this.dragTrail=[];this.dragState.sling=false;this.tokenJustDragged=true;
+    clearTimeout(this.tokenClickTimer);this.tokenClickTimer=setTimeout(()=>this.tokenJustDragged=false,400);
+    const result=old.onPointerUp.call(this,e);
+    this.tokenScene.release();this.pollTokenSoon();return result;
   };
   proto.onClick=function(e){if(this.tokenJustDragged)return;return old.onClick.call(this,e);};
   proto.playIdle=function(...args){if(this.tokenScene?.dragging)return;return old.playIdle.apply(this,args);};
@@ -110,8 +113,8 @@
     this.bodyExecuting=true;this.bodyCommandId=c.id;this.stopMove();this.stopThrow();
     let timer,frame,played=false,front,ended;
     try{
-      if(c.locomotion==='crawl'||this.bodyProtected){await this.crawlForToken(c,post);return;}
-      const asset=actions[c.steps[c.index].action][0];
+      const asset=actions?.[c.steps[c.index].action]?.[0];
+      if(!asset||c.locomotion==='crawl'||this.bodyProtected||this.humanity?.body?.phase==='recovering'){await this.crawlForToken(c,post);return;}
       await new Promise((resolve,reject)=>{
         this.cancelBody=()=>{this.stopMove();reject(Error('爸爸抓住了身体或改变了动作'));};
         timer=setTimeout(()=>reject(Error('拾取动作播放超时，可重试')),22000);
@@ -135,8 +138,13 @@
   // A stable desktop canvas: only the character moves inside it. The floor layer
   // never inherits a moving OS window origin. Transparent regions still pass through.
   proto.fitWindow=function(){
+    if(CONFIG.fixedDesktopCanvas){
+      this.tokenOrigin={x:0,y:0};
+      this.applyWinOffset(this.pos.x,this.pos.y);
+      return {x:0,y:0,width:VIEW.w,height:VIEW.h,offsetX:this.pos.x,offsetY:this.pos.y};
+    }
     const fit=old.fitWindow.call(this),coins=this.tokenScene?.tokens?.coins.filter(c=>c.surface==='desktop')||[];
-    if(!CONFIG.fixedDesktopCanvas&&!coins.length){this.tokenOrigin={x:fit.x,y:fit.y};return fit;}
+    if(!coins.length){this.tokenOrigin={x:fit.x,y:fit.y};return fit;}
     const next={x:0,y:0,width:VIEW.w,height:VIEW.h,offsetX:fit.x+fit.offsetX,offsetY:fit.y+fit.offsetY};this.tokenOrigin={x:0,y:0};this.applyWinOffset(next.offsetX,next.offsetY);return next;
   };
   proto.reportWindow=function(fit){old.reportWindow.call(this,fit);this.tokenScene?.paint();if(this.inputRegionElements)this.syncInputRegions();};

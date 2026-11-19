@@ -236,7 +236,7 @@ const petWindows = createWindows({
   helperDir: __dirname,
   isBridge: BRIDGE,
   openTarget: OPEN_TARGET,
-  platform: TRAY_PLATFORM,
+  platform: process.platform,
   shouldReassertTopmost,
   topmostLevel,
   taskbarWatchdogEnabled: taskbarWatchdogEnabledFromEnv(process.env.DSH_PET_TASKBAR_WATCHDOG),

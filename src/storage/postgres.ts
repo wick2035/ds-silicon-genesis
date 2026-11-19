@@ -27,6 +27,14 @@ export class PostgresKernelStore implements KernelStore {
 
   // These read-only projections are safe on a separate connection and avoid
   // transferring the archive on every scene refresh and animation receipt.
+  async loadTokenScene(petId:string):Promise<Pick<CanonicalEnvelope,'version'|'legacy'>|null> {
+    const {rows}=await this.reads.query(`
+      SELECT version::text, payload#>'{legacy,tokens}' AS tokens, payload#>'{legacy,wallet,balance}' AS balance
+      FROM silicon_genesis.life_state WHERE pet_id=$1`,[petId]);
+    const row=rows[0];
+    return row?{version:Number(row.version),legacy:{tokens:row.tokens,wallet:{balance:row.balance}}}:null;
+  }
+
   async loadWorksiteCommand(petId:string):Promise<Record<string,any>|null> {
     const {rows}=await this.reads.query(
       "SELECT payload#>'{legacy,world,command}' AS command FROM silicon_genesis.life_state WHERE pet_id=$1",[petId]);

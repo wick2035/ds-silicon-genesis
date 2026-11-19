@@ -1,10 +1,13 @@
 // Shared rendering and gesture recognition for the home stage and native desktop.
 function tokenShakeSample(s, x, y, now) {
-  if (!s) return { x, y, t: now, dx: 0, dy: 0, travel: 0, drop: false };
-  const dx=x-s.x, dy=y-s.y, distance=Math.hypot(dx,dy), speed=distance*1000/Math.max(8,now-s.t);
-  const reverse=s.dx*dx+s.dy*dy < -Math.hypot(s.dx,s.dy)*distance*.35;
-  const drop=reverse && s.travel>24 && speed>150;
-  return {x,y,t:now,dx:distance>3?dx:s.dx,dy:distance>3?dy:s.dy,travel:drop?0:s.travel+distance,drop};
+  if (!s) return {startX:x,startY:y,peakX:x,peakY:y,peakAt:now,drop:false};
+  const dx=s.peakX-s.startX,dy=s.peakY-s.startY,length=Math.hypot(dx,dy);
+  const backtrack=length ? ((s.peakX-x)*dx+(s.peakY-y)*dy)/length : 0;
+  if(length>=24 && backtrack>=7)
+    return {startX:s.peakX,startY:s.peakY,peakX:x,peakY:y,peakAt:now,drop:now-s.peakAt<450};
+  if(Math.hypot(x-s.startX,y-s.startY)>=length)
+    return {...s,peakX:x,peakY:y,peakAt:now,drop:false};
+  return {...s,drop:false};
 }
 // Desktop coordinates, independent of the pet's position and transform.
 function tokenFloorLayout(coins, areas, view) {
@@ -26,7 +29,7 @@ function createTokenScene(options) {
   const host=options.host, nodes=new Map(), abort=new AbortController(),native=options.surface==='desktop';
   let overlayTimer,noteTimer,noticeUntil=0,lastAnnouncement='';
   let stopped=false, timer, heartbeat, sample, lastDrop=-Infinity, queue=[], processing=false, mutations=0, tokens=null, dragging=false, space=false,readEpoch=0,lastError='';
-  let nativeSpace;
+  let nativeSpace,fallFrame,droppedAtGrab;
   const layer=document.createElement('div');layer.className='pet-token-layer';layer.setAttribute('aria-label','地上的饭钱');host.append(layer);
   const status=document.createElement('div');status.className='pet-token-status';status.hidden=native;
   const balance=document.createElement('span'), hint=document.createElement('span'), retry=document.createElement('button');
@@ -68,19 +71,29 @@ function createTokenScene(options) {
     if(native&&text){flash();noteTimer=setTimeout(()=>{note.textContent='';paintOverlay();},4000);}paintOverlay();
   };
   function paint() {
+    const now=performance.now();
+    let falling=false;
     for(const entry of nodes.values()) {
       const p=options.point(entry.coin.x,entry.coin.y);entry.el.style.left=p.x+'px';entry.el.style.top=p.y+'px';
+      if(entry.fallStart!==undefined){
+        const t=Math.min(1,(now-entry.fallStart)/620);
+        const from=options.point(entry.coin.fromX,entry.coin.fromY);
+        entry.el.style.transform=t<1?`translate(${(from.x-p.x)*(1-t)}px,${(from.y-p.y)*(1-t*t)}px)`:'';
+        if(t<1)falling=true;else delete entry.fallStart;
+      }
     }
+    if(falling && fallFrame===undefined)fallFrame=requestAnimationFrame(()=>{fallFrame=undefined;paint();options.onOverlay?.();});
     paintOverlay();
   }
   function sync(data) {
     if(stopped||data.version<tokens?.version)return;
-    const previousFloor=tokens?.coins.filter(c=>c.surface===options.surface).length||0;tokens=data;options.onState?.(data);
+    const previous=tokens;
+    const previousFloor=previous?.coins.filter(c=>c.surface===options.surface).length||0;tokens=data;options.onState?.(data);
     balance.textContent='饭钱 '+(data.balance||0).toLocaleString('zh-CN')+' token';
-    hint.textContent=dragging&&data.coins.length?'钱掉出来了，松手让她去捡':data.thinking?'正在想办法捡回来…':'空格 + 拖动晃出饭钱 · 每片 100';
+    hint.textContent=dragging&&data.dropped>droppedAtGrab?'钱掉出来了，松手让她去捡':data.thinking?'正在想办法捡回来…':'空格 + 拖动晃出饭钱 · 每片 100';
     retry.hidden=!data.coins.some(c=>c.surface===options.surface)||data.thinking||dragging;
     if(data.error&&data.error!==lastError){announce(data.error);lastError=data.error;}else if(!data.error&&lastError){announce('');lastError='';}
-    const floor=data.coins.filter(c=>c.surface===options.surface);
+    const floor=data.coins.filter(c=>c.surface===options.surface).map(c=>({...c}));
     if(previousFloor!==floor.length)flash();
     const view=options.viewport?.()||{w:innerWidth,h:innerHeight};
     const layout=tokenFloorLayout(floor,options.workAreas?.()||[{x:0,y:0,width:view.w,height:view.h}],view);
@@ -99,10 +112,8 @@ function createTokenScene(options) {
       };
       // Take the coin on press; a pet/window move between down and up cannot eat the click.
       el.addEventListener('pointerdown',collect);el.addEventListener('click',collect);
-      if(Date.now()-coin.ts<1800&&!matchMedia('(prefers-reduced-motion: reduce)').matches){
-        // Keep the visible coin and its native hit region together during the entrance.
-        face.animate([{transform:'scale(.65) rotate(-24deg)',opacity:.5},{transform:'scale(1.12) rotate(8deg)',offset:.65},{transform:'scale(1) rotate(0deg)',opacity:1}],{duration:320,easing:'ease-out'});
-      }
+      if((previous||Date.now()-coin.ts<1800)&&Number.isFinite(coin.fromX)&&Number.isFinite(coin.fromY)&&!matchMedia('(prefers-reduced-motion: reduce)').matches)
+        nodes.get(coin.id).fallStart=performance.now();
     }
     paint();options.onLayout?.();options.onOverlay?.();
   }
@@ -126,7 +137,7 @@ function createTokenScene(options) {
   }
   const safePost=(action,body)=>post(action,body).catch(e=>{if(!stopped)announce(e.message);});
   scene.begin=(x,y)=>{
-    if(dragging)return;dragging=true;sample=tokenShakeSample(null,x,y,performance.now());announce('');flash();
+    if(dragging)return;dragging=true;droppedAtGrab=tokens?.dropped??0;sample=tokenShakeSample(null,x,y,performance.now());announce('');flash();
     void safePost('hold');heartbeat=setInterval(()=>void safePost('hold'),2000);options.onHold?.(true);
   };
   scene.sample=(x,y)=>{
@@ -142,13 +153,13 @@ function createTokenScene(options) {
   const typing=e=>e.target?.closest?.('input,textarea,[contenteditable=true]');
   window.addEventListener('keydown',e=>{if(e.code==='Space'&&!typing(e)){updateSpace(true);if(dragging||options.isHovered?.())e.preventDefault();}},{signal:abort.signal});
   window.addEventListener('keyup',e=>{if(e.code==='Space')updateSpace(false);},{signal:abort.signal});
-  window.addEventListener('blur',()=>{updateSpace(false);scene.setNativeSpace(undefined);scene.release();},{signal:abort.signal});
+  window.addEventListener('blur',()=>{updateSpace(false);if(!native){scene.setNativeSpace(undefined);scene.release();}},{signal:abort.signal});
   window.addEventListener('resize',paint,{signal:abort.signal});
   // A committed drop can be read even while its IPC reply is delayed.
   async function poll(){try{if(native||!mutations)await request();}catch(e){if(!stopped)announce(e.message);}finally{if(!stopped)timer=setTimeout(poll,900);}}
   void poll();
   status.addEventListener('focusout',()=>queueMicrotask(()=>{flash();}));
-  scene.dispose=()=>{if(stopped)return;if(dragging)void fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'release',surface:options.surface}),keepalive:true}).catch(()=>{});stopped=true;abort.abort();clearTimeout(timer);clearTimeout(overlayTimer);clearTimeout(noteTimer);clearInterval(heartbeat);layer.remove();status.remove();note.remove();nodes.clear();};
+  scene.dispose=()=>{if(stopped)return;if(dragging)void fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'release',surface:options.surface}),keepalive:true}).catch(()=>{});stopped=true;abort.abort();cancelAnimationFrame(fallFrame);clearTimeout(timer);clearTimeout(overlayTimer);clearTimeout(noteTimer);clearInterval(heartbeat);layer.remove();status.remove();note.remove();nodes.clear();};
   return scene;
 }
 const PET_TOKEN_CSS=`

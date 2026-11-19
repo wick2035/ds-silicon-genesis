@@ -160,6 +160,12 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
   }
 
   validateReceipt(draft:CanonicalEnvelope,intent:OutboxIntent,receipt:ExecutionReceipt):ExecutionReceipt {
+    if(intent.type==='token.pickup'&&receipt.status==='completed'){
+      const {coinId}=intent.payload.parameters as {coinId:string};
+      const coin=(draft.legacy as Record<string,any>).tokens?.coins?.find((c:any)=>c.id===coinId);
+      if(coin?.status==='collected'||coin?.status==='recovered')
+        return {status:'cancelled',evidence:{...receipt.evidence,reason:'这片饭钱已被收走'}};
+    }
     if(intent.type==='farm.tend')return checkFarmReceipt(draft,intent,receipt,this.clock().valueOf());
     if(intent.type==='labor.step'&&receipt.status==='completed'&&receipt.evidence.actionFraction!==undefined){
       const pet=draft.legacy as Record<string,any>,command=pet.world?.command;
