@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import {speechIdentity,speechSources} from '../kernel/speech-provenance.js';
 import { rankGoals, validateProposal, workspace } from '../kernel/index.js';
 import {isKnowledgeGoal} from '../kernel/goal-lifecycle.js';
+import {momentEventType, momentSources, type MomentDraft} from '../kernel/moments.js';
 import type { ActionProposal, CognitiveWorkspace, LifeState, Memory } from '../kernel/types.js';
 
 const Draft = z.object({
@@ -16,14 +17,15 @@ const GoalCandidate=Candidate.extend({completion:z.object({type:z.literal('read-
 const GoalUpdate=z.object({goalId:z.string().min(1).max(200),kind:z.enum(['progress','reprioritize','complete','understood']),evidenceId:z.string().min(1).max(200),priority:z.number().finite().min(0).max(100).optional(),understanding:z.string().trim().min(20).max(1000).optional()}).strict().refine(x=>x.kind!=='understood'||!!x.understanding);
 const Step = z.object({ actionType: z.string().min(1).max(100), parameters: z.record(z.string(),z.json()), goalId:z.string().min(1).max(200).optional(), description: z.string().min(1).max(1000), requiredCapabilities: z.array(z.string().min(1).max(100)).min(1).max(20), sourceIds: z.array(z.string().min(1).max(200)).min(1).max(50) }).strict();
 const Thought=z.object({salience:z.number().finite().min(0).max(1).default(.5),text:z.string().min(1).max(500),feeling:z.string().max(200),desire:z.string().max(300),sourceIds:z.array(z.string().min(1).max(200)).min(1).max(20)}).strict();
-const Output = z.object({ thought:Thought.nullable().default(null), action: Draft.nullable(), goals: z.array(GoalCandidate).max(5), goalUpdates:z.array(GoalUpdate).max(5).default([]), plan: z.array(Step).max(10), interests: z.array(Candidate).max(5), selfModel: z.array(Candidate).max(5) }).strict();
+const Moment = z.object({text:z.string().trim().min(1).max(160), sourceId:z.string().min(1).max(200)}).strict();
+const Output = z.object({ thought:Thought.nullable().default(null), moment:z.unknown().optional(), action: Draft.nullable(), goals: z.array(GoalCandidate).max(5), goalUpdates:z.array(GoalUpdate).max(5).default([]), plan: z.array(Step).max(10), interests: z.array(Candidate).max(5), selfModel: z.array(Candidate).max(5) }).strict();
 type ModelOutput = z.infer<typeof Output>;
 export interface CognitiveContext { observation: string[]; recall: string[]; appraisal: string[]; motivations: string[]; rankedGoals: Array<{goalId: string; score: number}> }
 /** The model receives an isolated workspace and proposes data; it cannot execute tools. */
 export interface CognitiveModel { generate(snapshot: CognitiveWorkspace, signal: AbortSignal, context: CognitiveContext): Promise<unknown> }
 /** Atomically and durably reserve before each call; failed calls consume the reservation. */
 export interface CognitiveBudget { reserve(petId: string): Promise<object|null>; withReserved<T>(petId:string, ticket:object, fn:()=>Promise<T>):Promise<T> }
-export type CognitiveResult = { status: 'proposed'; sourceVersion: number; proposal: ActionProposal | null; candidates: Omit<ModelOutput, 'action'> } | { status: 'degraded'; reason: string };
+export type CognitiveResult = { status: 'proposed'; sourceVersion: number; proposal: ActionProposal | null; candidates: Omit<ModelOutput, 'action' | 'moment'> & {moment?:MomentDraft} } | { status: 'degraded'; reason: string };
 
 const ContextGraph = Annotation.Root({
   state: Annotation<LifeState>(), snapshot: Annotation<CognitiveWorkspace>(),
@@ -69,11 +71,13 @@ export class Cognition {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const snapshot = workspace(state);
-      const visible=state.events.filter(e=>!Object.hasOwn(state.invalidSources,e.eventId));
+      const visible=state.events.filter(e=>e.type!==momentEventType&&!Object.hasOwn(state.invalidSources,e.eventId));
+      const momentCandidates=momentSources(state,Date.now());
       // Financial bookkeeping and scheduler events must not crowd the actual
       // conversation out of the next autonomous decision.
       const selected=new Set([...visible.filter(e=>['conversation.user','conversation.assistant'].includes(e.type)).slice(-10),...visible.filter(e=>!['conversation.user','conversation.assistant'].includes(e.type)).slice(-8)]);
-      snapshot.recentEvents = visible.filter(e=>selected.has(e)).map(e=>({eventId:e.eventId,type:e.type,occurredAt:e.occurredAt,...speechIdentity(e),speakers:speechSources([e.eventId],state),evidenceLevel:e.evidenceLevel,payload:JSON.stringify(e.payload)?.slice(0,700) ?? ''}));
+      for(const event of visible.filter(e=>momentCandidates.has(e.eventId)).slice(-6))selected.add(event);
+      snapshot.recentEvents = visible.filter(e=>selected.has(e)).map(e=>({eventId:e.eventId,type:e.type,occurredAt:e.occurredAt,...speechIdentity(e),speakers:speechSources([e.eventId],state),evidenceLevel:e.evidenceLevel,payload:JSON.stringify(e.payload)?.slice(0,700) ?? '',...(momentCandidates.has(e.eventId)?{momentSource:true}:{})}));
       snapshot.relevantMemories = await this.retrieval.forCognition(state);
       snapshot.environment = await this.retrieval.world(state);
       const evaluated = await contextGraph.invoke({ state, snapshot, observation: [], recall: [], appraisal: [], motivations: [], rankedGoals: [] });
@@ -84,7 +88,8 @@ export class Cognition {
       if (signal.aborted) return { status: 'degraded', reason: 'stopped' };
       const result = await planGraph.invoke({ raw, parsed: null, error: null });
       if (!result.parsed) return { status: 'degraded', reason: result.error ?? 'invalid_model_output' };
-      const { action, ...candidates } = result.parsed;
+      const { action, moment, ...candidates } = result.parsed;
+      const post=Moment.safeParse(moment);
       const sourceValid = (id: string) => state.events.some(e => e.eventId === id && !Object.prototype.hasOwnProperty.call(state.invalidSources, id));
       if(candidates.goalUpdates.some(x=>!sourceValid(x.evidenceId)))return {status:'degraded',reason:'invalid_goal_evidence'};
       // Understanding must cite a memory actually provided to this model call.
@@ -94,7 +99,8 @@ export class Cognition {
       if (candidates.plan.some(step => !step.requiredCapabilities.includes(step.actionType) || !step.requiredCapabilities.every(name => state.constraints.capabilities.some(cap => cap.name === name && cap.enabled && (!cap.requiresPermission || state.constraints.permissions.includes(cap.requiresPermission)))))) return { status: 'degraded', reason: 'unavailable_plan_capability' };
       const proposal: ActionProposal | null = action ? { ...action, id: randomUUID(), petId: state.petId, expectedStateVersion: state.version } : null;
       if (proposal) { try { validateProposal(state, proposal); } catch { return { status: 'degraded', reason: 'proposal_rejected' }; } }
-      return { status: 'proposed', sourceVersion: state.version, proposal, candidates };
+      const publish=post.success&&snapshot.recentEvents.some(e=>e.momentSource&&e.eventId===post.data.sourceId);
+      return { status: 'proposed', sourceVersion: state.version, proposal, candidates:{...candidates,...(publish?{moment:post.data}:{})} };
     } catch { return { status: 'degraded', reason: signal.aborted ? 'stopped' : controller.signal.aborted ? 'model_timeout' : 'model_unavailable' }; }
     finally { if (timer) clearTimeout(timer); signal.removeEventListener('abort', abort); }
   }

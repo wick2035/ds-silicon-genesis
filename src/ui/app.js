@@ -4,6 +4,7 @@ import {renderModel,installModel} from './model.js';
 import {memoryGraphMarkup,setupMemoryGraph} from './memory-graph.js';
 const pages={chat:['聊天','和大肥鱼说话','在这里，继续你们的对话。'],current:['当前','此刻的大肥鱼','一起看看她现在的状态。'],goals:['目标','正在奔赴的事','每个愿望，都有自己的节奏。'],timeline:['轨迹','一路走来的日子','从已记录的经历中，回看她的生活。'],relationships:['关系','与世界的联系','每一段关系都由相处慢慢建立。'],growth:['成长','一点一滴的变化','经历留下的痕迹，成为未来的方向。'],finance:['饭钱','饭钱与工钱','管理她的模拟饭钱、消费价格和工作约定。'],settings:['设置','照顾好她的世界','管理自主行为与群聊权限。']};
 const view=document.querySelector('#view'),notice=document.querySelector('#notice');let page='current',requestId=0,currentVersion=null,paused=null,pendingCommand=null;
+let growthSection='moments',chatMoment='';
 pages.companion=['照料','照料与成长','照顾她的身体，陪伴她探索与成长。'];
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const head=p=>`<div class="page-head"><div><h1>${esc(p[1])}</h1><p>${esc(p[2])}</p></div></div>`;
@@ -29,6 +30,41 @@ function spiritCard(s){if(!s)return card('精神力',empty('精神状态尚未�
 function current(d){d=d||{};const waits=[];if(d.runtime?.paused)waits.push('自主活动已暂停，可在右上角恢复');if(d.body?.sleeping)waits.push('她正在睡觉，醒来后继续');if(d.body?.restrained)waits.push('身体正被抓住或桌宠连接未确认，松开并等待连接恢复');if(d.body?.injured)waits.push('身体需要恢复，部分活动会等待');if(d.runtime?.remainingBudget===0)waits.push('今日自主模型额度已用完');if(Array.isArray(d.runtime?.permissions)&&!d.runtime.permissions.includes('network'))waits.push('联网学习尚未授权，可在设置中查看');if((d.actions||[]).some(a=>a.status==='UNKNOWN'&&Date.now()-Date.parse(a.updatedAt)<300000))waits.push('最近有行动结果待确认，其他行动可继续');const identity=d.identity||{};const name=identity.name||'大肥鱼';return `<div class="grid"><div id="current-live" style="display:contents"><section class="card hero full"><div class="hero-copy"><p class="hero-intro">${esc(identity.role||'大肥鱼的生命空间')}</p><h2>你好，${esc(name)}。</h2><p>每一次相遇，每一段经历，<br>都在这里延续。</p><span class="runtime-label">${d.runtime?.paused===true?'自主行为已暂停':d.runtime?.paused===false?'自主行为运行中':'运行状态暂不可用'}</span></div><img src="/assets/main-character.png" alt="大肥鱼" onerror="this.hidden=true"></section>${waits.length?card('正在等待',`<ul>${waits.map(w=>`<li>${esc(w)}</li>`).join('')}</ul>`,'full'):''}${spiritCard(d.spirit)}${bodyCard(d.body)}${emotionCard(d.emotions)}${card('正在惦记',goalsList(d.activeGoals,false,d.sources),'two-thirds','当前进行中的目标')}${card('此刻的行动',actionList(d.actions,d.sources),'third')}</div>${card('分享图片','<form id="image-form"><label for="image-file">选择图片</label> <input id="image-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" required><div class="actions"><button type="submit" class="secondary">分享图片</button></div><p id="image-result" role="status"></p></form>','full')}${availableLinks(d.links)?card('继续相处',availableLinks(d.links),'full'):''}</div>`}
 // Calendar days use the same timezone as automatic diaries, independent of the device timezone.
 function recordDay(value){const stamp=new Date(value);return value&&Number.isFinite(stamp.getTime())?new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).format(stamp):null;}
+const momentClock=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Hong_Kong',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
+const momentDayLabel=new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Hong_Kong',dateStyle:'long'});
+function momentsFeed(moments){
+  const today=recordDay(new Date().toISOString()),groups=new Map([[today,[]]]);
+  for(const post of Array.isArray(moments)?moments:[]){
+    const day=recordDay(post.at);
+    if(!day)continue;
+    if(!groups.has(day))groups.set(day,[]);
+    groups.get(day).push(post);
+  }
+  return `<div class="moments-feed">${[...groups].map(([day,posts],index)=>`
+    <section class="moments-day" aria-labelledby="moments-day-${index}">
+      <h2 id="moments-day-${index}">${day===today?'今天':esc(momentDayLabel.format(new Date(day+'T04:00:00Z')))}</h2>
+      ${posts.length?posts.map(post=>`
+        <article class="moment-post">
+          <div class="moment-avatar"><img src="/assets/main-character.png" alt="" loading="lazy"></div>
+          <div class="moment-content">
+            <div class="moment-byline"><strong>大肥鱼</strong><time datetime="${esc(post.at)}">${esc(momentClock.format(new Date(post.at)))}</time></div>
+            <p class="moment-text">${esc(post.text)}</p>
+            <div class="moment-actions">
+              <button type="button" class="moment-chat" data-moment-id="${esc(post.id)}">聊聊这条</button>
+              <details class="moment-source"><summary>发生了什么</summary><p>${esc(post.context)}</p></details>
+            </div>
+          </div>
+        </article>`).join(''):'<p class="moments-empty">今天她还没发说说。</p>'}
+    </section>`).join('')}</div>`;
+}
+function renderGrowth(data){
+  const tabs=[['moments','说说'],['archive','成长档案']];
+  const showMoments=growthSection==='moments';
+  return `<div class="growth-heading${showMoments?' is-moments':''}">
+    <h1>${showMoments?'大肥鱼的说说':'成长档案'}</h1>
+    <div class="growth-switch" role="group" aria-label="成长内容">${tabs.map(([id,label])=>`<button type="button" data-growth-section="${id}" aria-pressed="${growthSection===id}">${label}</button>`).join('')}</div>
+  </div>${showMoments?momentsFeed(data?.moments):memoryGraphMarkup()+growth(data)}`;
+}
 function dailyRows(items,render,timestamp,label){
   if(!Array.isArray(items))return empty('数据暂不可用。');
   const today=recordDay(new Date().toISOString()),groups=new Map([[today,[]]]);
@@ -60,14 +96,33 @@ function chatPanel(data){
   const messages=ownerChatMessages(data);chatSyncedSignature=JSON.stringify(messages);
   const items=messages;
   const pendingVisible=pendingChat&&!messages.some(m=>m.role==='user'&&m.text===pendingChat.text&&Date.parse(m.at)>=pendingChat.startedAt-1000);
-  return `<section class="chat-panel" aria-label="聊天面板"><div class="chat-heading"><div class="chat-avatar"><img src="/assets/main-character.png" alt=""></div><div><h2>大肥鱼</h2><p>你们的对话</p></div></div><div class="chat-messages" id="chat-messages" role="log" aria-label="聊天记录">${items.length||pendingVisible?chatMessageMarkup(items):'<div class="chat-empty"><strong>从一句话开始</strong><p>想说的、想分享的，都可以留在这里。</p></div>'}${pendingVisible?`<article class="chat-message is-user" data-pending-user><div class="chat-meta">我 · 发送中</div><div class="chat-bubble">${esc(pendingChat.text)}</div></article>`:''}${chatSending?'<p class="chat-pending" role="status">正在等待大肥鱼回复…</p>':''}</div><form id="chat-form" class="chat-composer"><label for="chat-text">想对她说的话</label><textarea id="chat-text" maxlength="6000" placeholder="写下想说的话…" required>${esc(chatDraft)}</textarea><div class="chat-tools"><div><label for="chat-image" class="chat-attach">附上图片</label><input id="chat-image" type="file" accept="image/png,image/jpeg,image/webp,image/gif"><span id="chat-file-name">${chatFile?esc(chatFile.name):'支持 PNG、JPEG、WebP、GIF，最大 5 MB'}</span></div><button class="primary" type="submit" ${chatSending?'disabled':''}>${chatSending?'等待回复…':'发送消息'}</button></div><p id="chat-result" role="status">${esc(chatFeedback)}</p></form></section>`;
+  return `<section class="chat-panel" aria-label="聊天面板"><div class="chat-heading"><div class="chat-avatar"><img src="/assets/main-character.png" alt=""></div><div><h2>大肥鱼</h2><p>你们的对话</p></div></div><div class="chat-messages" id="chat-messages" role="log" aria-label="聊天记录">${items.length||pendingVisible?chatMessageMarkup(items):'<div class="chat-empty"><strong>从一句话开始</strong><p>想说的、想分享的，都可以留在这里。</p></div>'}${pendingVisible?`<article class="chat-message is-user" data-pending-user><div class="chat-meta">我 · 发送中</div><div class="chat-bubble">${esc(pendingChat.text)}</div></article>`:''}${chatSending?'<p class="chat-pending" role="status">正在等待大肥鱼回复…</p>':''}</div><form id="chat-form" class="chat-composer"><div id="chat-quote">${chatQuoteMarkup()}</div><label for="chat-text">想对她说的话</label><textarea id="chat-text" maxlength="${6000-momentReplyPrefix(chatMoment).length}" placeholder="写下想说的话…" required>${esc(chatDraft)}</textarea><div class="chat-tools"><div><label for="chat-image" class="chat-attach">附上图片</label><input id="chat-image" type="file" accept="image/png,image/jpeg,image/webp,image/gif"><span id="chat-file-name">${chatFile?esc(chatFile.name):'支持 PNG、JPEG、WebP、GIF，最大 5 MB'}</span></div><button class="primary" type="submit" ${chatSending?'disabled':''}>${chatSending?'等待回复…':'发送消息'}</button></div><p id="chat-result" role="status">${esc(chatFeedback)}</p></form></section>`;
+}
+const momentReplyPrefix=text=>text?`关于你这条说说「${text}」，\n`:'';
+function chatQuoteMarkup(){
+  if(!chatMoment)return '';
+  return `<div class="chat-moment">
+    <div><strong>聊聊这条说说</strong><p>${esc(chatMoment)}</p></div>
+    <button class="secondary" type="button" data-remove-chat-moment>移除引用</button>
+  </div>`;
+}
+function updateChatQuote(form){
+  form.querySelector('#chat-quote').innerHTML=chatQuoteMarkup();
+  form.querySelector('#chat-text').maxLength=6000-momentReplyPrefix(chatMoment).length;
 }
 function setupChat(){const input=view.querySelector('#chat-text'),file=view.querySelector('#chat-image'),messages=view.querySelector('#chat-messages');if(messages)messages.scrollTop=messages.scrollHeight;input?.addEventListener('input',()=>{chatDraft=input.value});input?.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing&&event.keyCode!==229){event.preventDefault();input.form.requestSubmit()}});file?.addEventListener('change',()=>{chatFile=file.files[0]||null;view.querySelector('#chat-file-name').textContent=chatFile?.name||'支持 PNG、JPEG、WebP、GIF，最大 5 MB'});}
 function appendChatMessage(container,role,text,meta,meme){const article=document.createElement('article');article.className='chat-message '+(role==='user'?'is-user':'is-assistant');const label=document.createElement('div');label.className='chat-meta';label.textContent=meta;const bubble=document.createElement('div');bubble.className='chat-bubble';bubble.textContent=text;if(role==='assistant'&&typeof meme==='string'&&meme.length<=120&&!/[\/\\:\x00-\x1f]/u.test(meme)){const image=document.createElement('img');image.className='chat-meme';image.src='/dsh-pet-7340/pic/memes/'+encodeURIComponent(meme)+'.png';image.alt=meme;image.addEventListener('error',()=>{image.hidden=true;});bubble.append(image);}article.append(label,bubble);container.append(article);return article;}
 async function sendChat(form){
-  const input=form.querySelector('#chat-text'),text=input.value.trim();if(!text||chatSending)return;
+  const input=form.querySelector('#chat-text'),message=input.value.trim(),quoted=chatMoment;
+  if(!message||chatSending)return;
+  const text=momentReplyPrefix(quoted)+message;
+  if(text.length>6000){
+    chatFeedback=`这条消息最多可写 ${6000-momentReplyPrefix(quoted).length} 字，请缩短后再发送。`;
+    form.querySelector('#chat-result').textContent=chatFeedback;
+    return;
+  }
   if(chatFile&&chatFile.size>5000000){chatFeedback='图片不能超过 5 MB，请重新选择。';form.querySelector('#chat-result').textContent=chatFeedback;return}
-  const file=chatFile;pendingChat={text,startedAt:Date.now()};chatDraft='';chatFile=null;chatSending=true;chatFeedback='';input.value='';form.querySelector('#chat-image').value='';form.querySelector('#chat-file-name').textContent='支持 PNG、JPEG、WebP、GIF，最大 5 MB';form.querySelector('#chat-result').textContent='';const button=form.querySelector('button[type="submit"]');button.disabled=true;button.textContent='等待回复…';
+  const file=chatFile;pendingChat={text,startedAt:Date.now()};chatDraft='';chatMoment='';chatFile=null;chatSending=true;chatFeedback='';input.value='';updateChatQuote(form);form.querySelector('#chat-image').value='';form.querySelector('#chat-file-name').textContent='支持 PNG、JPEG、WebP、GIF，最大 5 MB';form.querySelector('#chat-result').textContent='';const button=form.querySelector('button[type="submit"]');button.disabled=true;button.textContent='等待回复…';
   const messages=view.querySelector('#chat-messages');messages.querySelector('.chat-empty')?.remove();appendChatMessage(messages,'user',text,'我 · 发送中').dataset.pendingUser='';const pending=document.createElement('p');pending.className='chat-pending';pending.setAttribute('role','status');pending.textContent='正在等待大肥鱼回复…';messages.append(pending);messages.scrollTop=messages.scrollHeight;input.focus();
   try{let usage,meme;const attachment=file?await window.lifeApi.uploadImage(file):null;const reply=await window.lifeApi.chat(text,crypto.randomUUID(),attachment?[attachment]:[],partial=>{
     if(page!=='chat')return;if(!partial){view.querySelector('[data-streaming]')?.remove();return;}const current=view.querySelector('#chat-messages');if(!current)return;
@@ -75,16 +130,16 @@ async function sendChat(form){
     if(!bubble){bubble=appendChatMessage(current,'assistant',partial,'大肥鱼');bubble.dataset.streaming='';}else bubble.querySelector('.chat-bubble').textContent=partial;
     current.scrollTop=current.scrollHeight;
   },value=>{usage=value;},value=>{meme=value;});pendingChat=null;chatSending=false;if(page==='chat'){const current=view.querySelector('#chat-messages');current?.querySelector('[data-pending-user] .chat-meta')?.replaceChildren('我');current?.querySelector('.chat-pending')?.remove();if(current){current.querySelector('[data-streaming]')?.remove();appendChatMessage(current,'assistant',reply,usage?`大肥鱼 · 输入 ${usage.inputTokens} / 输出 ${usage.outputTokens} tokens`:'大肥鱼',meme);current.scrollTop=current.scrollHeight}const b=view.querySelector('#chat-form button[type="submit"]');if(b){b.disabled=false;b.textContent='发送消息'}}}
-  catch(error){pendingChat=null;chatSending=false;chatFeedback=error.message||'发送失败，请检查连接后重试。';if(!chatDraft){chatDraft=text;if(page==='chat'&&view.querySelector('#chat-text'))view.querySelector('#chat-text').value=text}if(!chatFile&&file){chatFile=file;if(page==='chat'&&view.querySelector('#chat-file-name'))view.querySelector('#chat-file-name').textContent=file.name}if(page==='chat'){const current=view.querySelector('#chat-messages');current?.querySelector('[data-pending-user] .chat-meta')?.replaceChildren('我 · 未完成');current?.querySelector('.chat-pending')?.remove();current?.querySelector('[data-streaming]')?.remove();const result=view.querySelector('#chat-result'),b=view.querySelector('#chat-form button[type="submit"]');if(result)result.textContent=chatFeedback;if(b){b.disabled=false;b.textContent='发送消息'}}}
+  catch(error){pendingChat=null;chatSending=false;chatFeedback=error.message||'发送失败，请检查连接后重试。';if(!chatDraft){chatDraft=message;if(!chatMoment)chatMoment=quoted;if(page==='chat'&&view.querySelector('#chat-text')){view.querySelector('#chat-text').value=message;updateChatQuote(view.querySelector('#chat-form'))}}if(!chatFile&&file){chatFile=file;if(page==='chat'&&view.querySelector('#chat-file-name'))view.querySelector('#chat-file-name').textContent=file.name}if(page==='chat'){const current=view.querySelector('#chat-messages');const failed=current?.querySelector('[data-pending-user]');failed?.removeAttribute('data-pending-user');failed?.querySelector('.chat-meta')?.replaceChildren('我 · 未完成');current?.querySelector('.chat-pending')?.remove();current?.querySelector('[data-streaming]')?.remove();const result=view.querySelector('#chat-result'),b=view.querySelector('#chat-form button[type="submit"]');if(result)result.textContent=chatFeedback;if(b){b.disabled=false;b.textContent='发送消息'}}}
 }
-function render(data){if(page==='chat')return head(pages.chat)+chatPanel(data);if(page==='current')return head(pages[page])+current(data);if(page==='settings')return head(pages[page])+settings(data)+renderModel(data?.model);if(page==='finance')return head(pages[page])+renderFinance(data);if(page==='companion')return head(pages[page])+renderCompanion(data);if(page==='growth')return head(pages[page])+memoryGraphMarkup()+growth(data);const content=page==='goals'?goalsList(data?.items,true,data?.sources):page==='timeline'?timeline(data):relations(data);const label={goals:'全部目标',timeline:'生命轨迹',relationships:'关系记录'}[page];return head(pages[page])+`<div class="grid">${card(label,content,'full')}</div>`}
+function render(data){if(page==='chat')return head(pages.chat)+chatPanel(data);if(page==='current')return head(pages[page])+current(data);if(page==='settings')return head(pages[page])+settings(data)+renderModel(data?.model);if(page==='finance')return head(pages[page])+renderFinance(data);if(page==='companion')return head(pages[page])+renderCompanion(data);if(page==='growth')return renderGrowth(data);const content=page==='goals'?goalsList(data?.items,true,data?.sources):page==='timeline'?timeline(data):relations(data);const label={goals:'全部目标',timeline:'生命轨迹',relationships:'关系记录'}[page];return head(pages[page])+`<div class="grid">${card(label,content,'full')}</div>`}
 const pageCache=new Map();
 function showPage(data,{stale=false}={}){
   currentVersion=stale?null:(Number.isSafeInteger(data?.version)?data.version:null);
   view.innerHTML=render(data);
   view.toggleAttribute('data-stale',stale);
   if(page==='chat')setupChat();
-  if(page==='growth'&&!stale)setupMemoryGraph(view);
+  if(page==='growth'&&growthSection==='archive'&&!stale)setupMemoryGraph(view);
   if(stale)view.querySelectorAll('button,input,select,textarea').forEach(control=>{control.disabled=true});
 }
 async function load(mode){
@@ -166,6 +221,38 @@ const closeDialog=document.querySelector('#close-dialog'),closeConfirm=document.
 document.querySelector('#close-life').addEventListener('click',()=>{document.querySelector('#close-error').textContent='';closeDialog.showModal()});
 document.querySelector('#close-cancel').addEventListener('click',()=>closeDialog.close());
 closeConfirm.addEventListener('click',async()=>{closeConfirm.disabled=true;closeConfirm.textContent='正在关闭…';try{await window.lifeApi.shutdown();closeDialog.close();document.querySelector('#connection').textContent='正在关闭';document.querySelector('#connection-detail').textContent='新版实例正在退出';notice.textContent='已收到关闭请求。';notice.hidden=false;document.querySelector('#close-life').disabled=true}catch(error){document.querySelector('#close-error').textContent=error.message||'关闭请求未完成，请重试。'}finally{closeConfirm.disabled=false;closeConfirm.textContent='确认关闭'}});
-document.querySelectorAll('nav button').forEach(button=>button.addEventListener('click',()=>{page=button.dataset.page;document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b===button));document.querySelector('#crumb').textContent=pages[page][0];load('navigate')}));document.querySelector('#refresh').addEventListener('click',load);load();
+function navigate(nextPage){
+  page=nextPage;
+  document.querySelectorAll('nav button').forEach(button=>button.classList.toggle('active',button.dataset.page===page));
+  document.querySelector('#crumb').textContent=pages[page][0];
+  return load('navigate');
+}
+view.addEventListener('click',async event=>{
+  const section=event.target.closest('[data-growth-section]');
+  if(section&&section.dataset.growthSection!==growthSection){
+    growthSection=section.dataset.growthSection;
+    showPage(pageCache.get('growth'));
+    view.querySelector('[aria-pressed="true"][data-growth-section]')?.focus();
+    return;
+  }
+  const postButton=event.target.closest('[data-moment-id]');
+  if(postButton){
+    const post=pageCache.get('growth')?.moments?.find(item=>item.id===postButton.dataset.momentId);
+    if(!post)return;
+    chatMoment=post.text;
+    await navigate('chat');
+    if(page==='chat')view.querySelector('#chat-text:not(:disabled)')?.focus();
+    return;
+  }
+  if(event.target.closest('[data-remove-chat-moment]')){
+    chatMoment='';
+    const form=view.querySelector('#chat-form');
+    updateChatQuote(form);
+    form.querySelector('#chat-text').focus();
+  }
+});
+document.querySelectorAll('nav button').forEach(button=>button.addEventListener('click',()=>void navigate(button.dataset.page)));
+document.querySelector('#refresh').addEventListener('click',load);
+load();
 
 view.addEventListener('click',async event=>{const button=event.target.closest('[data-spirit]');if(!button)return;const command=button.dataset.spirit;button.disabled=true;try{const reply=await window.lifeApi.chat(command,crypto.randomUUID());await load();notice.textContent=reply;notice.hidden=false;}catch(error){notice.textContent=error.message||'暂时没能完成，请稍后再试。';notice.hidden=false;}finally{if(button.isConnected)button.disabled=false;}});

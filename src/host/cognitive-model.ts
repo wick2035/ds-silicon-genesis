@@ -6,6 +6,7 @@ import {SPEAKER_MEMORY_RULE} from '../kernel/speech-provenance.js';
 
 type ModelStream={stream(input:unknown):AsyncIterable<{type:string;text?:string}>};
 type Selection={provider:string;model:string};
+const MOMENT_INSTRUCTION='如果近期事件带有 momentSource:true，可以额外在 JSON 对象里提供 moment，格式为 {"text":"说说正文","sourceId":"那一条事件的 eventId"}。只有确实想让爸爸读到时才写。这是只显示在本机生命空间的随手短句，跟 QQ 主动发言是两回事。一两句，160 字以内，用第一人称，挑一个具体小事，写你在意什么、犹豫什么、突然想起什么，或者还没想明白什么。放松一点，允许嘴硬、矛盾和没结论。事实以提供的事件为准，感受可以来自当下，回想时写清是现在在想。省略流水、余额和系统术语；饭钱偶尔只是触发了感受。念头和聊天是供你决定分享什么的背景，请用愿意分享的说法，避免复述他人原话、私聊细节和身份信息。如果平常、重复或想留给自己，省略 moment 或写 null。没有 momentSource 时省略。';
 
 /** One structured, non-tool model call; validation and action dispatch remain
  * the responsibility of Cognition and the canonical coordinator. */
@@ -35,13 +36,15 @@ export function createCognitiveModel(llm:ModelStream, selection:()=>Selection):C
     }
     const messages=[{role:'user',content:input}];
     let text='';
-    for await(const chunk of llm.stream({provider:selected.provider,model:selected.model,system:system+'\n'+SPEAKER_MEMORY_RULE,messages,signal,maxTokens:4096,temperature:0.35,reasoningEffort:'low'})){
+    const momentRule=bounded.recentEvents?.some(event=>event.momentSource)?'\n'+MOMENT_INSTRUCTION:'';
+    for await(const chunk of llm.stream({provider:selected.provider,model:selected.model,system:system+'\n'+SPEAKER_MEMORY_RULE+momentRule,messages,signal,maxTokens:4096,temperature:0.35,reasoningEffort:'low'})){
       if(signal.aborted)throw Error('认知已取消');
       if(chunk.type==='text'&&typeof chunk.text==='string'){text+=chunk.text;if(text.length>32768)throw Error('认知回复过长');}
     }
     const parsed=JSON.parse(text.trim());
     const shown=new Set(bounded.relevantMemories.flatMap(m=>m.sourceIds));
     if(Array.isArray(parsed?.goalUpdates)&&parsed.goalUpdates.some((x:any)=>x.kind==='understood'&&!shown.has(x.evidenceId)))throw Error('理解依据未出现在实际模型上下文');
+    if(parsed?.moment&&!bounded.recentEvents?.some(event=>event.momentSource&&event.eventId===parsed.moment.sourceId))delete parsed.moment;
     return parsed;
   }};
 }
