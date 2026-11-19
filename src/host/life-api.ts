@@ -1,3 +1,4 @@
+import {setGoalPlanStatus} from '../kernel/goal-lifecycle.js';
 import { randomUUID } from 'node:crypto';
 import { advanceSpirit } from '../kernel/spirit.js';
 import type { LifeState } from '../kernel/types.js';
@@ -74,6 +75,11 @@ export function createLifeManagement(reader: Reader, gate: PetGate, uow: UnitOfW
         const goal=life.goals.find(g=>g.id===command.id);
         if(!goal || goal.status!==command.expectedStatus || !({active:['paused','abandoned'],paused:['active','abandoned'],deferred:['active','paused','abandoned']} as Record<string,string[]>)[goal.status]?.includes(command.status)) throw new Error('目标状态已变化');
         goal.status=command.status;
+        if(command.status==='active')delete goal.review;
+        for(const plan of life.cognitivePlans??[]){
+          if(plan.goalId!==goal.id||!['active','paused'].includes(plan.status))continue;
+          setGoalPlanStatus(plan,command.status);
+        }
       } else if(command.kind==='revoke') {
         life.constraints.permissions=life.constraints.permissions.filter(p=>p!==command.permission);
         // A later settings save must not silently restore an explicitly revoked
@@ -172,9 +178,16 @@ export function createLifeApi(host:LifeApiHost) {
       }
       if(endpoint==='memory-search'){if(!host.searchMemories)return response(503,{ok:false,error:'记忆检索不可用'});const query=url.searchParams.get('q')||'';if(query.length>500)return response(400,{ok:false,error:'搜索内容过长'});return response(200,{ok:true,value:await host.searchMemories(id,query)});}
       if(endpoint==='memory-graph'){if(!host.memoryGraph)return response(503,{ok:false,error:'记忆星图不可用'});const query=url.searchParams.get('q')||'';if(query.length>500)return response(400,{ok:false,error:'搜索内容过长'});return response(200,{ok:true,value:await host.memoryGraph(id,query)});}
-      const state=await host.getState(id), timeline=state.events.filter(e=>e.type!==momentEventType), goalSources=new Set(state.goals.flatMap(g=>g.sourceIds)), validEvents=timeline.filter(e=>!Object.hasOwn(state.invalidSources,e.eventId)), recentIds=new Set(validEvents.slice(-500).map(e=>e.eventId)), sources=Object.fromEntries(validEvents.filter(e=>recentIds.has(e.eventId)||goalSources.has(e.eventId)).map(e=>{const payload=e.payload&&typeof e.payload==='object'?e.payload as Record<string,unknown>:{};const action=state.actions.find(a=>a.id===payload.actionId);const text=[payload.text,payload.summary,payload.message,payload.description].find(x=>typeof x==='string'&&x.trim())||(action?.actionType==='learning.observe'&&typeof action.parameters.query==='string'?`探索资料：${action.parameters.query}`:e.type);return [e.eventId,{text,at:e.occurredAt}];})), views:Record<string,unknown>={
+      const state=await host.getState(id), timeline=state.events.filter(e=>e.type!==momentEventType), goalSources=new Set([
+        ...state.goals.flatMap(g=>g.sourceIds),
+        ...(state.cognitivePlans??[]).flatMap(p=>[...p.sourceIds,...p.steps.flatMap(step=>step.receiptEventId?[step.receiptEventId]:[])]),
+        ...(state.worldModel?.facts??[]).filter(f=>f.valid).slice(-15).flatMap(f=>f.sourceIds),
+        ...(state.selfModel?.habits??[]).filter(h=>h.valid).flatMap(h=>h.sourceIds),
+        ...(state.selfModel?.interests??[]).filter(i=>i.valid).flatMap(i=>i.sourceIds),
+        ...(state.selfModel?.autobiography??[]).filter(m=>m.valid).slice(-12).flatMap(m=>m.sourceIds)
+      ]), validEvents=timeline.filter(e=>!Object.hasOwn(state.invalidSources,e.eventId)), recentIds=new Set(validEvents.slice(-500).map(e=>e.eventId)), sources=Object.fromEntries(validEvents.filter(e=>recentIds.has(e.eventId)||goalSources.has(e.eventId)).map(e=>{const payload=e.payload&&typeof e.payload==='object'?e.payload as Record<string,unknown>:{};const action=state.actions.find(a=>a.id===payload.actionId);const text=[payload.text,payload.summary,payload.message,payload.description].find(x=>typeof x==='string'&&x.trim())||(action?.actionType==='learning.observe'&&typeof action.parameters.query==='string'?`探索资料：${action.parameters.query}`:e.type);return [e.eventId,{text,at:e.occurredAt}];})), views:Record<string,unknown>={
         snapshot:{version:state.version,sources,identity:state.identity,spirit:state.spirit,body:state.body,emotions:state.emotions,activeGoals:state.goals.filter(g=>g.status==='active'),actions:state.actions.filter(a=>!['COMPLETED','FAILED','CANCELLED'].includes(a.status)),runtime:{paused:state.constraints.paused,remainingBudget:state.constraints.remainingBudget,budgetDay:state.constraints.budgetDay,interactiveRemaining:state.constraints.interactiveRemaining,permissions:state.constraints.permissions},links:host.links},
-        goals:{version:state.version,items:state.goals,sources},timeline,relationships:state.relationships,
+        goals:{version:state.version,items:state.goals,plans:state.cognitivePlans??[],sources},timeline,relationships:state.relationships,
         growth:{version:state.version,sources,moments:endpoint==='growth'?readMoments(state):[],memories:state.memories,beliefs:state.beliefs,observations:state.observations,selfModel:state.selfModel,worldModel:state.worldModel,plans:(state.cognitivePlans||[]).map(plan=>({...plan,reason:plan.steps.map(step=>state.receipts.find(r=>r.actionId===step.actionId && ['FAILED','CANCELLED'].includes(r.status))?.details?.reason || (state.events.find(e=>e.type==='action.cancelled'&&(e.payload as any)?.actionId===step.actionId)?.payload as any)?.reason).find(reason=>typeof reason==='string') || (state.events.find(e=>e.type==='plan.failed'&&(e.payload as any)?.planId===plan.id)?.payload as any)?.reason || (plan.status==='paused'?'计划已暂停':plan.status==='failed'?'行动未完成，请重新规划':undefined)}))},
         settings:{version:state.version,paused:state.constraints.paused,permissions:state.constraints.permissions,groupChatBlocked:endpoint==='settings'&&host.groupChatBlocked?await host.groupChatBlocked(id):false}
       };

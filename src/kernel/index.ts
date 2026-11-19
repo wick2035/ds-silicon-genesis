@@ -1,3 +1,4 @@
+import {goalIsRunnable,invalidatePlans} from './goal-lifecycle.js';
 import {applyGoalProposal,mergeDuplicateGoals} from './goal-lifecycle.js';
 import {rebuildOutcomeDevelopment} from './outcome-development.js';
 import type { ActionProposal, ActionReceipt, ActionStatus, Belief, CognitiveWorkspace, KernelStore, LifeEvent, LifeState, Memory, Relationship, StrategyObservation, Goal, DevelopmentRecord } from './types.js';
@@ -20,15 +21,15 @@ export function createInitialState(petId: string, now: string): LifeState {
 }
 
 export function workspace(state: LifeState): CognitiveWorkspace {
-  return copy({ petId: state.petId, stateVersion: state.version, spirit:state.spirit, identity: state.identity, legacyContext:state.legacyContext, selfModel: state.selfModel && Object.fromEntries(Object.entries(state.selfModel).map(([key, records]) => [key, (records as DevelopmentRecord[]).filter((item: DevelopmentRecord) => item.valid && item.sourceIds.every((id: string) => activeSource(state, id)))])) as unknown as LifeState['selfModel'], worldModel: state.worldModel && { facts: state.worldModel.facts.filter(item => item.valid && item.sourceIds.every(id => activeSource(state, id))) }, body: state.body, emotions: state.emotions, activeGoals: state.goals.filter(g => g.status === 'active' && g.sourceIds.every(id => activeSource(state, id))), commitments: state.commitments.filter(c => c.status === 'open' && c.sourceIds.every(id => activeSource(state, id))), relevantMemories: state.memories.filter(m => m.valid && m.sourceIds.every(id => activeSource(state, id))), beliefs: state.beliefs.filter(b => b.valid && b.sourceIds.every(id => activeSource(state, id))), relationships: state.relationships, constraints: state.constraints });
+  return copy({ petId: state.petId, stateVersion: state.version, spirit:state.spirit, identity: state.identity, legacyContext:state.legacyContext, selfModel: state.selfModel && Object.fromEntries(Object.entries(state.selfModel).map(([key, records]) => [key, (records as DevelopmentRecord[]).filter((item: DevelopmentRecord) => item.valid && item.sourceIds.every((id: string) => activeSource(state, id)))])) as unknown as LifeState['selfModel'], worldModel: state.worldModel && { facts: state.worldModel.facts.filter(item => item.valid && item.sourceIds.every(id => activeSource(state, id))) }, body: state.body, emotions: state.emotions, activeGoals: state.goals.filter(g => goalIsRunnable(state,g.id)), commitments: state.commitments.filter(c => c.status === 'open' && c.sourceIds.every(id => activeSource(state, id))), relevantMemories: state.memories.filter(m => m.valid && m.sourceIds.every(id => activeSource(state, id))), beliefs: state.beliefs.filter(b => b.valid && b.sourceIds.every(id => activeSource(state, id))), relationships: state.relationships, constraints: state.constraints });
 }
 
 export function rankGoals(state: LifeState): Array<{ goalId: string; score: number }> {
-  return state.goals.filter(g => g.status === 'active' && g.sourceIds.every(id => activeSource(state, id))).map(g => {
+  return state.goals.filter(g => goalIsRunnable(state,g.id)).map(g => {
     const commitment = state.commitments.some(c => c.status === 'open' && c.sourceIds.some(id => g.sourceIds.includes(id))) ? 15 : 0;
     const need = g.kind === 'food' ? state.body.hunger * .35 : g.kind === 'rest' ? (100 - state.body.energy) * .35 : g.kind === 'explore' ? state.emotions.curiosity * .15 : 0;
     const dad = state.relationships.find(r => r.personId === 'dad');
-    const cost = g.kind === 'work' ? (100 - state.body.stamina) * .3 + state.body.pain * .3 + Math.max(0,50-(dad?.trust ?? 50))*.4 + Math.min(15,(dad?.outstandingWages ?? 0)*.01) : 0;
+    const cost = g.kind === 'work' ? (100 - state.body.stamina) * .3 + state.body.pain * .3 + Math.max(0,50-(dad?.trust ?? 50))*.4 + Math.min(15,(state.legacyContext?.laborPayment?.overdueAmount??0)*.01) : 0;
     return { goalId: g.id, score: g.priority + g.urgency + commitment + need - cost };
   }).sort((a, b) => b.score - a.score || a.goalId.localeCompare(b.goalId));
 }
@@ -36,8 +37,7 @@ export function rankGoals(state: LifeState): Array<{ goalId: string; score: numb
 /** Laplace-smoothed observed success rate; no fabricated model scores. */
 export function strategyScore(state: LifeState, strategy: string, context: string): { score: number; samples: number } {
   const relevant = state.observations.filter(x => x.valid && x.strategy === strategy && x.context === context && x.sourceIds.every(id => activeSource(state, id)));
-  const unpaid = strategy==='labor.step' && context==='execution' ? state.events.filter(e=>e.type==='social.labor.unpaid' && ['observed','verified'].includes(e.evidenceLevel) && activeSource(state,e.eventId)).length : 0;
-  return { score: (relevant.filter(x => x.success).length + 1) / (relevant.length + unpaid + 2), samples: relevant.length + unpaid };
+  return { score: (relevant.filter(x => x.success).length + 1) / (relevant.length + 2), samples: relevant.length };
 }
 
 export function validateProposal(state: LifeState, proposal: ActionProposal): void {
@@ -51,7 +51,7 @@ export function validateProposal(state: LifeState, proposal: ActionProposal): vo
   assert(proposal.parameters !== null && typeof proposal.parameters === 'object' && !Array.isArray(proposal.parameters), 'Invalid action parameters');
   assert(Array.isArray(proposal.requiredCapabilities) && proposal.requiredCapabilities.includes(proposal.actionType) && proposal.requiredCapabilities.every(nonempty), 'Action type requires its registered capability');
   assert(Array.isArray(proposal.sourceIds) && proposal.sourceIds.every(id => nonempty(id) && activeSource(state, id) && state.events.some(e => e.eventId === id)), 'Unknown or invalid action source');
-  if (proposal.goalId) assert(state.goals.some(g => g.id === proposal.goalId && g.status === 'active'), 'Goal is not active');
+  if (proposal.goalId) assert(goalIsRunnable(state,proposal.goalId), 'Goal is not active');
   for (const name of proposal.requiredCapabilities) {
     const capability = state.constraints.capabilities.find(c => c.name === name && c.enabled);
     assert(capability, `Capability unavailable: ${name}`);
@@ -110,6 +110,7 @@ export function invalidateDependents(state: LifeState): void {
       if (item.valid && item.sourceIds.some((id: string) => !activeSource(state, id))) { item.valid = false; state.invalidSources[item.id] = 'Dependency invalidated'; changed = true; }
     }
   }
+  invalidatePlans(state);
   rebuildRelationships(state);
   rebuildOutcomeDevelopment(state);
 }

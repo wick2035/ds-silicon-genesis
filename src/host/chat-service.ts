@@ -1,3 +1,4 @@
+import {laborPaymentHistory} from './work-experience.js';
 import {canChooseLabor} from './forced-labor.js';
 import {recentGroupActivity,GROUP_CONTINUITY} from './group-conversation-context.js';
 import {SPEAKER_MEMORY_RULE} from '../kernel/speech-provenance.js';
@@ -177,6 +178,11 @@ export class CanonicalChat {
         const time=temporalContext(envelope,Date.now(),['chat-user:'+id,...(input.sourceEventIds??[])]);
         system+='\n'+TEMPORAL_RULES+'\n当前时间与睡眠时间：'+JSON.stringify({clock:time.clock,lastConfirmedWake:time.lastConfirmedWake,lastRestBeforeWake:time.lastRestBeforeWake,lastRestDurationSeconds:time.lastRestDurationSeconds})+
           '\n近期行为时间线：'+promptData({actions:time.recentConfirmedActions,events:time.recentEvents},4000);
+      }
+      if(!group&&/搬砖|工钱|工资|结薪|欠薪|报酬/u.test(text)){
+        const payment=laborPaymentHistory(state);
+        const choices=payment.overdue?['先处理旧账','照常协商','婉拒']:['照常协商','先处理旧账','婉拒'];
+        system+='\n有来源的近期结薪历史：'+JSON.stringify(payment)+'。过一天仍未结的约定才纳入结薪风险；足额结清会恢复判断。可考虑 '+choices.join('、')+'，由你自己选择，不能自行结算或改动已确认约定。';
       }
       const selection=this.model.agentDefaultModel.currentSelection();if(!selection.provider||!selection.model)throw new Error('模型不可用');
       await worksiteReady;let output='',meme:string|undefined;

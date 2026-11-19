@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import {speechIdentity,speechSources} from '../kernel/speech-provenance.js';
 import { rankGoals, validateProposal, workspace } from '../kernel/index.js';
-import {isKnowledgeGoal} from '../kernel/goal-lifecycle.js';
+import {goalsDueForReview,isKnowledgeGoal} from '../kernel/goal-lifecycle.js';
 import {momentEventType, momentSources, type MomentDraft} from '../kernel/moments.js';
 import type { ActionProposal, CognitiveWorkspace, LifeState, Memory } from '../kernel/types.js';
 
@@ -13,12 +13,18 @@ const Draft = z.object({
   requiredCapabilities: z.array(z.string().min(1).max(100)).min(1).max(20), sourceIds: z.array(z.string().min(1).max(200)).max(50), goalId: z.string().min(1).max(200).optional(),
 }).strict();
 const Candidate = z.object({ title: z.string().min(1).max(200), description: z.string().min(1).max(2000), sourceIds: z.array(z.string().min(1).max(200)).min(1).max(50) }).strict();
-const GoalCandidate=Candidate.extend({completion:z.object({type:z.literal('read-url'),url:z.string().url().max(2000)}).strict().optional()});
+const GoalCandidate=Candidate.extend({parentId:z.string().max(200).optional(),research:z.boolean().optional(),
+  completion:z.discriminatedUnion('type',[
+    z.object({type:z.literal('read-url'),url:z.string().url().max(2000)}).strict(),
+    z.object({type:z.literal('stages'),count:z.number().int().min(2).max(10)}).strict()
+  ]).optional()});
+const GoalReview=z.object({goalId:z.string().max(200),decision:z.enum(['resume','defer','abandon']),
+  reason:z.string().trim().min(1).max(250),hours:z.number().int().min(1).max(72).optional()}).strict();
 const GoalUpdate=z.object({goalId:z.string().min(1).max(200),kind:z.enum(['progress','reprioritize','complete','understood']),evidenceId:z.string().min(1).max(200),priority:z.number().finite().min(0).max(100).optional(),understanding:z.string().trim().min(20).max(1000).optional()}).strict().refine(x=>x.kind!=='understood'||!!x.understanding);
-const Step = z.object({ actionType: z.string().min(1).max(100), parameters: z.record(z.string(),z.json()), goalId:z.string().min(1).max(200).optional(), description: z.string().min(1).max(1000), requiredCapabilities: z.array(z.string().min(1).max(100)).min(1).max(20), sourceIds: z.array(z.string().min(1).max(200)).min(1).max(50) }).strict();
+const Step = z.object({ readSearchResult:z.boolean().optional(), actionType: z.string().min(1).max(100), parameters: z.record(z.string(),z.json()), goalId:z.string().min(1).max(200).optional(), description: z.string().min(1).max(1000), requiredCapabilities: z.array(z.string().min(1).max(100)).min(1).max(20), sourceIds: z.array(z.string().min(1).max(200)).min(1).max(50) }).strict();
 const Thought=z.object({salience:z.number().finite().min(0).max(1).default(.5),text:z.string().min(1).max(500),feeling:z.string().max(200),desire:z.string().max(300),sourceIds:z.array(z.string().min(1).max(200)).min(1).max(20)}).strict();
 const Moment = z.object({text:z.string().trim().min(1).max(160), sourceId:z.string().min(1).max(200)}).strict();
-const Output = z.object({ thought:Thought.nullable().default(null), moment:z.unknown().optional(), action: Draft.nullable(), goals: z.array(GoalCandidate).max(5), goalUpdates:z.array(GoalUpdate).max(5).default([]), plan: z.array(Step).max(10), interests: z.array(Candidate).max(5), selfModel: z.array(Candidate).max(5) }).strict();
+const Output = z.object({ thought:Thought.nullable().default(null), moment:z.unknown().optional(), action: Draft.nullable(), goals: z.array(GoalCandidate).max(5), goalUpdates:z.array(GoalUpdate).max(5).default([]), goalReviews:z.array(GoalReview).max(5).optional(), plan: z.array(Step).max(10), interests: z.array(Candidate).max(5), selfModel: z.array(Candidate).max(5) }).strict();
 type ModelOutput = z.infer<typeof Output>;
 export interface CognitiveContext { observation: string[]; recall: string[]; appraisal: string[]; motivations: string[]; rankedGoals: Array<{goalId: string; score: number}> }
 /** The model receives an isolated workspace and proposes data; it cannot execute tools. */
@@ -49,7 +55,7 @@ const planGraph = new StateGraph(PlanGraph)
 
 /** A scheduling hint only; model output never changes state until a kernel operation accepts it. */
 export function hasCognitiveDemand(state: LifeState): boolean {
-  return state.body.hunger >= 60 || state.body.energy <= 30 || state.body.pain >= 50 || state.commitments.some(c => c.status === 'open') || state.goals.some(g => g.status === 'active' && (g.urgency >= 50 || g.priority >= 70));
+  return goalsDueForReview(state).length>0 || state.body.hunger >= 60 || state.body.energy <= 30 || state.body.pain >= 50 || state.commitments.some(c => c.status === 'open') || state.goals.some(g => g.status === 'active' && (g.urgency >= 50 || g.priority >= 70));
 }
 export class Cognition {
   constructor(private readonly model: CognitiveModel | null, private readonly budget: CognitiveBudget, private readonly retrieval: {forCognition(state:LifeState):Promise<Memory[]>; world(state:LifeState):Promise<NonNullable<CognitiveWorkspace['environment']>>}, private readonly timeoutMs = 45000) {
@@ -71,6 +77,11 @@ export class Cognition {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const snapshot = workspace(state);
+      snapshot.goalReviews=goalsDueForReview(state);
+      if(snapshot.worldModel)snapshot.worldModel.facts=snapshot.worldModel.facts.slice(-18);
+      const ongoingGoals=new Set(snapshot.activeGoals.map(g=>g.id));
+      snapshot.plans=(state.cognitivePlans??[]).filter(p=>p.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id)))
+        .filter(p=>['active','paused','failed'].includes(p.status)||p.status==='completed'&&p.goalId&&ongoingGoals.has(p.goalId)).slice(-6);
       const visible=state.events.filter(e=>e.type!==momentEventType&&!Object.hasOwn(state.invalidSources,e.eventId));
       const momentCandidates=momentSources(state,Date.now());
       // Financial bookkeeping and scheduler events must not crowd the actual
@@ -79,6 +90,16 @@ export class Cognition {
       for(const event of visible.filter(e=>momentCandidates.has(e.eventId)).slice(-6))selected.add(event);
       snapshot.recentEvents = visible.filter(e=>selected.has(e)).map(e=>({eventId:e.eventId,type:e.type,occurredAt:e.occurredAt,...speechIdentity(e),speakers:speechSources([e.eventId],state),evidenceLevel:e.evidenceLevel,payload:JSON.stringify(e.payload)?.slice(0,700) ?? '',...(momentCandidates.has(e.eventId)?{momentSource:true}:{})}));
       snapshot.relevantMemories = await this.retrieval.forCognition(state);
+      const readingByAction=new Map(state.actions.filter(action=>action.goalId&&ongoingGoals.has(action.goalId)&&
+        action.actionType==='learning.observe'&&action.parameters.kind==='fetch'&&action.status==='COMPLETED')
+        .map(action=>['knowledge:'+action.id,action]));
+      snapshot.goalReadings=snapshot.relevantMemories.flatMap(memory=>{
+        const action=readingByAction.get(memory.id);
+        if(!action)return [];
+        const event=visible.find(event=>event.causationId===action.receiptId&&
+          ['action.receipt','action.reconciled'].includes(event.type)&&memory.sourceIds.includes(event.eventId));
+        return event?[{goalId:action.goalId!,evidenceId:event.eventId,memoryId:memory.id}]:[];
+      });
       snapshot.environment = await this.retrieval.world(state);
       const evaluated = await contextGraph.invoke({ state, snapshot, observation: [], recall: [], appraisal: [], motivations: [], rankedGoals: [] });
       const context: CognitiveContext = { observation: evaluated.observation, recall: evaluated.recall, appraisal: evaluated.appraisal, motivations: evaluated.motivations, rankedGoals: evaluated.rankedGoals };
@@ -91,14 +112,25 @@ export class Cognition {
       const { action, moment, ...candidates } = result.parsed;
       const post=Moment.safeParse(moment);
       const sourceValid = (id: string) => state.events.some(e => e.eventId === id && !Object.prototype.hasOwnProperty.call(state.invalidSources, id));
+      if(candidates.goalReviews?.some(review=>![...snapshot.activeGoals,...snapshot.goalReviews!].some(g=>g.id===review.goalId)))return {status:'degraded',reason:'unavailable_goal_review'};
       if(candidates.goalUpdates.some(x=>!sourceValid(x.evidenceId)))return {status:'degraded',reason:'invalid_goal_evidence'};
       // Understanding must cite a memory actually provided to this model call.
       const readSources=new Set(snapshot.relevantMemories.flatMap(m=>m.sourceIds));
       if(candidates.goalUpdates.some(x=>x.kind==='understood'&&(!readSources.has(x.evidenceId)||!snapshot.activeGoals.some(g=>g.id===x.goalId&&isKnowledgeGoal(g)))))return {status:'degraded',reason:'unread_goal_explanation'};
       if ([...candidates.goals, ...candidates.plan, ...candidates.interests, ...candidates.selfModel].some(item => !item.sourceIds.every(sourceValid))) return { status: 'degraded', reason: 'invalid_candidate_source' };
       if (candidates.plan.some(step => !step.requiredCapabilities.includes(step.actionType) || !step.requiredCapabilities.every(name => state.constraints.capabilities.some(cap => cap.name === name && cap.enabled && (!cap.requiresPermission || state.constraints.permissions.includes(cap.requiresPermission)))))) return { status: 'degraded', reason: 'unavailable_plan_capability' };
-      const proposal: ActionProposal | null = action ? { ...action, id: randomUUID(), petId: state.petId, expectedStateVersion: state.version } : null;
-      if (proposal) { try { validateProposal(state, proposal); } catch { return { status: 'degraded', reason: 'proposal_rejected' }; } }
+      const resolvedHere=(id:string)=>candidates.goalUpdates.some(update=>update.goalId===id&&
+        (update.kind==='complete'||update.kind==='understood'))||candidates.goalReviews?.some(review=>review.goalId===id&&review.decision!=='resume');
+      let proposal: ActionProposal | null = action && !(action.goalId&&resolvedHere(action.goalId))
+        ? { ...action, id: randomUUID(), petId: state.petId, expectedStateVersion: state.version } : null;
+      if(proposal){
+        try{validateProposal(state,proposal);}
+        catch{
+          if(!candidates.goals.length&&!candidates.goalUpdates.length&&!candidates.goalReviews?.length&&!candidates.plan.length)
+            return {status:'degraded',reason:'proposal_rejected'};
+          proposal=null;
+        }
+      }
       const publish=post.success&&snapshot.recentEvents.some(e=>e.momentSource&&e.eventId===post.data.sourceId);
       return { status: 'proposed', sourceVersion: state.version, proposal, candidates:{...candidates,...(publish?{moment:post.data}:{})} };
     } catch { return { status: 'degraded', reason: signal.aborted ? 'stopped' : controller.signal.aborted ? 'model_timeout' : 'model_unavailable' }; }

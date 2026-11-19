@@ -4,6 +4,7 @@ import {advanceHumanity} from '../../vendor/dsh-pet/src/host/humanity.mjs';
 import {setSpiritRest} from '../kernel/spirit.js';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 import type {PetGate,UnitOfWork} from '../storage/uow.js';
+import {recordWorkChoice,type WorkChoice,type WorkContext} from './work-experience.js';
 import {hasForcedWork} from './forced-labor.js';
 import {uncertainLabor} from './labor-pending.js';
 import {projectLabor} from './legacy-snapshot.js';
@@ -20,7 +21,7 @@ export function createWorksite(store:Reader,gate:PetGate,uow:UnitOfWork,view:(id
     const pet=state.legacy as Record<string,any>;
     return {farmInside:!!farmVisit(state),location:pet.worksite||{inside:false,forced:false},waitingForReceipt:uncertainLabor(state).length>0,labor:projectLabor(pet),world:{command:view(id)??null}};
   };
-  return {snapshot,async act(id:string,action:Action,expected?:{sessionId:string;contractId:string}){
+  return {snapshot,async act(id:string,action:Action,expected?:{sessionId:string;contractId:string;learning?:{context:WorkContext;recommended:WorkChoice;sourceIds:string[]};recovered?:boolean}){
     if(!['enter-forced','enter-voluntary','release','leave-voluntary','touch','drag','force-work','request-entry','stop-work','resume-work','retry-unconfirmed'].includes(action))throw Error('工地操作无效');
     if(['enter-forced','enter-voluntary','release','leave-voluntary','drag'].includes(action))cancel(id);
     await gate.run(id,async()=>{
@@ -29,7 +30,14 @@ export function createWorksite(store:Reader,gate:PetGate,uow:UnitOfWork,view:(id
         const pet=draft.legacy as Record<string,any>,site=pet.worksite||={inside:false,forced:false};
         if(farmVisit(draft) && ['enter-forced','enter-voluntary','force-work','request-entry'].includes(action))throw Error('她在稻田里，请先接她回桌面');
         let text='';
-        if(expected){const active=pet.labor?.contracts?.find((c:any)=>['working','paused','queued'].includes(c.status)&&c.done<c.trips);if(!site.inside||site.workState!=='running'||site.sessionId!==expected.sessionId||active?.status==='paused'||(active?.id??site.lastCompletedContractId)!==expected.contractId||hasForcedWork(draft))throw Error('工作状态已变化');}
+        const endLearningRest=()=>{
+          if(site.learningRest?.restingUntil===draft.humanity.restingUntil){
+            draft.humanity={...advanceHumanity(draft.humanity,Date.now()),restingUntil:0};
+            if(draft.life.spirit?.mode==='nap')setSpiritRest(draft.life,'awake');
+          }
+          delete site.learningRest;
+        };
+        if(expected){const active=pet.labor?.contracts?.find((c:any)=>['working','paused','queued'].includes(c.status)&&c.done<c.trips);if(draft.life.constraints.paused||!site.inside||site.workState!==(expected.recovered?'stopped':'running')||site.sessionId!==expected.sessionId||active?.status==='paused'||(active?.id??site.lastCompletedContractId)!==expected.contractId||hasForcedWork(draft))throw Error('工作状态已变化');}
         if(action==='retry-unconfirmed'){
           if(!site.inside)throw Error('她不在工地里');
           const uncertain=uncertainLabor(draft);if(!uncertain.length)throw Error('没有待确认的当前动作');
@@ -43,12 +51,27 @@ export function createWorksite(store:Reader,gate:PetGate,uow:UnitOfWork,view:(id
         }else if(action==='stop-work'){
           if(!site.inside)throw Error('她不在工地里');
           if(hasForcedWork(draft))throw Error('强制干活正在进行，普通停工不能中断');
+          if(expected?.learning){
+            const learning=expected.learning;
+            const at=new Date().toISOString();
+            const decisionId=recordWorkChoice(draft,{...learning,choice:'rest'},at);
+            const human=advanceHumanity(draft.humanity,Date.parse(at));
+            const restingUntil=Date.parse(at)+10*60000;
+            draft.humanity={...human,restingUntil};
+            site.learningRest={decisionId,contractId:expected.contractId,stamina:Number(human.stats.stamina),at:Date.parse(at),restingUntil};
+            delete site.strategyDecisionId;
+          }else if(site.learningRest)endLearningRest();
           site.workState='stopped';site.sessionId=randomUUID();site.stopReason='choice';
           text='我决定暂时停工，留在工地里。';
         }else if(action==='resume-work'){
           if(!site.inside)throw Error('她不在工地里');
           if(hasForcedWork(draft))throw Error('强制干活正在进行');
           if(site.workState!=='stopped')return {}; // Repeated resume must not reset the 15-trip counter.
+          if(expected?.recovered&&site.learningRest){
+            site.strategyDecisionId=site.learningRest.decisionId;
+            if(expected.learning)recordWorkChoice(draft,{...expected.learning,choice:'continue',recovered:true},new Date().toISOString());
+          }else delete site.strategyDecisionId;
+          if(site.learningRest)endLearningRest();
           site.workState='running';site.sessionId=randomUUID();site.completedInSession=0;site.reviewedThrough=0;delete site.stopReason;
           text='恢复普通工作；有任务时会继续搬砖。';
         }else if(action==='force-work'){
@@ -60,6 +83,8 @@ export function createWorksite(store:Reader,gate:PetGate,uow:UnitOfWork,view:(id
           }
           site.inside=true;site.forced=true;site.requested=false;site.suppressUntilDecision=false;
           site.workState='running';site.sessionId=randomUUID();site.completedInSession=0;site.reviewedThrough=0;delete site.stopReason;
+          if(site.learningRest)endLearningRest();
+          delete site.strategyDecisionId;
           delete site.speech;
           // Force a batch regardless of body condition. The pet's distress is
           // recorded as real evidence (pain/drain) downstream, not assumed here.
@@ -84,6 +109,8 @@ export function createWorksite(store:Reader,gate:PetGate,uow:UnitOfWork,view:(id
           if(action==='leave-voluntary'&&site.forced)throw Error('被爸爸放进来后，要等爸爸亲手接我出去');
           delete site.speech;
           site.inside=false;site.forced=false;site.requested=false;site.workState='stopped';site.sessionId=randomUUID();
+          if(site.learningRest)endLearningRest();
+          delete site.strategyDecisionId;
           site.suppressUntilDecision=true;
           for(const contract of pet.labor?.contracts||[])if(contract.status==='working'){
             contract.workPermit=false;contract.batchRemaining=0;contract.forced=false;

@@ -190,7 +190,7 @@ export async function main():Promise<void> {
     const memoryIndex=new MemoryIndex(lease,store),embedding=new MemoryEmbedding(lease,store,modelConfig);
     const scheduleMemory=(draft:Parameters<typeof memoryIndex.schedule>[0])=>{memoryIndex.schedule(draft);embedding.schedule(draft);};
     observeCommits(scheduleMemory);
-    const worksiteReviews=createWorksiteReviews(store,lease,unitOfWork,budget,model,(id,expected)=>worksite.act(id,'stop-work',expected));
+    const worksiteReviews=createWorksiteReviews(store,lease,unitOfWork,budget,model,(id,expected)=>worksite.act(id,'stop-work',expected),(id,expected)=>worksite.act(id,'resume-work',expected),id=>worksiteWake(id));
     observeCommits(worksiteReviews.observe);
     const initialIndexState=await store.loadEnvelope(petId);if(initialIndexState){scheduleMemory(initialIndexState);worksiteReviews.observe(initialIndexState);}
     const waitForWorksiteStep=createWorksiteChatWait(store,[unitOfWork,dispatcher]);
@@ -229,7 +229,7 @@ export async function main():Promise<void> {
     let configuredPetIds:(()=>Set<string>)|undefined;
     const reactionBaseline=await store.loadEnvelope(petId);if(!reactionBaseline)throw Error('生命状态不可用');
     const todos=createCanonicalTodos(store,lease,unitOfWork),todoRoute=createTodoRoute(todos,petId);
-    const deterministic=createDeterministicLife(humanity,store,service,lease,unitOfWork,actions,dispatcher,id=>budget.refresh(id),id=>tokens.held(id));
+    const deterministic=createDeterministicLife(humanity,store,service,lease,unitOfWork,actions,dispatcher,id=>budget.refresh(id),id=>tokens.held(id),state=>lease.detach(()=>worksiteReviews.waiting(state)));
     worksiteWake=id=>{void (async()=>{
       if(!await deterministic.runWorksite(id,lease.signal,true))await deterministic.run(id,lease.signal,{allowAutonomous:true});
     })().catch(()=>{});};
@@ -364,7 +364,7 @@ export async function main():Promise<void> {
     process.once('SIGINT',()=>{void close();});process.once('SIGTERM',()=>{void close();});
     console.log('生命空间已准备好。');
     console.log('生命空间链接（关闭网页后可用此链接重新打开）：'+app.lifeUrl);
-    if(process.platform==='win32') {
+    if(process.platform==='win32'&&process.env.SILICON_NO_OPEN_BROWSER!=='1') {
       const browser=spawn('rundll32.exe',['url.dll,FileProtocolHandler',app.lifeUrl],{windowsHide:true,stdio:'ignore'});
       browser.on('error',()=>console.error('无法打开生命空间，请从桌宠菜单重新打开。'));
       browser.unref();

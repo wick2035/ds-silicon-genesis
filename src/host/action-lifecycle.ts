@@ -1,3 +1,4 @@
+import {explorationAbility} from './exploration-budget.js';
 import {farmActionTarget,farmFacts,farmVisit,type FarmAction} from './farm.js';
 import {checkFarmBody,checkFarmReceipt} from './farm-scene.js';
 import {validateStartCooking} from './rice-cooker.js';
@@ -48,16 +49,24 @@ function settleExploration(draft: CanonicalEnvelope, intent: OutboxIntent, statu
   legacy.wallet.balance = Math.round((legacy.wallet.balance + charge.amount) * 100) / 100;
   charge.status = 'refunded';
 }
-function advancePlan(draft: CanonicalEnvelope, actionId: string, status: ActionReceipt['status']): void {
+function advancePlan(draft: CanonicalEnvelope, actionId: string, status: ActionReceipt['status'], eventId:string, reason?:unknown): void {
   const matches = (draft.life.cognitivePlans ?? []).flatMap(plan => plan.steps.filter(step => step.actionId === actionId).map(step => ({plan,step})));
   assert(matches.length <= 1, '行动对应多个计划步骤');
-  if (!matches.length || status === 'UNKNOWN') return;
+  if (!matches.length) return;
   const {plan,step} = matches[0];
-  assert(step.status === 'in_progress', '计划步骤不在执行中');
+  assert(step.status === 'in_progress'||step.status==='awaiting_receipt', '计划步骤不在执行中');
+  step.receiptEventId=eventId;
+  if(status==='UNKNOWN'){step.status='awaiting_receipt';return;}
   if (status === 'COMPLETED') {
     step.status = 'completed';
-    if (plan.steps.every(item => item.status === 'completed')) plan.status = 'completed';
-  } else { step.status = 'failed'; plan.status = 'failed'; }
+    if (plan.status==='active'&&plan.steps.every(item => item.status === 'completed')) plan.status = 'completed';
+  } else {
+    step.status = 'failed';
+    if(plan.status==='active'){
+      plan.status='failed';
+      plan.reviewReason=typeof reason==='string'&&reason.trim()?reason.slice(0,300):'这一步未完成，等待重新规划';
+    }
+  }
 }
 function learnOutcome(draft:CanonicalEnvelope, action:LifeAction, status:ActionReceipt['status'], eventId:string):void {
   if(status==='UNKNOWN')return;
@@ -108,6 +117,9 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
       if(action.actionType==='service.cook-rice')validateStartCooking(draft,action.parameters.bowls);
       if(action.actionType==='service.eat-rice')validateRiceMeal(draft,action.parameters.itemId);
       if(action.actionType!=='labor.step')checkSpirit(draft.life,action.actionType,this.clock().valueOf());
+      const plan=draft.life.cognitivePlans?.find(p=>p.steps.some(step=>step.actionId===action.id));
+      if(plan&&plan.status!=='active')throw Error('行动所属计划已暂停或需要复核');
+      if(action.actionType==='learning.observe'||action.actionType==='image.observe')explorationAbility(draft.legacy,action);
       const proposal={...action, expectedStateVersion:draft.version};
       if((draft.legacy as Record<string,any>).worksite?.inside && (action.actionType.startsWith('care.') || ['service.eat-rice','body.sleep','body.wake','token.pickup','body.activity'].includes(action.actionType)))throw Error('她在网页工地里，请先接她回桌面');
       if(farmVisit(draft) && (action.actionType.startsWith('care.') || ['service.eat-rice','body.sleep','body.wake','token.pickup','body.activity'].includes(action.actionType)))throw Error('她在稻田里，请先接她回桌面');
@@ -187,7 +199,7 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
     Object.assign(event.payload as object,{actionType:action.actionType,...(feedback?{feedback}:{})});
     updateQQ(draft, intent, outcome, receipt.evidence);
     settleExploration(draft, intent, outcome);
-    advancePlan(draft, action.id, outcome);
+    advancePlan(draft, action.id, outcome,eventId,receipt.evidence.reason);
     draft.life.receipts.push(result); draft.life.events.push(event);
     learnOutcome(draft,action,outcome,eventId);
     rebuildOutcomeDevelopment(draft.life as LifeState);
@@ -228,7 +240,7 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
     projectOutcome(draft, intent, {status:confirmed.status.toLowerCase() as ExecutionReceipt['status'],evidence:confirmed.details}, confirmed.occurredAt, eventId);
     updateQQ(draft, intent, confirmed.status, confirmed.details);
     settleExploration(draft, intent, confirmed.status);
-    advancePlan(draft, action.id, confirmed.status);
+    advancePlan(draft, action.id, confirmed.status,eventId,confirmed.details.reason);
     draft.life.receipts.push(structuredClone(confirmed));
     const feedback=actionFeedback(draft,action,confirmed.status);
     draft.life.events.push({eventId, petId:draft.petId, type:'action.reconciled', source:confirmed.source,

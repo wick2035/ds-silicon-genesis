@@ -69,7 +69,13 @@ export class CanonicalMemoryRetrieval {
     const goalQueries=[...new Set(state.goals.filter(g=>g.status==='active').map(g=>g.title.trim()).filter(Boolean))].slice(0,3);
     const [goalMatches,matches]=await Promise.all([Promise.all(goalQueries.map(q=>this.search(state.petId,q.slice(0,500),3))),this.search(state.petId,query,12)]), recent=state.memories.filter(m=>m.valid&&m.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id))).slice(-6);
     const felt=state.memories.filter(m=>m.valid&&m.feeling&&m.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id))).sort((a,b)=>(b.salience??0)-(a.salience??0)||Date.parse(b.createdAt)-Date.parse(a.createdAt)).slice(0,4);
-    const unique=new Map([...goalMatches.flat(),...matches,...recent,...felt].map(m=>[m.id,m]));let remaining=9000;
+    // Reading receipts for ongoing goals must survive unrelated conversation
+    // and search snippets when the model is asked what it understood.
+    const activeGoals=new Set(state.goals.filter(g=>g.status==='active').map(g=>g.id));
+    const readingIds=new Set((state.actions??[]).filter(a=>a.goalId&&activeGoals.has(a.goalId)&&a.actionType==='learning.observe'&&
+      a.parameters.kind==='fetch'&&a.status==='COMPLETED').map(a=>'knowledge:'+a.id));
+    const readings=state.memories.filter(m=>readingIds.has(m.id)&&m.valid&&m.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id))).slice(-2).reverse();
+    const unique=new Map([...readings,...goalMatches.flat(),...matches,...recent,...felt].map(m=>[m.id,m]));let remaining=9000;
     return [...unique.values()].map(m=>({...m,speakers:speechSources(m.sourceIds,state)})).filter(m=>{const size=JSON.stringify(m).length;if(size>remaining)return false;remaining-=size;return true;});
   }
 }

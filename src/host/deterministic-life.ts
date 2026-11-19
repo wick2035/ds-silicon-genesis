@@ -2,6 +2,7 @@ import {farmVisit} from './farm.js';
 import {availableRice} from './rice-inventory.js';
 import {hasActiveConversation,hasRunningChat} from './active-conversation.js';
 import {riceMotivation} from './companion-personality.js';
+import {recordWorkOutcome} from './work-experience.js';
 import {hasForcedWork,canChooseLabor,hasLaborResources} from './forced-labor.js';
 import {advanceSpirit} from '../kernel/spirit.js';
 import {expireCommitments} from '../kernel/goal-lifecycle.js';
@@ -16,7 +17,7 @@ import {randomUUID} from 'node:crypto';
  * meal already in inventory; the regular service path requires the actual
  * desktop animation receipt before inventory or body is changed. */
 export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader:{loadEnvelope(id:string):Promise<CanonicalEnvelope|null>},service:(id:string,input:Record<string,unknown>,origin?:'user'|'autonomous')=>Promise<unknown>,
-  gate:PetGate,uow:UnitOfWork,actions:ActionCoordinator,dispatcher:OutboxDispatcher,refreshBudget:(petId:string)=>Promise<void>,tokenHeld:(petId:string)=>boolean=()=>false) {
+  gate:PetGate,uow:UnitOfWork,actions:ActionCoordinator,dispatcher:OutboxDispatcher,refreshBudget:(petId:string)=>Promise<void>,tokenHeld:(petId:string)=>boolean=()=>false, reviewingWork:(state:CanonicalEnvelope)=>boolean=()=>false) {
   // A release can start pickup immediately, independently of the minute wakeup.
   async function pickup(petId:string,signal:AbortSignal):Promise<boolean> {
     if(signal.aborted)return false;
@@ -105,9 +106,15 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
       if(!current||!pet?.worksite?.inside)return false;
       if(signal.aborted||farmVisit(current))return true;
       const forced=hasForcedWork(current);
+      if(!forced&&allowAutonomous&&reviewingWork(current))return true;
       if(!forced && pet.worksite.workState!=='stopped' && !hasLaborResources(current)){
         await uow.apply(petId,current.version,draft=>{
           const site=(draft.legacy as Record<string,any>).worksite;
+          const at=new Date().toISOString(),eventId='labor-exhausted:'+randomUUID();
+          draft.life.events.push({eventId,petId,type:'labor.exhausted',source:'body',occurredAt:at,receivedAt:at,evidenceLevel:'observed',
+            payload:{description:'身体资源耗尽，普通搬砖停止'}});
+          recordWorkOutcome(draft,site.strategyDecisionId,eventId,false,at);
+          delete site.strategyDecisionId;
           site.workState='stopped';site.stopReason='exhausted';site.sessionId=randomUUID();
           return {};
         });

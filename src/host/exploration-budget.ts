@@ -1,3 +1,13 @@
+import type {LifeAction} from '../kernel/types.js';
+
+export function explorationAbility(pet:Record<string,any>,action:LifeAction):string {
+  const kind=action.parameters.kind;
+  const ability=action.actionType==='image.observe'?'image':kind==='bili'?'bili':kind==='fetch'?'fetch':'search';
+  if((ability!=='image'&&!pet.config?.networkLearning)||pet.abilities?.[ability]?.status!=='granted'||
+    (ability==='search'&&pet.abilities?.fetch?.status!=='granted'))throw Error('探索权限不可用');
+  return ability;
+}
+
 /** Reserve separate daily budgets inside the action's atomic transaction. */
 export function reserveExploration(pet:Record<string,any>,ability:string,now:Date):void {
   const search=ability==='search';

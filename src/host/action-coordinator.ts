@@ -1,5 +1,5 @@
 import {farmVisit} from './farm.js';
-import {reserveExploration} from './exploration-budget.js';
+import {explorationAbility,reserveExploration} from './exploration-budget.js';
 import {hasActiveConversation} from './active-conversation.js';
 import {validateRicePurchase} from './rice-purchase.js';
 import {validateStartCooking} from './rice-cooker.js';
@@ -53,9 +53,7 @@ export class ActionCoordinator {
       if((draft.legacy as Record<string,any>).manualServiceRequests?.[action.id])validateManualService(draft,state,proposal);else validateProposal(forcedLaborState(draft,selfActionState(state,proposal),proposal),proposal);
       if(action.actionType==='learning.observe'||action.actionType==='image.observe') {
         const pet=draft.legacy as Record<string,any>;
-        const kind=action.parameters.kind;
-        const ability=action.actionType==='image.observe'?'image':kind==='bili'?'bili':kind==='fetch'?'fetch':'search';
-        if((ability!=='image'&&!pet.config?.networkLearning) || pet.abilities?.[ability]?.status!=='granted' || (ability==='search' && pet.abilities?.fetch?.status!=='granted')) throw new Error('探索权限不可用');
+        const ability=explorationAbility(pet,action);
         if(ability==='image' && (!pet.attachments?.[action.parameters.attachmentId as string] || Object.hasOwn(draft.life.invalidSources,action.parameters.attachmentSourceId as string) || !draft.life.events.some(e=>e.eventId===action.parameters.attachmentSourceId && (e.payload as any)?.attachmentId===action.parameters.attachmentId)))throw Error('图片来源无效');
         reserveExploration(pet,ability,this.now());
         const charges=pet.explorationCharges ||= {};

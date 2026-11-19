@@ -115,7 +115,7 @@ export class LifeScheduler {
                 const stillIdle=idleBefore && idleAfter && idleBefore.seconds>=120 && idleAfter.seconds>=120 && idleBefore.generation===idleAfter.generation;
                 // The system input or a direct interaction may have changed while the model was thinking.
                 if(!plannedWalk && (!wantsWalk || stillIdle))await this.options.resultCoordinator.accept(this.options.petId,result,this.controller.signal);
-                else if(result.candidates.goals.length||result.candidates.goalUpdates.length){
+                else if(result.candidates.goals.length||result.candidates.goalUpdates.length||result.candidates.goalReviews?.length){
                   await this.options.resultCoordinator.accept(this.options.petId,{...result,proposal:null,candidates:{...result.candidates,plan:[]}},this.controller.signal);
                 }
               }

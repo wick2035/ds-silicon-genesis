@@ -1,3 +1,4 @@
+import {hasLaborResources} from './forced-labor.js';
 import {completeFarmOperation,farmVisit,setFarmVisit,type FarmAction} from './farm.js';
 import {startCooking} from './rice-cooker.js';
 import {cookerBowlStorage,findRiceBowl} from './rice-inventory.js';
@@ -5,6 +6,7 @@ import {sweetPrice} from './spirit-activity.js';
 import {mergeDuplicateGoals} from '../kernel/goal-lifecycle.js';
 import {setSpiritRest,advanceSpirit} from '../kernel/spirit.js';
 import {settleSimulatedSpending} from './simulated-spending.js';
+import {recordWorkOutcome} from './work-experience.js';
 import { rebuildRelationships } from '../kernel/index.js';
 import { actHumanity, advanceHumanity, reactHumanity } from '../../vendor/dsh-pet/src/host/humanity.mjs';
 import type { CanonicalEnvelope } from '../storage/postgres.js';
@@ -167,6 +169,10 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
       }
       next.serviceActions = {...human.serviceActions,[`labor-effort:${intent.id}`]:{ok:true,at,action:'labor-effort',seconds:e.effortSeconds,intensity:e.intensity}};
       draft.humanity = next;
+    }
+    if(cmd.index===1&&cmd.labor.leg==='deliver'&&!contract.forced&&pet.worksite?.inside&&pet.worksite.strategyDecisionId){
+      recordWorkOutcome(draft,pet.worksite.strategyDecisionId,sourceEventId,hasLaborResources(draft)||contract.done===contract.trips,occurredAt);
+      delete pet.worksite.strategyDecisionId;
     }
     delete cmd.stepStarted; delete cmd.stepBoost; cmd.index++; cmd.status = cmd.index === 2 ? 'completed' : 'queued';
     return;
