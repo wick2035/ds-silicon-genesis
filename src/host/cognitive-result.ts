@@ -1,5 +1,5 @@
 import {advanceSpirit,checkSpirit} from '../kernel/spirit.js';
-import {applyGoalProposal,goalIsRunnable,mergeDuplicateGoals,resolveGoalId,reviewGoal} from '../kernel/goal-lifecycle.js';
+import {applyGoalProposal,goalIsRunnable,lifeDay,mergeDuplicateGoals,resolveGoalId,reviewGoal} from '../kernel/goal-lifecycle.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { rankGoals, validateProposal } from '../kernel/index.js';
 import type { LifeState, CognitivePlan, DevelopmentRecord } from '../kernel/types.js';
@@ -81,12 +81,24 @@ export class CognitiveResultCoordinator {
         }
         life.legacyGoalReviewDay=state.legacyGoalReviewDay;
         for(const update of candidates.goalUpdates)applyGoalProposal(state,update,new Date().toISOString());
-        const verified=(ids:string[])=>new Set(ids).size>=2 && ids.every(id=>life.events.some(e=>e.eventId===id&&['observed','verified'].includes(e.evidenceLevel)));
+        const topicText=(text:unknown)=>typeof text==='string'?text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,''):'';
+        const verified=(ids:string[],topic?:string)=>{
+          const term=topicText(topic);
+          const evidence=life.events.filter(e=>ids.includes(e.eventId)&&['observed','verified'].includes(e.evidenceLevel));
+          if(evidence.length!==new Set(ids).size||topic&&term.length<2)return false;
+          const outcomes=evidence.map(e=>{
+            const receipt=life.receipts.find(r=>r.receiptId===e.causationId&&r.status==='COMPLETED');
+            const action=receipt&&life.actions.find(a=>a.id===receipt.actionId);
+            const words=e.payload as Record<string,unknown>|undefined;
+            return {at:e.occurredAt,autonomous:action?.autonomous===true,
+              matches:!term||[words?.topic,words?.text,words?.description,action?.parameters.query].some(text=>topicText(text).includes(term))};
+          }).filter(item=>item.matches);
+          return new Set(outcomes.map(item=>lifeDay.format(Date.parse(item.at)))).size>=2&&outcomes.some(item=>item.autonomous);
+        };
         const model=life.selfModel;
-        // One reflection is not enough to change stable identity. Only distinct
-        // observed or verified sources can establish development records.
-        if(model) for(const [category,items] of [['interests',candidates.interests],['personality',candidates.selfModel]] as const) for(const c of items){
-          if(!verified(c.sourceIds))continue;
+        const frozen=(draft.legacy as {growth?:{persona?:{frozen?:boolean}}}|undefined)?.growth?.persona?.frozen===true;
+        if(model) for(const [category,items] of [['interests',candidates.interests],['personality',frozen?[]:candidates.selfModel]] as const) for(const c of items){
+          if(!verified(c.sourceIds,category==='interests'?c.title:undefined))continue;
           const item:DevelopmentRecord={id:key(category,c),label:c.title,value:c.description,sourceIds:[...c.sourceIds],valid:true};
           if(!model[category].some(x=>x.id===item.id))model[category].push(item);
         }

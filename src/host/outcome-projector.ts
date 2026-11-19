@@ -48,7 +48,7 @@ function forcedEffort(draft:CanonicalEnvelope,contract:Obj,next:Obj,human:Obj,ef
  * Unknown, failed and cancelled operations never create positive outcomes. */
 export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, receipt: ExecutionReceipt, occurredAt: string, sourceEventId: string): void {
   if(intent.type==='farm.tend') {
-    if(receipt.status==='completed')completeFarmOperation(draft,intent.payload.parameters as FarmAction,intent.id,Number(receipt.evidence.settledAt));
+    if(receipt.status==='completed')completeFarmOperation(draft,intent.payload.parameters as FarmAction,intent.id,Number(receipt.evidence.settledAt),sourceEventId);
     if(farmVisit(draft)?.actionId===intent.id)setFarmVisit(draft);
     return;
   }

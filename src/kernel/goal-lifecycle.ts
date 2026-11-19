@@ -70,6 +70,27 @@ export function goalIsRunnable(s:Pick<LifeState,'goals'|'invalidSources'>,id?:st
  return true;
 }
 
+export function growResearchInterest(s:LifeState,goalId:string):void {
+ const goal=s.goals.find(g=>g.id===goalId);
+ if(!goal?.research||!s.selfModel)return;
+ const actions=new Set(s.actions.filter(a=>a.goalId===goalId&&a.autonomous&&a.actionType==='learning.observe'&&
+   a.sourceIds.every(id=>active(s,id))).map(a=>a.id));
+ const receipts=new Set(s.receipts.filter(r=>actions.has(r.actionId)&&r.status==='COMPLETED').map(r=>r.receiptId));
+ const evidence=s.events.filter(e=>e.causationId&&receipts.has(e.causationId)&&active(s,e.eventId));
+ if(new Set(evidence.map(e=>lifeDay.format(Date.parse(e.occurredAt)))).size<2)return;
+ const id='interest-goal:'+goalId;
+ if(s.selfModel.interests.some(i=>i.id.startsWith(id+':')&&i.valid))return;
+ s.selfModel.interests.push({id:id+':'+evidence.at(-1)!.eventId,label:goal.title,value:'我曾在不同日子主动查找这个问题的资料。',
+   sourceIds:[...new Set([...goal.sourceIds,...evidence.map(e=>e.eventId)])],valid:true});
+}
+
+function rememberMilestone(s:LifeState,goal:Goal,eventId:string):void {
+ if(!s.selfModel)return;
+ const id='milestone:'+goal.id;
+ if(s.selfModel.autobiography.some(m=>m.id===id))return;
+ s.selfModel.autobiography.push({id,label:goal.title,value:'我完成了这个目标。',sourceIds:[...new Set([...goal.sourceIds,eventId])],valid:true});
+}
+
 export function completeStages(s:LifeState,goal:Goal,eventId:string):void {
  let parent=s.goals.find(g=>g.id===goal.parentId);
  while(parent?.status==='active'&&parent.completion?.type==='stages'){
@@ -77,6 +98,7 @@ export function completeStages(s:LifeState,goal:Goal,eventId:string):void {
   if(children.length!==(parent.completion.count??2)||children.some(g=>g.status!=='completed'||!g.sourceIds.every(id=>active(s,id))))break;
   parent.status='completed';
   parent.sourceIds=[...new Set([...parent.sourceIds,eventId,...children.flatMap(g=>g.sourceIds)])];
+  rememberMilestone(s,parent,eventId);
   parent=s.goals.find(g=>g.id===parent!.parentId);
  }
 }
@@ -133,7 +155,7 @@ export function applyGoalProposal(s:LifeState,p:GoalUpdate,now:string):void {
   const id='goal-understood:'+randomUUID(),summary=p.understanding.trim();
   s.events.push({eventId:id,petId:s.petId,type:'goal.understood',source:'model',occurredAt:now,receivedAt:now,evidenceLevel:'inferred',causationId:source.eventId,payload:{goalId:goal.id,understanding:summary,sourceIds:[source.eventId]}});
   s.memories.push({id:'memory:'+id,kind:'semantic',content:'关于“'+goal.title+'”的理解：'+summary,sourceIds:[source.eventId,id],evidenceLevel:'inferred',valid:true,createdAt:now});
-  goal.status='completed';goal.sourceIds=[...new Set([...goal.sourceIds,source.eventId,id])];completeStages(s,goal,id);return;
+  goal.status='completed';goal.sourceIds=[...new Set([...goal.sourceIds,source.eventId,id])];rememberMilestone(s,goal,id);completeStages(s,goal,id);return;
  }
  const event=s.events.find(e=>e.eventId===p.evidenceId&&active(s,e.eventId)&&['observed','verified'].includes(e.evidenceLevel));
  const action=s.actions.find(a=>a.id===(event?.payload as any)?.actionId&&a.goalId===goal.id), receipt=s.receipts.find(r=>r.receiptId===event?.causationId&&r.actionId===action?.id&&r.status==='COMPLETED');
@@ -144,7 +166,7 @@ export function applyGoalProposal(s:LifeState,p:GoalUpdate,now:string):void {
  } else if(p.kind==='reprioritize'){if(!Number.isFinite(p.priority)||p.priority!<0||p.priority!>100)throw Error('目标优先度无效');goal.priority=p.priority!;}
  const eventId='goal-progress:'+randomUUID();s.events.push({eventId,petId:s.petId,type:'goal.progress',source:'kernel',occurredAt:now,receivedAt:now,evidenceLevel:'observed',causationId:event.eventId,payload:{goalId:goal.id,kind:p.kind,sourceIds:[event.eventId]}});
  if(!goal.sourceIds.includes(event.eventId))goal.sourceIds.push(event.eventId);
- if(goal.status==='completed'){completeStages(s,goal,eventId);}
+ if(goal.status==='completed'){rememberMilestone(s,goal,eventId);completeStages(s,goal,eventId);}
 }
 /** Only commitments with an explicit deadline can be marked broken by time. */
 export function expireCommitments(s:Pick<LifeState,'petId'|'commitments'|'events'|'invalidSources'>,now:string):void {

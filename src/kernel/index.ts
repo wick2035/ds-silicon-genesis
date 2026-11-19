@@ -30,7 +30,8 @@ export function rankGoals(state: LifeState): Array<{ goalId: string; score: numb
     const need = g.kind === 'food' ? state.body.hunger * .35 : g.kind === 'rest' ? (100 - state.body.energy) * .35 : g.kind === 'explore' ? state.emotions.curiosity * .15 : 0;
     const dad = state.relationships.find(r => r.personId === 'dad');
     const cost = g.kind === 'work' ? (100 - state.body.stamina) * .3 + state.body.pain * .3 + Math.max(0,50-(dad?.trust ?? 50))*.4 + Math.min(15,(state.legacyContext?.laborPayment?.overdueAmount??0)*.01) : 0;
-    return { goalId: g.id, score: g.priority + g.urgency + commitment + need - cost };
+    const interest=state.selfModel?.interests.some(i=>i.valid&&i.label===g.title&&i.sourceIds.every(id=>activeSource(state,id)))?12:0;
+    return { goalId: g.id, score: g.priority + g.urgency + commitment + need + interest - cost };
   }).sort((a, b) => b.score - a.score || a.goalId.localeCompare(b.goalId));
 }
 

@@ -1,4 +1,5 @@
 import {randomUUID} from 'node:crypto';
+import {lifeDay} from '../kernel/goal-lifecycle.js';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 import type {LifeState, StrategyObservation} from '../kernel/types.js';
 
@@ -12,15 +13,16 @@ export function workContext(draft:CanonicalEnvelope, contract:{id:string;done:nu
   return {contractId:contract.id,stamina:stamina<30?'low':stamina<60?'medium':'high',phase:contract.done*2<contract.trips?'early':'late'};
 }
 
-export function rankWorkChoices(state:Pick<LifeState,'observations'|'invalidSources'>, context:WorkContext) {
+export function rankWorkChoices(state:Pick<LifeState,'observations'|'invalidSources'|'selfModel'>, context:WorkContext) {
   const samples=state.observations.filter(o=>o.valid&&o.context===contextKey(context)&&
     o.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id)))
     .sort((a,b)=>(a.work?.observedAt??'').localeCompare(b.work?.observedAt??'')).slice(-12);
   const order:WorkChoice[]=context.stamina==='low'?['rest','continue']:['continue','rest'];
   return order.map((choice,index)=>{
     const matches=samples.filter(o=>o.strategy==='work:'+choice);
+    const habit=state.selfModel?.habits.some(h=>h.valid&&h.label==='work:'+choice&&h.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id)));
     return {choice,samples:matches.length,score:samples.length>=3&&matches.length?
-      (matches.filter(o=>o.success).length+1)/(matches.length+2):.5,index,
+      (matches.filter(o=>o.success).length+1)/(matches.length+2)+(habit ? .02 : 0):.5,index,
       sourceIds:[...new Set(matches.flatMap(o=>o.sourceIds))]};
   }).sort((a,b)=>b.score-a.score||a.index-b.index);
 }
@@ -43,6 +45,15 @@ export function recordWorkOutcome(draft:CanonicalEnvelope, decisionId:unknown, e
   const observation:StrategyObservation={id,strategy:'work:'+strategy.choice,context:contextKey(strategy.context),success,
     sourceIds:[decisionId,evidenceId],valid:true,work:{contractId:strategy.context.contractId,observedAt}};
   draft.life.observations.push(observation);
+  const habits=draft.life.selfModel?.habits;
+  if(!success||!habits||habits.some(h=>h.valid&&h.label===observation.strategy))return;
+  const evidence=draft.life.observations.filter(o=>o.valid&&o.strategy===observation.strategy&&o.success&&
+    o.sourceIds.every(id=>!Object.hasOwn(draft.life.invalidSources,id))).slice(-12);
+  const choices=new Map(draft.life.events.filter(e=>e.type==='labor.strategy').map(e=>[e.eventId,e.occurredAt]));
+  const days=new Set(evidence.map(o=>choices.get(o.sourceIds[0])).filter((at):at is string=>!!at).map(at=>lifeDay.format(Date.parse(at))));
+  if(days.size<2)return;
+  habits.push({id:'habit:'+decisionId,label:observation.strategy,value:strategy.choice==='rest'?'我曾在不同日子停下恢复，再继续搬完一趟。':'我曾在不同日子选择继续工作，并顺利搬完下一趟。',
+    sourceIds:[...new Set(evidence.flatMap(o=>o.sourceIds))],valid:true});
 }
 
 export function laborPaymentHistory(state:Pick<LifeState,'events'|'invalidSources'>, now=Date.now()) {

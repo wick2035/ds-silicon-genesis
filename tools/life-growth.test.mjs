@@ -11,6 +11,7 @@ import {projectOutcome} from '../dist/host/outcome-projector.js';
 import {hasLaborResources} from '../dist/host/forced-labor.js';
 import {advanceHumanity,createHumanity} from '../vendor/dsh-pet/src/host/humanity.mjs';
 import {rankWorkChoices,recordWorkChoice,recordWorkOutcome,laborPaymentHistory} from '../dist/host/work-experience.js';
+import {advanceFarm,changeFarmWeather,completeFarmOperation,farmFacts} from '../dist/host/farm.js';
 
 const DAY=86400000;
 const start=Date.parse('2026-11-10T02:00:00Z');
@@ -122,6 +123,8 @@ test('七天轨迹中自主念想跨重启继续，受阻改计划，读到资�
       understanding:quote+'这回答了我想知道歌声怎样被观察到的问题。'}]};
   });
   assert.equal(a.read().life.goals[0].status,'completed');
+  assert.equal(a.read().life.selfModel.autobiography.length,1);
+  assert.equal(a.read().life.selfModel.interests.length,1);
 
   for(const day of [1,2,3]){
     workEpisode(a.read(),day,'continue',false);
@@ -130,6 +133,12 @@ test('七天轨迹中自主念想跨重启继续，受阻改计划，读到资�
     workEpisode(b.read(),day,'rest',false,1);
   }
   for(const [index,run] of [a,b].entries()){
+    run.read().legacy.farmSeedBundles=24;
+    advanceFarm(run.read(),start+3*DAY,'fixed');
+    changeFarmWeather(run.read(),index?'sunny':'heavy-rain',start+3*DAY);
+    completeFarmOperation(run.read(),{operation:'plant'},'season',start+3*DAY);
+    advanceFarm(run.read(),start+4*DAY,'fixed');
+    assert.ok(run.read().life.worldModel.facts.some(f=>f.topic==='farm.settled'&&f.data.qualified===!index));
     const wages=run.read().life.events;
     wages.push(evidence('unpaid','social.labor.unpaid',time(4),{contractId:'wage',outstanding:100}));
     if(index)wages.push(evidence('payment','social.labor.payment',time(4),{contractId:'wage',outstanding:0}));
@@ -164,6 +173,7 @@ test('七天轨迹中自主念想跨重启继续，受阻改计划，读到资�
   assert.equal(bChoice.chosen.choice,'continue');
   assert.equal(bChoice.workState,'running');
   assert.ok(aChoice.chosen.recommendationSourceIds.length&&bChoice.chosen.recommendationSourceIds.length);
+  assert.ok(a.read().life.selfModel.habits.some(h=>h.label==='work:rest'));
   assert.equal(laborPaymentHistory(a.read().life).overdue,1);
   assert.equal(laborPaymentHistory(a.read().life).overdueAmount,100);
   assert.equal(laborPaymentHistory(b.read().life).overdue,0);
@@ -204,13 +214,26 @@ test('待确认回执只卡原计划，迟到回执幂等，删证据后剩余�
   assert.equal(await f.dispatch(),false);
 });
 
-test('权限撤销使待派发计划失败',async()=>{
+test('权限撤销使待派发计划失败，未过期天气和日结事实可追溯',async()=>{
   const f=fixture();f.read().life.goals.push(goal('a'));
   await f.turn(()=>({...empty,plan:[step('a','search')]}));
   f.read().life.constraints.permissions=[];
   await f.dispatch();
   assert.equal(f.read().life.cognitivePlans[0].status,'failed');
   assert.equal(f.read().life.actions.length,0);
+  const d=f.read();
+  d.legacy.farmSeedBundles=24;
+  advanceFarm(d,start,'fixed');
+  const first=d.life.worldModel.facts.at(-1);
+  changeFarmWeather(d,'light-rain',start+60000);
+  const latest=d.life.worldModel.facts.at(-1);
+  assert.notEqual(first.id,latest.id);
+  assert.equal(first.validUntil,new Date(start+60000).toISOString());
+  const now=farmFacts(d,start+60001);
+  assert.equal(now.weatherEventId,latest.sourceIds[0]);
+  d.life.invalidSources[now.weatherEventId]='天气证据失效';
+  invalidateDependents(d.life);
+  assert.equal(latest.valid,false);
 });
 
 test('相同的濒临耗尽情境下，趟间休息后能继续，固定继续策略耗尽',async t=>{

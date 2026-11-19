@@ -11,7 +11,7 @@ import {forcedLaborState} from './forced-labor.js';
 import {sweetPrice} from './spirit-activity.js';
 import {selfActionState} from './self-action-state.js';
 import {checkSpirit,spendSpirit} from '../kernel/spirit.js';
-import {completeReceiptGoals} from '../kernel/goal-lifecycle.js';
+import {completeReceiptGoals,growResearchInterest} from '../kernel/goal-lifecycle.js';
 import {rebuildOutcomeDevelopment} from '../kernel/outcome-development.js';
 import {validateManualService} from './manual-service-validation.js';
 import { validateQQReply } from './qq-canonical.js';
@@ -205,6 +205,7 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
     rebuildOutcomeDevelopment(draft.life as LifeState);
     if(outcome==='COMPLETED')completeReceiptGoals({...draft.life,petId:draft.petId,version:draft.version} as LifeState,action.id,eventId,now);
     action.status = outcome; action.receiptId = receiptId; action.updatedAt = now;
+    if(outcome==='COMPLETED'&&action.goalId&&action.actionType==='learning.observe')growResearchInterest(draft.life as LifeState,action.goalId);
   }
 
   /**
@@ -251,6 +252,7 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
     rebuildOutcomeDevelopment(draft.life as LifeState);
     if(confirmed.status==='COMPLETED')completeReceiptGoals({...draft.life,petId:draft.petId,version:draft.version} as LifeState,action.id,eventId,receivedAt);
     action.status = confirmed.status; action.receiptId = confirmed.receiptId; action.updatedAt = receivedAt;
+    if(confirmed.status==='COMPLETED'&&action.goalId&&action.actionType==='learning.observe')growResearchInterest(draft.life as LifeState,action.goalId);
   }
 
 }

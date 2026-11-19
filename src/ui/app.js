@@ -10,8 +10,8 @@ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const head=p=>`<div class="page-head"><div><h1>${esc(p[1])}</h1><p>${esc(p[2])}</p></div></div>`;
 const empty=(text='还没有记录。')=>`<div class="empty">${esc(text)}</div>`;
 const card=(name,content,cls='',sub='')=>`<section class="card ${cls}"><h2>${esc(name)}</h2>${sub?`<div class="card-sub">${esc(sub)}</div>`:''}${content}</section>`;
-const date=v=>{if(!v)return '时间未知';const d=new Date(v);return Number.isNaN(d.valueOf())?String(v):new Intl.DateTimeFormat('zh-CN',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(d)};
-const status=v=>({active:'进行中',paused:'已暂停',deferred:'已延期',completed:'已完成',failed:'未完成',abandoned:'已放弃',PROPOSED:'已提出',VALIDATED:'已验证',PENDING:'等待执行',DISPATCHED:'执行中',COMPLETED:'已完成',FAILED:'未完成',CANCELLED:'已取消',UNKNOWN:'结果待确认',pending:'待开始',in_progress:'进行中'}[v]||v||'状态未知');
+const date=v=>{if(!v)return '时间未知';const d=new Date(v);return Number.isNaN(d.valueOf())?String(v):new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(d)};
+const status=v=>({active:'进行中',paused:'已暂停',deferred:'已延期',completed:'已完成',failed:'未完成',abandoned:'已放弃',PROPOSED:'已提出',VALIDATED:'已验证',PENDING:'等待执行',DISPATCHED:'执行中',COMPLETED:'已完成',FAILED:'未完成',CANCELLED:'已取消',UNKNOWN:'结果待确认',pending:'待开始',in_progress:'进行中',awaiting_receipt:'结果待确认'}[v]||v||'状态未知');
 const evidence=v=>({observed:'观察所得',verified:'已验证',reported:'他人报告',inferred:'推测',fictional:'虚构'}[v]||'来源未标注');
 const kind=v=>({episodic:'经历',semantic:'知识',procedural:'经验',autobiographical:'个人历程',social:'社交',commitment:'承诺'}[v]||v||'未分类');
 const num=v=>typeof v==='number'&&Number.isFinite(v)?String(Math.round(v*100)/100):'暂无';
@@ -21,7 +21,43 @@ const countSources=v=>Array.isArray(v)?`${v.length} 条来源`:'来源未标注'
 const rows=(arr,render,msg='还没有记录。')=>Array.isArray(arr)?arr.length?`<div class="list">${arr.map(render).join('')}</div>`:empty(msg):empty('数据暂不可用。');
 const line=(name,detail,right='')=>`<article class="row"><div><strong>${esc(name)}</strong>${detail?`<p>${detail}</p>`:''}</div>${right?`<span class="tag">${esc(right)}</span>`:''}</article>`;
 const metric=(label,value)=>`<div class="measure"><div class="metric-label"><span>${esc(label)}</span><b>${esc(num(value))}</b></div>${typeof value==='number'&&Number.isFinite(value)?`<div class="bar"><i style="width:${Math.max(0,Math.min(100,value))}%"></i></div>`:''}</div>`;
-function goalsList(goals,editable=false,sources={}){return rows(goals,g=>{const options=g.status==='active'?[['paused','暂停'],['abandoned','放弃']]:['paused','deferred'].includes(g.status)?[['active','恢复'],['abandoned','放弃']]:[];return `<article class="row"><div><strong>${esc(g.title||'未命名目标')}</strong><p>${esc(readable(g.kind))} · 优先度 ${esc(num(g.priority))} · 紧迫度 ${esc(num(g.urgency))} · ${esc(countSources(g.sourceIds))}</p>${sourceDetails(g.sourceIds,sources)}${editable?`<div class="entry-actions">${options.map(([value,label])=>`<button class="secondary" data-command="goal" data-id="${esc(g.id)}" data-value="${value}" data-expected="${esc(g.status)}">${label}</button>`).join('')}</div>`:''}</div><span class="tag">${esc(status(g.status))}</span></article>`},'暂时没有目标记录。')}
+function goalsList(goals,editable=false,sources={},plans=[]){
+  const titles=new Map((goals??[]).map(goal=>[goal.id,goal.title]));
+  return rows(goals,goal=>{
+    const options=goal.status==='active'?[['paused','暂停'],['abandoned','放弃']]:
+      ['paused','deferred'].includes(goal.status)?[['active','恢复'],['abandoned','放弃']]:[];
+    const history=plans.filter(plan=>plan.goalId===goal.id).slice().reverse();
+    const current=history.find(plan=>plan.status==='active')??history[0];
+    const step=current?.steps.find(item=>['pending','in_progress','awaiting_receipt'].includes(item.status));
+    const awaiting=step?.status==='awaiting_receipt';
+    const summary=goal.status==='deferred'&&goal.review
+      ? `<p>${esc(goal.review.reason)} · ${esc(date(goal.review.at))}复核</p>`
+      : goal.status==='active'&&step&&current.status==='active'
+        ? `<p><strong>${awaiting?'等待确认':'接下来'}</strong> · ${esc(step.description)}</p>`
+        : goal.status==='active'&&current?.reviewReason?`<p>${esc(current.reviewReason)}</p>`:'';
+    const stages=history.length?`<details class="source-detail"><summary>查看计划与回执</summary>${history.map(plan=>
+      `<ol class="goal-steps">${plan.steps.map(item=>`<li><div class="goal-step-label">${esc(item.description)} <span>${esc(status(item.status))}</span></div>
+      ${item.receiptEventId?sourceDetails([item.receiptEventId],sources):''}</li>`).join('')}</ol>`).join('')}</details>`:'';
+    return `<article class="row goal-row"><div><strong>${esc(goal.title||'未命名目标')}</strong>
+      ${goal.parentId&&titles.has(goal.parentId)?`<p>阶段目标 · ${esc(titles.get(goal.parentId))}</p>`:''}
+      ${summary}${editable?stages:''}${sourceDetails(goal.sourceIds,sources)}
+      ${editable&&options.length?`<div class="entry-actions">${options.map(([value,label])=>
+        `<button class="secondary" data-command="goal" data-id="${esc(goal.id)}" data-value="${value}" data-expected="${esc(goal.status)}">${label}</button>`).join('')}</div>`:''}
+      </div><span class="tag">${esc(status(goal.status))}</span></article>`;
+  },'有了她想继续的事，就会在这里看到下一步。');
+}
+function growthEvidence(data){
+  const habitNames={'work:rest':'先恢复再搬','work:continue':'接着搬下一趟'};
+  const facts=(data.worldModel?.facts??[]).filter(record=>record.valid).slice(-8).reverse();
+  const personal=[...(data.selfModel?.habits??[]),...(data.selfModel?.autobiography??[])].filter(record=>record.valid).slice(-8).reverse();
+  const renderRecord=(record,title)=>`<article class="row goal-row"><div><strong>${esc(title)}</strong>
+    <p>${esc(record.value)}</p>${sourceDetails(record.sourceIds,data.sources)}</div></article>`;
+  return card('她记住的稻田',rows(facts,record=>renderRecord(record,
+    ({'farm.weather':'天气','farm.tended':'农活','farm.settled':'日结'}[record.topic]||record.label)+' · '+(record.day||'')),
+    '随着天气变化和农活完成，这里会积累她能用上的经验。'),'half')+
+    card('习惯与历程',rows(personal,record=>renderRecord(record,habitNames[record.label]||record.label),
+    '多次选择和完成的事，会慢慢形成她的习惯。'),'half');
+}
 function actionList(actions,sources){return rows(actions,a=>`<article class="row"><div><strong>${esc(({'service.buy-rice':'准备饭菜','service.eat-rice':'吃饭','care.feed':'接受喂饭','labor.step':'工作','learning.observe':'查阅资料','image.observe':'观察图片','body.sleep':'休息','body.wake':'醒来','token.pickup':'捡起零花钱'}[a.actionType]||'处理生活事务'))}</strong><p>更新于 ${esc(date(a.updatedAt))}</p>${sourceDetails(a.sourceIds,sources)}</div><span class="tag">${esc(status(a.status))}</span></article>`,'此刻没有待执行的行动。')}
 function bodyCard(body){if(!body)return card('身体状态',empty('身体状态暂不可用。'),'two-thirds');const labels={energy:'精力',stamina:'体力',hunger:'饥饿',hydration:'水分',comfort:'舒适',pain:'痛苦'};const flags=[['sleeping','睡眠中'],['restrained','受限制'],['injured','受伤']].filter(([k])=>body[k]===true).map(([,v])=>v);return card('身体状态',`<div class="metrics body-metrics">${Object.entries(labels).map(([k,v])=>metric(v,body[k])).join('')}</div><p class="state-note">${flags.length?esc(flags.join(' · ')):'没有标记中的身体限制'}</p>`,'two-thirds','身体数值随真实状态更新')}
 function emotionCard(emotions){if(!emotions)return card('情绪',empty('情绪状态暂不可用。'),'third');const labels={joy:'喜悦',sadness:'悲伤',anger:'愤怒',fear:'害怕',love:'爱',aversion:'厌恶',longing:'思念',curiosity:'好奇',loneliness:'孤独'};return card('情绪',`<div class="emotion-list">${Object.entries(labels).map(([k,v])=>`<div><span>${esc(v)}</span><strong>${esc(num(emotions[k]))}</strong></div>`).join('')}</div>`,'third','此刻的情绪状态')}
@@ -63,7 +99,7 @@ function renderGrowth(data){
   return `<div class="growth-heading${showMoments?' is-moments':''}">
     <h1>${showMoments?'大肥鱼的说说':'成长档案'}</h1>
     <div class="growth-switch" role="group" aria-label="成长内容">${tabs.map(([id,label])=>`<button type="button" data-growth-section="${id}" aria-pressed="${growthSection===id}">${label}</button>`).join('')}</div>
-  </div>${showMoments?momentsFeed(data?.moments):memoryGraphMarkup()+growth(data)}`;
+  </div>${showMoments?momentsFeed(data?.moments):`<div class="grid growth-evidence">${growthEvidence(data||{})}</div>`+memoryGraphMarkup()+growth(data)}`;
 }
 function dailyRows(items,render,timestamp,label){
   if(!Array.isArray(items))return empty('数据暂不可用。');
@@ -132,7 +168,7 @@ async function sendChat(form){
   },value=>{usage=value;},value=>{meme=value;});pendingChat=null;chatSending=false;if(page==='chat'){const current=view.querySelector('#chat-messages');current?.querySelector('[data-pending-user] .chat-meta')?.replaceChildren('我');current?.querySelector('.chat-pending')?.remove();if(current){current.querySelector('[data-streaming]')?.remove();appendChatMessage(current,'assistant',reply,usage?`大肥鱼 · 输入 ${usage.inputTokens} / 输出 ${usage.outputTokens} tokens`:'大肥鱼',meme);current.scrollTop=current.scrollHeight}const b=view.querySelector('#chat-form button[type="submit"]');if(b){b.disabled=false;b.textContent='发送消息'}}}
   catch(error){pendingChat=null;chatSending=false;chatFeedback=error.message||'发送失败，请检查连接后重试。';if(!chatDraft){chatDraft=message;if(!chatMoment)chatMoment=quoted;if(page==='chat'&&view.querySelector('#chat-text')){view.querySelector('#chat-text').value=message;updateChatQuote(view.querySelector('#chat-form'))}}if(!chatFile&&file){chatFile=file;if(page==='chat'&&view.querySelector('#chat-file-name'))view.querySelector('#chat-file-name').textContent=file.name}if(page==='chat'){const current=view.querySelector('#chat-messages');const failed=current?.querySelector('[data-pending-user]');failed?.removeAttribute('data-pending-user');failed?.querySelector('.chat-meta')?.replaceChildren('我 · 未完成');current?.querySelector('.chat-pending')?.remove();current?.querySelector('[data-streaming]')?.remove();const result=view.querySelector('#chat-result'),b=view.querySelector('#chat-form button[type="submit"]');if(result)result.textContent=chatFeedback;if(b){b.disabled=false;b.textContent='发送消息'}}}
 }
-function render(data){if(page==='chat')return head(pages.chat)+chatPanel(data);if(page==='current')return head(pages[page])+current(data);if(page==='settings')return head(pages[page])+settings(data)+renderModel(data?.model);if(page==='finance')return head(pages[page])+renderFinance(data);if(page==='companion')return head(pages[page])+renderCompanion(data);if(page==='growth')return renderGrowth(data);const content=page==='goals'?goalsList(data?.items,true,data?.sources):page==='timeline'?timeline(data):relations(data);const label={goals:'全部目标',timeline:'生命轨迹',relationships:'关系记录'}[page];return head(pages[page])+`<div class="grid">${card(label,content,'full')}</div>`}
+function render(data){if(page==='chat')return head(pages.chat)+chatPanel(data);if(page==='current')return head(pages[page])+current(data);if(page==='settings')return head(pages[page])+settings(data)+renderModel(data?.model);if(page==='finance')return head(pages[page])+renderFinance(data);if(page==='companion')return head(pages[page])+renderCompanion(data);if(page==='growth')return renderGrowth(data);const content=page==='goals'?goalsList(data?.items,true,data?.sources,data?.plans):page==='timeline'?timeline(data):relations(data);const label={goals:'全部目标',timeline:'生命轨迹',relationships:'关系记录'}[page];return head(pages[page])+`<div class="grid">${card(label,content,'full')}</div>`}
 const pageCache=new Map();
 function showPage(data,{stale=false}={}){
   currentVersion=stale?null:(Number.isSafeInteger(data?.version)?data.version:null);

@@ -15,7 +15,14 @@ export interface BodyLimits { allowSleeping?: boolean; allowRestrained?: boolean
 export interface Capability { name: string; enabled: boolean; requiresPermission?: string; physical?: boolean; bodyLimits?: BodyLimits }
 export interface DevelopmentRecord { id: string; label: string; value: string; sourceIds: string[]; valid: boolean }
 export interface SelfModel { personality: DevelopmentRecord[]; preferences: DevelopmentRecord[]; abilities: DevelopmentRecord[]; limitations: DevelopmentRecord[]; values: DevelopmentRecord[]; interests: DevelopmentRecord[]; habits: DevelopmentRecord[]; autobiography: DevelopmentRecord[] }
-export interface WorldModel { facts: DevelopmentRecord[] }
+export interface WorldFact extends DevelopmentRecord {
+  topic?: 'farm.weather'|'farm.tended'|'farm.settled';
+  observedAt?: string;
+  day?: string;
+  validUntil?: string;
+  data?: Record<string,unknown>;
+}
+export interface WorldModel { facts: WorldFact[] }
 export interface RuntimeConstraints { paused: boolean; permissions: string[]; capabilities: Capability[]; remainingBudget: number; budgetDay?:string; interactiveRemaining?:number|null }
 export interface ActionProposal { id: string; petId: string; actionType: string; parameters: Record<string, unknown>; priority: number; interruptPolicy: 'interruptible' | 'safe-point' | 'noninterruptible'; requiredCapabilities: string[]; expectedStateVersion: number; sourceIds: string[]; goalId?: string }
 export interface LifeAction extends ActionProposal { autonomous?:boolean; status: ActionStatus; createdAt: string; updatedAt: string; receiptId?: string }

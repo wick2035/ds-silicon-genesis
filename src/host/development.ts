@@ -47,7 +47,6 @@ export function createDevelopment(store:Reader,gate:PetGate,uow:UnitOfWork,budge
           if(kind==='diary'){if(p.diaries?.[date]||p.deletedDays?.includes(date))throw Error('日记已变化');p.diaries||={};p.diaries[date]={date,text:data.text.trim(),sources,revision:1,updatedAt:Date.now(),canonicalMemoryId:memoryId};}
           draft.life.events.push({eventId,petId:id,type:'development.'+kind,source:'model',occurredAt:at,receivedAt:at,evidenceLevel:'inferred',payload:{sourceIds:sources}});
           draft.life.memories.push({id:memoryId,kind:kind==='diary'?'autobiographical':'semantic',content:data.text.trim(),sourceIds:[eventId,...sources],evidenceLevel:'inferred',valid:true,createdAt:at});
-          if(kind==='reflection' && sources.length>=2 && draft.life.selfModel)draft.life.selfModel.interests.push({id:'interest:'+randomUUID(),label:'整理出的兴趣线索',value:data.text.trim(),sourceIds:[eventId,...sources],valid:true});
           record.status='completed';record.finishedAt=Date.now();record.sourceIds=sources;return {};});});return true;
     }catch(error){await gate.run(id,async()=>{const state=await store.loadEnvelope(id);if(!state||gate.signal.aborted)return;await uow.apply(id,state.version,draft=>{const record=(draft.legacy as any).developmentClaims?.[claim.key];if(record?.status==='running')record.status='failed';return {};});}).catch(()=>{});throw error;}
   }
