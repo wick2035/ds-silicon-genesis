@@ -1,0 +1,135 @@
+.rice-cooker-launcher,
+.rice-cooker-panel {
+  position: absolute;
+  pointer-events: auto;
+  font: 500 12px/1.45 "Microsoft YaHei UI", system-ui, sans-serif;
+  color: #182a40;
+}
+
+.rice-cooker-launcher[hidden],
+.rice-cooker-panel [hidden],
+.rice-cooker-panel[hidden] { display: none; }
+
+.rice-cooker-launcher {
+  z-index: 5;
+  display: grid;
+  justify-items: center;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.rice-cooker-art {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+}
+
+.rice-cooker-art img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  filter: drop-shadow(0 3px 3px #14203538);
+}
+.rice-cooker-launcher[data-cooking="true"] .rice-cooker-art { aspect-ratio: 1 / .66; }
+.rice-cooker-launcher[data-cooking="true"] .rice-cooker-art img {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: auto;
+  aspect-ratio: 1;
+}
+
+.rice-cooker-caption {
+  position: relative;
+  margin-top: -1px;
+  border: 1px solid #ffffff30;
+  padding: 2px 7px;
+  border-radius: 20px;
+  background: #172940f5;
+  color: #f7fbff;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.rice-cooker-launcher:hover .rice-cooker-caption,
+.rice-cooker-launcher[aria-expanded="true"] .rice-cooker-caption { background: #294967; }
+
+.rice-cooker-launcher:focus-visible .rice-cooker-caption { outline: 2px solid #a6d2ff; outline-offset: 2px; }
+.rice-cooker-launcher:focus-visible { outline: none; }
+
+.rice-cooker-steam {
+  position: absolute;
+  display: none;
+  inset: -9% 25% auto;
+  height: 55%;
+  pointer-events: none;
+}
+
+.rice-cooker-launcher[data-cooking="true"] .rice-cooker-steam { display: block; }
+.rice-cooker-steam i {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 21%;
+  height: 75%;
+  border-radius: 55%;
+  background: radial-gradient(ellipse, #f5faffb8, #e8f4ff08 72%);
+  filter: blur(1.8px);
+  animation: rice-cooker-rise 2.6s ease-out infinite;
+}
+.rice-cooker-steam i + i { left: 36%; animation-delay: -1.3s; }
+@keyframes rice-cooker-rise {
+  0% { opacity: 0; transform: translate(0, 5%) scale(.6); }
+  24% { opacity: .78; }
+  100% { opacity: 0; transform: translate(-30%, -125%) scale(1.6); }
+}
+
+.rice-cooker-panel {
+  box-sizing: border-box;
+  z-index: 21;
+  padding: 11px 12px 12px;
+  border: 1px solid #d6e1eb;
+  border-radius: 14px;
+  background: linear-gradient(158deg, #ffffff, #eff5fb);
+  box-shadow: 0 7px 18px #101e3038, inset 0 1px #fff;
+}
+
+.rice-cooker-header,
+.rice-cooker-facts,
+.rice-cooker-actions { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.rice-cooker-header h2 { margin: 0; font-size: 13px; font-weight: 750; }
+.rice-cooker-facts { align-items: baseline; margin: 4px 0 0; flex-wrap: wrap; }
+.rice-cooker-status { font-weight: 650; }
+.rice-cooker-raw { color: #52647b; font-size: 11px; }
+.rice-cooker-actions:has(button:not([hidden])) { margin-top: 9px; }
+.rice-cooker-actions:has(.rice-cooker-submit[hidden]) { display: none; }
+.rice-cooker-panel button {
+  box-sizing: border-box;
+  min-width: 29px;
+  min-height: 29px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 7px;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.rice-cooker-panel button:focus-visible { outline: 2px solid #3479ad; outline-offset: 2px; }
+.rice-cooker-panel button:disabled { opacity: .53; cursor: default; }
+.rice-cooker-panel .rice-cooker-close { min-width: 24px; min-height: 24px; background: transparent; color: #52647b; font-size: 17px; }
+.rice-cooker-quantity { display: flex; align-items: center; gap: 3px; }
+.rice-cooker-quantity button { background: #e0ebf5; font-size: 15px; }
+.rice-cooker-quantity output { min-width: 16px; text-align: center; font-variant-numeric: tabular-nums; }
+.rice-cooker-panel .rice-cooker-submit { padding: 4px 10px; background: #1f4869; color: #fff; font-weight: 650; white-space: nowrap; }
+.rice-cooker-panel .rice-cooker-submit:hover:enabled { background: #2d607e; }
+.rice-cooker-message { margin: 8px 0 0; color: #4a5f74; font-size: 11px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .rice-cooker-launcher[data-cooking="true"] .rice-cooker-steam { display: none; }
+}

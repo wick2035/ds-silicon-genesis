@@ -2,6 +2,8 @@ import {farmVisit} from './farm.js';
 import {reserveExploration} from './exploration-budget.js';
 import {hasActiveConversation} from './active-conversation.js';
 import {validateRicePurchase} from './rice-purchase.js';
+import {validateStartCooking} from './rice-cooker.js';
+import {availableRice,validateRiceMeal} from './rice-inventory.js';
 import {forcedLaborState} from './forced-labor.js';
 import {sweetPrice} from './spirit-activity.js';
 import {selfActionState} from './self-action-state.js';
@@ -34,6 +36,14 @@ export class ActionCoordinator {
       if(action.actionType==='body.sleep'&&hasActiveConversation(draft)&&!(draft.legacy as any).manualServiceRequests?.[action.id]&&!action.sourceIds.some(id=>id.startsWith('chat-user:')||id.startsWith('needs:')))throw Error('还有正在进行的决定，先完成这轮');
       if(action.actionType==='service.sweet')sweetPrice(draft);
       if(action.actionType==='service.buy-rice')validateRicePurchase(draft);
+      if(action.actionType==='service.cook-rice')validateStartCooking(draft,action.parameters.bowls);
+      if(action.actionType==='service.eat-rice') {
+        const itemId=action.parameters.itemId;
+        validateRiceMeal(draft,itemId);
+        const available=availableRice(draft), selected=available.find(bowl=>bowl.id===itemId);
+        if(!selected)throw Error('这碗饭正在使用，请刷新库存');
+        if(selected.source==='fridge'&&available[0]?.source==='cooker')throw Error('锅里还有熟饭，请先吃锅里的饭');
+      }
       if(action.actionType!=='labor.step')checkSpirit(draft.life,action.actionType,this.now().valueOf());
       validateActionParameters(action.actionType,action.parameters);
       const state: LifeState = {...draft.life, petId, version:draft.version, ...projectActionBody(draft,this.body(draft),action.actionType)};

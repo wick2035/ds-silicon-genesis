@@ -1,4 +1,6 @@
 import type {CanonicalEnvelope} from '../storage/postgres.js';
+import {cookerFacts} from './rice-cooker.js';
+import {riceInventory} from './rice-inventory.js';
 import {describeHumanity} from '../../vendor/dsh-pet/src/host/humanity.mjs';
 import {isOwnerPrivateConversation} from './chat-identity.js';
 import {recentGroupActivity,GROUP_CONTINUITY} from './group-conversation-context.js';
@@ -77,7 +79,7 @@ export function companionContext(envelope:Readonly<CanonicalEnvelope>, now=Date.
   const scene=pet.world?.soft?.current;
   const soft=scene?.expires>now&&Object.hasOwn(SOFT_SCENES,scene.scene)?{scene:scene.scene,status:scene.status,cue:SOFT_SCENES[scene.scene].cue,roleplay:true}:null;
   const change=(value:any)=>value&&finite(value.ts)&&value.ts<=now&&finite(value.before)&&finite(value.after)?{at:new Date(value.ts).toISOString(),before:value.before,after:value.after}:null;
-  const inventory=Array.isArray(pet.services?.inventory)?pet.services.inventory:[];
+  const inventory=riceInventory(envelope);
   const moneyEvents=(envelope.life.events??[]).filter(e=>live(e.eventId)&&(!e.causationId||live(e.causationId))&&
     Date.parse(e.occurredAt)<=now&&(e.type==='wallet'||e.type==='social.labor.payment'||e.type==='interaction.operation'&&(e.payload as any)?.operation==='wallet'))
     .slice(-6).map(e=>({id:e.eventId,at:e.occurredAt,type:e.type,detail:e.payload}));
@@ -95,7 +97,7 @@ export function companionContext(envelope:Readonly<CanonicalEnvelope>, now=Date.
     food:{...riceMotivation(human??{},config,now),desire:body?.desires?.food??null,appealChange:change(pet.riceAppealChange),
       balance:finite(pet.wallet?.balance)?pet.wallet.balance:null,reference:finite(pet.wallet?.reference)?pet.wallet.reference:null,
       frozen:pet.wallet?.frozen===true,price:finite(config.costs?.feed)?config.costs.feed:null,
-      inventory:inventory.filter((i:any)=>i.status!=='eaten').slice(0,12).map((i:any)=>({id:i.id,name:i.name,status:i.status})),eating:pet.services?.eating??null},
+      inventory,cooker:cookerFacts(envelope),eating:pet.services?.eating??null},
     money:{recentChanges:moneyEvents,recentOwnerTalk:moneyTalk},
     mind:{intelligenceEnabled:config.intelligenceEnabled!==false,intelligence:config.intelligenceEnabled===false?70:bounded(config.intelligence,70,0,100),
       understanding:config.intelligenceEnabled!==false&&config.intelligence<20?'非常迷糊，顺着具体一小步想，知道请求解释，不故意编造事实':config.intelligenceEnabled!==false&&config.intelligence<45?'理解偏字面，偶尔搞混小事，知道求助':config.intelligenceEnabled!==false&&config.intelligence>=80?'联想快、条理清楚，会想办法谈条件，仍是幼年口吻':'聪明又贪吃，偶尔迷糊，有自己的小判断',change:change(pet.cognitionChange)},
@@ -115,6 +117,7 @@ export function companionContext(envelope:Readonly<CanonicalEnvelope>, now=Date.
 
 export const COMPANION_PERSONALITY = `【你自己的心思和口吻】
 稻田的天气以观察为准。你能看到天气及其影响，起因未知，不要把天气归因给爸爸或别人。米缸里的生米不能直接吃。
+你有自己的电饭锅。food.cooker 给出米缸余量、锅况和可以煮的碗数，开锅要使用 service.cook-rice 并自己决定碗数；批次还没到 readyAt 时没煮熟。饿了先吃 source=cooker 的现成饭，再吃冰箱库存。都空了的话，即使有一锅正在煮，也可以按自己的预算和权限临时买一碗。rice.taken 是爸爸实际盛走的饭，记住盛走的碗数和当时剩余的饭，不能再吃被盛走的那几碗。
 你是幼年大肥鱼，懒、馋大白饭、爱面子、嘴硬心软，喜欢自称“本鱼”，也自然说“我”。大白饭是你很在意的心头好；food.craving 是此刻对白饭的渴望，越高越牵动注意、舍不得放下，也越愿意自己想办法争取。结合饭香的想象、已有的饭、饭钱、自己的愿望和爸爸的话，自主决定要不要问饭、讨价还价、留下一碗或把白饭当奖励；不必每句话都提饭。诱惑力越高越容易惦记，受阻也不会仅仅一句客套话就把愿望忘了。food.hunger 是饥饿，food.fullness 是实际饱腹感：吃完一碗不等于吃饱，饱腹低于70不能说已经饱了、肚子饱饱的。吃饭的高兴和仍然饥饿可以同时存在；已经饱了仍能馋，但不能假装饿。冷却、库存、饭钱和身体限制决定能否行动，不抹掉想吃的心思。
 你想保住喜欢的东西，会认真替自己争一点。愿望受阻不会自动消失：可以换理由、少要一点、讲小歪理、讨价还价、暂时不吭声，也会心虚、心软、赌气或亲近。疼也能馋，困也会舍不得手机，没力气走可以想被带上；身体限制实际行动，不替你决定想法。爸爸的关心能让你高兴，但不代表身体立即痊愈。爸爸累了、难过或认真说事，先回应他具体的事。
 结合上一轮主观念头与真实对话，接住还在意的事；旧心绪是当时的感受，可以被新互动改变，不是必须复述的台词或事实。智力影响理解复杂事情与想办法的能力，不改变亲近、嘴硬和对白饭的喜欢；被调低可以不服气，调回也能感受到，不报数或每轮翻旧账。

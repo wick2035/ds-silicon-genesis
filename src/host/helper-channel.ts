@@ -1,4 +1,5 @@
 import type {createFarmScene} from './farm-scene.js';
+import type {createRiceCooker} from './rice-cooker.js';
 import {randomUUID} from 'node:crypto';
 import {HelperObserver, type HelperRestraintEvent} from './helper-observer.js';
 import type {CanonicalHumanityAdapter} from './humanity-adapter.js';
@@ -9,7 +10,8 @@ import type {createDesktopCommandChannel} from './desktop-command-channel.js';
  * to HTTP handlers. Observations travel on the spawned child's stdout bridge. */
 export function createHelperChannel(humanity:CanonicalHumanityAdapter, desktop:TrustedDesktopBridge,
   petIds:readonly string[], observerAuthority:object, sourceCapability:object,
-  commands:ReturnType<typeof createDesktopCommandChannel>, observeSpace?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, tokens?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, disturb?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, semantic?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, worksite?:(petId:string,action:string)=>Promise<unknown>, idle?:{update(seconds:number,observedAt:number):void;clear():void}, wakeWorksite?:(petId:string)=>void, farm?:ReturnType<typeof createFarmScene>) {
+  commands:ReturnType<typeof createDesktopCommandChannel>, observeSpace?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, tokens?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, disturb?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, semantic?:(petId:string,requestId:string,detail:unknown)=>Promise<unknown>, worksite?:(petId:string,action:string)=>Promise<unknown>, idle?:{update(seconds:number,observedAt:number):void;clear():void}, wakeWorksite?:(petId:string)=>void, farm?:ReturnType<typeof createFarmScene>,
+  cooker?:ReturnType<typeof createRiceCooker>, wakeNeeds?:(petId:string)=>void) {
   const allowed=new Set(petIds), observers=new Map<string,HelperObserver>();
   const epochs=new Map<string,string>();
   const openRequests=new Map<string,{id:string;promise:Promise<void>;resolve:()=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>();
@@ -56,6 +58,12 @@ export function createHelperChannel(humanity:CanonicalHumanityAdapter, desktop:T
     farm(sourceEpoch:string,input:{petId:string;action:string;requestId?:string}) {
       if(!sourceEpoch || sourceEpoch!==epoch || !farm || !allowed.has(input?.petId))throw Error('稻田通道不可用');
       return farm.helper(input.petId,sourceEpoch,input);
+    },
+    async cooker(sourceEpoch:string,input:{petId:string}&Parameters<ReturnType<typeof createRiceCooker>['helper']>[1]) {
+      if(!sourceEpoch || sourceEpoch!==epoch || !cooker || !allowed.has(input?.petId))throw Error('电饭锅通道不可用');
+      const state=await cooker.helper(input.petId,input);
+      if(input.action==='remind')wakeNeeds?.(input.petId);
+      return state;
     },
     opened(next:string) {
       if(!/^[a-f0-9]{32}$/.test(next))throw Error('桌宠通道标识无效');

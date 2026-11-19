@@ -88,6 +88,10 @@ export function createDomainExecutors(bridge: TrustedDesktopBridge): ReadonlyMap
       return {status:'completed',evidence:{actionId:intent.id,kind:'service.buy-rice',confirmed:true}};
     }],
     ['service.eat-rice',(petId,intent,signal) => bridge.execute(petId,intent,signal)],
+    ['service.cook-rice',async (petId,intent,signal) => {
+      if(signal.aborted || intent.payload.petId!==petId || intent.payload.actionId!==intent.id)return {status:'cancelled',evidence:{reason:'这次开锅已取消'}};
+      return {status:'completed',evidence:{actionId:intent.id,kind:intent.type,confirmed:true}};
+    }],
     ['care.feed',(petId,intent,signal) => bridge.execute(petId,intent,signal)],
     ['care.water',(petId,intent,signal) => bridge.execute(petId,intent,signal)],
     ['care.pet',(petId,intent,signal) => bridge.execute(petId,intent,signal)],

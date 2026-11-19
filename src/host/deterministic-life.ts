@@ -57,12 +57,12 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     if(Number.isFinite(human.restingUntil) && human.restingUntil>Date.now()&&!(resting.legacy as any).labor?.contracts?.some((c:any)=>c.status==='working'&&c.workPermit))return;
     const state=await reader.loadEnvelope(petId);
     if(signal.aborted || !state || state.life.constraints.paused)return;
-    const legacy=state.legacy as Record<string,any>, inventory=legacy.services?.inventory;
+    const legacy=state.legacy as Record<string,any>, inventory=legacy.services?.inventory, meals=availableRice(state);
     // Only the worksite body may perform physical work while she is inside.
     // Desktop-only meals and coin pickup wait until she returns.
     const inWorksite=legacy.worksite?.inside===true;
     const mealDue=riceMotivation(human,legacy.config??{}).mealDue;
-    if(!needsManaged && !inWorksite && mealDue && Array.isArray(inventory) && availableRice(state).length>0) {
+    if(!needsManaged && !inWorksite && mealDue && meals.length>0) {
       if(!state.life.actions.some(a=>a.actionType==='service.eat-rice' && ['PENDING','DISPATCHED'].includes(a.status)))
         await service(petId,{key:'auto-meal:'+Math.floor(Date.now()/60000),command:'/吃'},'autonomous');
       return;
@@ -70,7 +70,7 @@ export function createDeterministicLife(humanity:CanonicalHumanityAdapter,reader
     // Buying is a real, separately authorized purchase. Never manufacture a
     // free meal or retry an unconfirmed purchase merely because time passed.
     const price=legacy.config?.costs?.feed, wallet=legacy.wallet;
-    if(!needsManaged && !inWorksite && mealDue && Array.isArray(inventory) && !inventory.some((i:any)=>i.status==='available') &&
+    if(!needsManaged && !inWorksite && mealDue && Array.isArray(inventory) && !meals.length && !inventory.some((i:any)=>i.status==='available') &&
        Number.isFinite(price) && price>0 && wallet?.frozen!==true && Number.isFinite(wallet?.balance) && wallet.balance>=price &&
        state.life.constraints.capabilities.some(c=>c.name==='service.buy-rice'&&c.enabled) &&
        !state.life.actions.some(a=>a.actionType==='service.buy-rice'&&['PENDING','DISPATCHED','UNKNOWN'].includes(a.status))) {

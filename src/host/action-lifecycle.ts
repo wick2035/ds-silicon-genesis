@@ -1,5 +1,6 @@
 import {farmActionTarget,farmFacts,farmVisit,type FarmAction} from './farm.js';
 import {checkFarmBody,checkFarmReceipt} from './farm-scene.js';
+import {validateStartCooking} from './rice-cooker.js';
 import {hasForcedWork} from './forced-labor.js';
 import {hasActiveConversation} from './active-conversation.js';
 import {settleGroupOpener} from './qq-group-proactive-policy.js';
@@ -104,6 +105,7 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
       if(action.actionType==='body.sleep'&&hasActiveConversation(draft)&&!(draft.legacy as any).manualServiceRequests?.[action.id]&&!action.sourceIds.some(id=>id.startsWith('chat-user:')||id.startsWith('needs:')))throw Error('还有正在进行的决定，先完成这轮');
       if(action.actionType==='service.sweet')sweetPrice(draft);
       if(action.actionType==='service.buy-rice')validateRicePurchase(draft);
+      if(action.actionType==='service.cook-rice')validateStartCooking(draft,action.parameters.bowls);
       if(action.actionType==='service.eat-rice')validateRiceMeal(draft,action.parameters.itemId);
       if(action.actionType!=='labor.step')checkSpirit(draft.life,action.actionType,this.clock().valueOf());
       const proposal={...action, expectedStateVersion:draft.version};

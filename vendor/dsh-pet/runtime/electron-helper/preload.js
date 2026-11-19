@@ -59,6 +59,7 @@ contextBridge.exposeInMainWorld('petBridge', {
   openHumanity() { ipcRenderer.send('pet:open-humanity'); },
   openWorksite() { ipcRenderer.send('pet:open-worksite'); },
   openFarm() { ipcRenderer.send('pet:open-farm'); },
+  riceCooker(input) { return ipcRenderer.invoke('pet:rice-cooker',input); },
   dropInWorksite() { return ipcRenderer.invoke('pet:drop-worksite'); },
   openDshSite(url) {
     ipcRenderer.send('pet:open-site', { url });

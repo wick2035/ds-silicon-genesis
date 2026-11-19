@@ -42,6 +42,7 @@ export function importLegacy(input: LegacyImportInput): LegacyImportResult {
   // The executor also checks the imported per-ability grant at dispatch time.
   life.constraints.capabilities = [
     {name:'service.buy-rice',enabled:true},
+    {name:'service.cook-rice',enabled:true},
     {name:'care.feed',enabled:true,physical:true,bodyLimits:{allowInjured:true,minStamina:-1,maxPain:101}},
     {name:'service.eat-rice',enabled:true,physical:true,bodyLimits:{allowInjured:true,minStamina:-1,maxPain:101}},
     {name:'labor.step',enabled:true,physical:true,bodyLimits:{allowSleeping:true,allowRestrained:true,allowInjured:true,minStamina:-101,maxPain:101}},

@@ -60,6 +60,13 @@ export function purchaseFarmSeeds(draft:Pick<CanonicalEnvelope,'legacy'|'life'|'
 export const farmDay = (at:number) => hongKongDate.format(at);
 const dayStart = (date:string) => Date.parse(`${date}T00:00:00+08:00`);
 export const farmVisit = (draft:Pick<CanonicalEnvelope,'legacy'>) => storage(draft).farmVisit;
+export const rawRiceBowls = (draft:Pick<CanonicalEnvelope,'legacy'>) => storage(draft).farm?.rawBowls ?? 0;
+
+export function useRawRice(draft:CanonicalEnvelope,bowls:number) {
+  const farm=storage(draft).farm;
+  if(!farm || !Number.isSafeInteger(bowls) || bowls<1 || farm.rawBowls<bowls)throw Error('米缸里的生米不足');
+  farm.rawBowls-=bowls;
+}
 export function setFarmVisit(draft:CanonicalEnvelope, visit?:FarmVisit) {
   if (visit) storage(draft).farmVisit = visit;
   else delete storage(draft).farmVisit;

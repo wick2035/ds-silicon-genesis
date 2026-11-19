@@ -33,6 +33,7 @@ Object.assign(PetSprite.prototype, {
       { label: '身心小记', action: 'humanity' },
       { label: '打开搬砖工地', action: 'worksite' },
       { label: '稻田', action: 'farm' },
+      ...(this.riceCooker?[{label:'电饭锅',action:'rice-cooker'}]:[]),
       { label: '查看余额', action: 'show-balance' },
       // 「待办事项」是待办面板的唯一入口（单击宠物不再弹面板），排在余额之后。
       { label: '待办事项', action: 'todo', hint: S.TODO_HOTKEY_HINT },
@@ -97,6 +98,7 @@ Object.assign(PetSprite.prototype, {
     if (leaf.action === 'humanity') { window.petBridge?.openHumanity(); return; }
     if (leaf.action === 'worksite') { window.petBridge?.openWorksite(); return; }
     if (leaf.action === 'farm') { window.petBridge?.openFarm(); return; }
+    if (leaf.action === 'rice-cooker') { this.riceCooker?.open(); return; }
     // 睡觉：打扰类动作在点击这一刻就拒绝——弹一句台词，什么都不执行。持锁时让路（锁=控制权交给第三方）。
     // 对话弹窗、待办面板、点播动画都是渲染端行为，宿主闸门拦不到；两端用同一份放行判定。
     if (this.sleeping && !this.frozen && !fromHost && !S.isSleepAllowedAction(leaf.action)) {

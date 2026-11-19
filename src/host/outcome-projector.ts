@@ -1,4 +1,6 @@
 import {completeFarmOperation,farmVisit,setFarmVisit,type FarmAction} from './farm.js';
+import {startCooking} from './rice-cooker.js';
+import {cookerBowlStorage,findRiceBowl} from './rice-inventory.js';
 import {sweetPrice} from './spirit-activity.js';
 import {mergeDuplicateGoals} from '../kernel/goal-lifecycle.js';
 import {setSpiritRest,advanceSpirit} from '../kernel/spirit.js';
@@ -62,7 +64,7 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
   const pet = draft.legacy as Obj, human = draft.humanity as Obj;
   assert(params && typeof params === 'object' && !Array.isArray(params), '行动参数无效');
   // Each recognized result is explicitly bound to this action and its executor.
-  if (!['self.express','service.sweet','body.activity','service.buy-rice','care.feed','care.water','care.pet','care.play','care.soothe','care.accompany','service.eat-rice','labor.step','token.pickup','body.sleep','body.wake','image.observe','learning.observe'].includes(intent.type)) return;
+  if (!['self.express','service.sweet','body.activity','service.buy-rice','service.cook-rice','care.feed','care.water','care.pet','care.play','care.soothe','care.accompany','service.eat-rice','labor.step','token.pickup','body.sleep','body.wake','image.observe','learning.observe'].includes(intent.type)) return;
   assert(e && e.actionId === intent.id && e.kind === intent.type && e.confirmed === true, '缺少与行动绑定的可信执行结果');
   if(intent.type==='self.express') {
     assert(typeof params.text==='string' && params.text.length<=200,'表达内容无效');
@@ -76,6 +78,10 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
     draft.life.events.push({eventId:'sweet:'+intent.id,petId:draft.petId,type:'body.sweet',source:'executor',occurredAt,receivedAt:occurredAt,evidenceLevel:'observed',payload:{spiritGain:s.config.sweetGain,hungerIncrease:8,paid:charge}});return;
   }
   if(intent.type==='body.activity'){assert(e.played===true && e.surface==='desktop' && e.activity===params.activity && (!['walk','run'].includes(params.activity) || finite(e.distance) && e.distance>=8 && e.distance<=10000),'桌面活动未完成');return;}
+  if (intent.type === 'service.cook-rice') {
+    startCooking(draft,intent.id,params.bowls,at);
+    return;
+  }
   if (intent.type === 'service.buy-rice') {
     const services = pet.services; const wallet = pet.wallet; const price = pet.config?.costs?.feed;
     assert(services && Array.isArray(services.inventory) && wallet && finite(wallet.balance) && finite(price) && price >= 0, '饭钱或库存状态无效');
@@ -97,8 +103,8 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
   if(['care.water','care.pet','care.play','care.soothe','care.accompany'].includes(intent.type)){const action=intent.type.slice(5);assert(e.played===true && e.itemId===action,'照料动画未完成');const result=actHumanity(human,action,at);assert(result.ok,result.message||'当前不能照料');draft.humanity=result.state;draft.life.events.push({eventId:'care-'+action+':'+intent.id,petId:draft.petId,type:'social.care',source:'executor',...(intent.id.startsWith('speech-action:')?{}:{actorId:'dad'}),occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'observed',payload:{action,selfInitiated:intent.id.startsWith('speech-action:')}});rebuildRelationships(draft.life);return;}
   if (intent.type === 'service.eat-rice') {
     const services = pet.services; const itemId = params.itemId;
-    assert(typeof itemId === 'string' && e.itemId === itemId && e.played === true && services && Array.isArray(services.inventory), '吃饭回执无效');
-    const item = services.inventory.find((value: Obj) => value.id === itemId);
+    assert(typeof itemId === 'string' && e.itemId === itemId && e.played === true, '吃饭回执无效');
+    const item = findRiceBowl(draft,itemId);
     assert(item && ['available','reserved'].includes(item.status), '食物不在可食用库存中');
     assert(human && human.stats && human.emotions, '身体状态无效');
     const result = actHumanity(human, 'feed', at);
@@ -106,7 +112,9 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
     const next = result.state; next.serviceActions = {...human.serviceActions,[intent.id]:{ok:true,at,action:'feed'}};
     draft.humanity = next; item.status = 'eaten'; item.eatenAt = at; pet.lastInteraction = at;
     draft.life.events.push({eventId:'meal:'+intent.id,petId:draft.petId,type:'body.meal',source:'executor',occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'observed',payload:{action:'feed'}});
-    if (services.eating?.itemId === itemId) services.eating = null;
+    if (services?.eating?.itemId === itemId) services.eating = null;
+    const cooked=cookerBowlStorage(draft), index=cooked.indexOf(item);
+    if(index>=0)cooked.splice(index,1);
     return;
   }
   if(intent.type==='body.sleep'||intent.type==='body.wake') {const kind=intent.type==='body.sleep'?'sleep':'wake';assert(e.played===true && e.restKind===kind && human.sleeping===(kind==='wake'),'睡眠回执与身体状态不符');setSpiritRest(draft.life,kind==='sleep'?(params.mode==='nap'?'nap':'sleep'):'awake',at);draft.humanity=reactHumanity(human,kind,at);return;}

@@ -51,7 +51,7 @@ export function setSpiritRest(life:Life,mode:Spirit['mode'],now=Date.now()):void
   else {delete s.sleepStartedAt;delete s.sleepStartValue;}
 }
 export function spiritCost(kind:string):number {
-  if(['body.sleep','body.wake','service.sweet','service.buy-rice','service.eat-rice','qq.send'].includes(kind)||kind.startsWith('care.'))return 0;
+  if(['body.sleep','body.wake','service.sweet','service.buy-rice','service.cook-rice','service.eat-rice','qq.send'].includes(kind)||kind.startsWith('care.'))return 0;
   if(kind==='learning.observe'||kind==='image.observe')return 4;
   if(kind==='labor.step')return 2;
   if(kind==='body.activity')return 1;

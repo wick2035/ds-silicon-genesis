@@ -29,7 +29,7 @@ export function createLegacyServiceActions(store:{loadEnvelope(id:string):Promis
       if(!action){
         if(input.wishId!==undefined && (!wish || wish.status!=='pending' || wish.topic!==phone?.[1].trim() || wish.ability!==input.ability || !['search','fetch','bili','image'].includes(wish.ability)))throw Error('念想或能力已变化');
         const item=kind==='service.eat-rice'?availableRice(state)[0]:null;
-        if(kind==='service.eat-rice'&&!item)throw Error('没有可吃的饭，先从冰箱买一碗');
+        if(kind==='service.eat-rice'&&!item)throw Error('现在没有可吃的熟饭，可以等电饭锅煮好或从冰箱买一碗');
         const fetchUrl=wish?.ability==='fetch'?phone?.[1].match(/https?:\/\/[^\s]+/i)?.[0]:undefined;
         if(wish?.ability==='fetch'&&!fetchUrl)throw Error('网页念想需要有效的公开网址');
         const attachment=kind==='image.observe'?[...state.life.events].reverse().find(e=>e.type==='attachment.shared'&&!Object.hasOwn(state!.life.invalidSources,e.eventId)&&(state!.legacy as any).attachments?.[(e.payload as any)?.attachmentId]):undefined;

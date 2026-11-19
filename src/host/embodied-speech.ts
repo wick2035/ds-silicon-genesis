@@ -1,4 +1,5 @@
 import {riceInventory,riceAvailability,validateRiceMeal} from './rice-inventory.js';
+import {cookerFacts} from './rice-cooker.js';
 import {farmFacts,farmVisit} from './farm.js';
 import {COMPANION_PERSONALITY,TIME_AWARENESS,riceMotivation} from './companion-personality.js';
 import {createHash} from 'node:crypto';
@@ -38,9 +39,9 @@ function conflicts(envelope:CanonicalEnvelope,type:string,parameters:Record<stri
 function decisionFacts(envelope:CanonicalEnvelope):string {
   const pet=envelope.legacy as any;
   const events=envelope.life.events.filter(e=>!Object.hasOwn(envelope.life.invalidSources,e.eventId) &&
-    ['interaction.operation','interaction.worksite','body.adjusted','body.meal','social.care','farm.weather','farm.tended','labor.changed','labor.completed','action.receipt','action.reconciled'].includes(e.type) &&
+    ['interaction.operation','interaction.worksite','body.adjusted','body.meal','social.care','farm.weather','farm.tended','rice.taken','rice.cooking','rice.ready','rice.reminded','labor.changed','labor.completed','action.receipt','action.reconciled'].includes(e.type) &&
     !(e.type.startsWith('action.') && envelope.life.actions.find(a=>a.id===(e.payload as any)?.actionId)?.actionType==='qq.send'));
-  return JSON.stringify({wallet:pet.wallet,inventory:pet.services?.inventory,sleeping:envelope.humanity.sleeping,
+  return JSON.stringify({wallet:pet.wallet,inventory:riceInventory(envelope),cooker:cookerFacts(envelope),sleeping:envelope.humanity.sleeping,
     restingUntil:envelope.humanity.restingUntil,worksite:worksiteFacts(envelope),farmInside:!!farmVisit(envelope),events:events.slice(-16).map(e=>e.eventId)});
 }
 
@@ -100,14 +101,14 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
     const allowed=initial.envelope.life.constraints.capabilities.filter(c=>c.enabled&&(!c.requiresPermission||initial.envelope.life.constraints.permissions.includes(c.requiresPermission))).map(c=>c.name).filter(n=>executable.has(n)&&n!=='labor.step'&&!['care.feed','care.pet','care.soothe','care.accompany'].includes(n));
     if(!initial.envelope.life.constraints.capabilities.some(c=>c.name==='care.water')&&initial.envelope.life.constraints.capabilities.some(c=>c.name==='care.feed'&&c.enabled))allowed.push('care.water');
     const tools=[{name:'sense_self',description:'感知此刻身体、需求、钱包、近期真实互动与行动结果。',inputSchema:empty},
-      ...(speech.allowActions?[{name:'act',description:'按自己的需要选择一次实际行动。吃饭先买后吃；口头说做了不算完成。'+JSON.stringify(actionCatalog),inputSchema:{type:'object',properties:{actionType:{type:'string',enum:allowed},parameters:{type:'object'}},required:['actionType','parameters'],additionalProperties:false}},
+      ...(speech.allowActions?[{name:'act',description:'按需要选择一次真实行动。吃饭优先选锅里的熟饭（source=cooker），再选冰箱库存；没饭才考虑买。自己煮饭用 service.cook-rice。'+JSON.stringify(actionCatalog),inputSchema:{type:'object',properties:{actionType:{type:'string',enum:allowed},parameters:{type:'object'}},required:['actionType','parameters'],additionalProperties:false}},
       {name:'enter_worksite',description:'自主决定进入工地，即使没有任务也可以去；有任务时自动开始工作。',inputSchema:empty},
       {name:'begin_work',description:'在工地恢复普通工作，之后持续搬砖；不创建合同，不触发强制模式。',inputSchema:empty},
       {name:'stop_work',description:'自主决定在工地停工，留在工地；强制工作期间不能覆盖爸爸的强制命令。',inputSchema:empty},
       {name:'leave_worksite',description:'自主离开自己进入的工地；被爸爸放进去时须等他接出。',inputSchema:empty}]:[])];
     const personality=STABLE_PERSONALITY+'\n'+(options.system.includes('【你自己的心思和口吻】')?'':COMPANION_PERSONALITY+'\n'+TIME_AWARENESS);
     // Live body and actionable inventory are required inputs, never optional history.
-    const liveFoodFor=(envelope:CanonicalEnvelope)=>{const pet=envelope.legacy as any;return {身体:envelope.humanity.stats,睡眠:{sleeping:envelope.humanity.sleeping,restingUntil:envelope.humanity.restingUntil},food:{...riceMotivation(envelope.humanity as any,pet.config??{}),price:pet.config?.costs?.feed,frozen:pet.wallet?.frozen===true},饭钱:pet.wallet?.balance,库存:riceInventory(envelope),食物可用性:riceAvailability(envelope)};};
+    const liveFoodFor=(envelope:CanonicalEnvelope)=>{const pet=envelope.legacy as any;return {身体:envelope.humanity.stats,睡眠:{sleeping:envelope.humanity.sleeping,restingUntil:envelope.humanity.restingUntil},food:{...riceMotivation(envelope.humanity as any,pet.config??{}),price:pet.config?.costs?.feed,frozen:pet.wallet?.frozen===true,cooker:cookerFacts(envelope)},饭钱:pet.wallet?.balance,库存:riceInventory(envelope),食物可用性:riceAvailability(envelope)};};
     const system=options.system+'\n'+personality+'\n每次开口前，结合自己的感受、目标、刚才爸爸的操作和真实结果，判断此刻需不需要工具；可以只说话或安静，不必为了使用工具而行动。需要吃饭、喝水、睡觉、走动、学习或搬砖时调用工具，不能用台词冒充行动。失败后自己决定换办法、休息或向爸爸商量；条件未变不要重复失败的动作。感受和判断属于你，操作归因只依据真实来源，不知道是谁造成的就不要认定。通过真实结果理解自己喜欢什么、身体能做什么，不宣称凭空获得意识。每次工具返回后，由你继续决定调用下一项工具还是回答；例如买饭成功只代表饭已入库，你可以根据新库存中 status=available 的 id 再决定吃饭；unconfirmed 是旧碗结果未明，不选择它，吃饭必须等待自己的实际回执。无需让爸爸再发一条消息推动下一步，也不强制你购买后一定吃。工具后的回复针对结果自然地说，未知结果不能说完成。需要工具时先调用，工具调用之前不要输出面向对方的回答。';
     const liveWorkFor=(envelope:CanonicalEnvelope)=>'\n当前工作账本（优先于旧发言和进出记录）：'+JSON.stringify(worksiteFacts(envelope))+'。taskCompleted=true 表示整份工作已经搬完；unpaid 仅表示等待结薪，不能说没搬完。completedTripsThisVisit=0 或 inside=false 只说明本次进场或此刻位置，不会抹掉 completedTotal。remainingPay 是尚欠工钱，不等于还要搬的趟数。inside 表示现在是否已经在工地；工作申请失败或未取得动作回执不等于没有进场。';
     // Event IDs are used by storage and invalidation, not by any speech tool.

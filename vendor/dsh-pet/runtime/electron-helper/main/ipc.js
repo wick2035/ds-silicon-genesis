@@ -20,6 +20,17 @@ const { decideWindowIgnore } = require('../pointer-target.js');
 function registerIpc({ ipcMain, petWindows, shell, openTarget, petRoute, hostRequest }) {
   require('./worksite.js').register({ipcMain,petWindows,hostRequest,BrowserWindow,screen,app});
   const epoch = process.env.SILICON_HELPER_EPOCH || '';
+  if(epoch)ipcMain.handle('pet:rice-cooker',async(event,input)=>{
+    const win=BrowserWindow.fromWebContents(event.sender);
+    const petId=[...petWindows.state.windows].find(([,candidate])=>candidate===win)?.[0];
+    if(!petId||event.senderFrame!==event.sender.mainFrame||!['snapshot','remind','take','ack'].includes(input?.action))throw Error('电饭锅窗口不可用');
+    if(input.action==='ack'&&!win.isVisible())throw Error('桌宠暂未显示');
+    const {action,requestId,expectedIds,bowls}=input;
+    const response=await hostRequest('POST','/__silicon/cooker',JSON.stringify({petId,action,requestId,expectedIds,bowls}));
+    const body=JSON.parse(response.body||'{}');
+    if(response.status===200 || response.status===409)return body;
+    throw Error('电饭锅暂未连接');
+  });
   const restraint = new Map();
   // Only elapsed system input inactivity is observed; no keys or pointer positions are collected.
   const idleTimer=setInterval(()=>{

@@ -98,9 +98,11 @@ class PetSprite {
     this.initPanels();
     this.buildDom();
     this.bindEvents();
+    if(window.petBridge?.worksiteOnly)this.riceCooker=new DesktopRiceCooker(this);
   }
 
   dispose() {
+    this.riceCooker?.dispose();
     this.stopPainReaction();
     this.ac.abort();
     this.inputRegionMutation.disconnect();

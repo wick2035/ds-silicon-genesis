@@ -50,6 +50,7 @@ Object.assign(PetSprite.prototype, {
       area,
     });
     this.applyWinOffset(fit.offsetX, fit.offsetY);
+    this.riceCooker?.layout();
     return { x: fit.x, y: fit.y, width, height, offsetX: fit.offsetX, offsetY: fit.offsetY };
   },
 

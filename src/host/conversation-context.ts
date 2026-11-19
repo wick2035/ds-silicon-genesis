@@ -1,5 +1,6 @@
 import {farmFacts,farmVisit} from './farm.js';
 import {riceAvailability} from './rice-inventory.js';
+import {cookerFacts} from './rice-cooker.js';
 import {recentOperationFeedback} from './operation-feedback.js';
 import type {LifeState} from '../kernel/types.js';
 import {companionContext,riceMotivation} from './companion-personality.js';
@@ -9,8 +10,8 @@ import type {CanonicalEnvelope} from '../storage/postgres.js';
 /** Only committed, bounded facts; an intent or dispatch is never a receipt. */
 export function conversationContext(state:LifeState, envelope:CanonicalEnvelope, excludeEventIds:string[]=[]) {
   const pet=envelope.legacy as Record<string,any>, config=pet.config??{}, wallet=pet.wallet??{};
-  const abilities=pet.abilities??{}, inventory=Array.isArray(pet.services?.inventory)?pet.services.inventory:[];
-  const actions=(state.actions??[]).filter(a=>(a.actionType.startsWith('care.')||['service.buy-rice','service.eat-rice','learning.observe','image.observe','body.sleep','body.wake'].includes(a.actionType)) && a.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id))).slice(-8).map(a=>{
+  const abilities=pet.abilities??{};
+  const actions=(state.actions??[]).filter(a=>(a.actionType.startsWith('care.')||['service.buy-rice','service.cook-rice','service.eat-rice','learning.observe','image.observe','body.sleep','body.wake'].includes(a.actionType)) && a.sourceIds.every(id=>!Object.hasOwn(state.invalidSources,id))).slice(-8).map(a=>{
     const receipt=(state.receipts??[]).find(r=>r.actionId===a.id && r.receiptId===a.receiptId && state.events.some(e=>e.causationId===r.receiptId && !Object.hasOwn(state.invalidSources,e.eventId)));
     const details=receipt?.details as Record<string,unknown>|undefined;
     const status=receipt?.status??(['COMPLETED','FAILED','CANCELLED','UNKNOWN'].includes(a.status)?'UNCONFIRMED':a.status);
@@ -25,7 +26,7 @@ export function conversationContext(state:LifeState, envelope:CanonicalEnvelope,
     operationUpdates:recentOperationFeedback({...envelope,life:envelope.life??state}),
     companion:companionContext({...envelope,life:envelope.life??state},Date.now(),excludeEventIds),
     food:{...riceMotivation(envelope.humanity??{},config),balance:wallet.balance??null,frozen:wallet.frozen===true,price:config.costs?.feed??null,
-      ...riceAvailability({...envelope,life:envelope.life??state}),eating:pet.services?.eating??null,recentChanges:recentMoney},
+      ...riceAvailability({...envelope,life:envelope.life??state}),cooker:cookerFacts(envelope),eating:pet.services?.eating??null,recentChanges:recentMoney},
     ...(field?{farm:{...field,inside:!!farmVisit(envelope)}}:{}),
     worksite:worksiteFacts({...envelope,life:envelope.life??state}),
     laborHistory:laborHistory(pet),

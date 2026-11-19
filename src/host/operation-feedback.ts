@@ -3,7 +3,7 @@ import type {LifeAction,ActionReceipt} from '../kernel/types.js';
 import {interactionDescription} from './interaction-reactions.js';
 
 type Event=CanonicalEnvelope['life']['events'][number];
-const names:Record<string,string>={'service.buy-rice':'买饭','service.eat-rice':'吃饭','service.sweet':'吃甜食',
+const names:Record<string,string>={'service.buy-rice':'买饭','service.cook-rice':'开锅煮饭','service.eat-rice':'吃饭','service.sweet':'吃甜食',
   'care.feed':'喂饭','care.water':'喝水','care.pet':'摸摸','care.play':'玩耍','care.soothe':'安慰','care.accompany':'陪伴',
   'body.sleep':'休息','body.wake':'醒来','body.activity':'桌面活动','labor.step':'搬砖动作','token.pickup':'拾取饭钱',
   'learning.observe':'探索资料','image.observe':'观察图片'};
@@ -23,6 +23,7 @@ export function actionFeedback(state:CanonicalEnvelope,action:LifeAction,status:
 /** The displayed text and the model's event context come from the same commit. */
 export function eventFeedback(event:Event,state:CanonicalEnvelope):string|undefined {
   const p=event.payload as any;
+  if(['rice.cooking','rice.ready','rice.taken','rice.reminded'].includes(event.type))return typeof p?.description==='string'?p.description:undefined;
   if(['action.receipt','action.reconciled'].includes(event.type))return typeof p?.feedback==='string'?p.feedback:undefined;
   if(event.type==='interaction.worksite')return typeof p?.description==='string'?p.description:undefined;
   if(event.type==='interaction'&&event.source==='canonical-legacy')return typeof p?.text==='string'?p.text:undefined;
@@ -60,6 +61,7 @@ export function createImmediateFeedback(initial:CanonicalEnvelope,publish:(items
     const items:Array<{eventId:string;text:string;animate:boolean}>=[];
     for(const event of state.life.events){
       if(seen.has(event.eventId))continue;seen.add(event.eventId);
+      if(event.type.startsWith('rice.'))continue;
       if(Object.hasOwn(state.life.invalidSources,event.eventId))continue;
       const text=eventFeedback(event,state);if(text)items.push({eventId:event.eventId,text,animate:['interaction.operation','body.adjusted','todo.created','todo.updated','todo.deleted','attachment.shared'].includes(event.type)||event.type.startsWith('management.')||
         ['service.buy-rice','service.sweet','learning.observe','image.observe'].includes((event.payload as any)?.actionType)});

@@ -22,6 +22,7 @@ export interface SchedulerOptions {
   wakeCoordinator: WakeCoordinator;
   deterministic: DeterministicActivity;
   farm?:{settle(petId:string):Promise<unknown>};
+  cooker?:{settle(petId:string):Promise<unknown>};
   needs?: {run(petId:string,signal:AbortSignal):Promise<boolean>};
   groupConversation?: {run(petId:string,signal:AbortSignal):Promise<void>};
   resultCoordinator: CognitiveResultCoordinator;
@@ -87,6 +88,7 @@ export class LifeScheduler {
             if (this.controller.signal.aborted) throw new Error('Scheduler stopped');
             if(this.options.reminders)await this.options.reminders.run(this.options.petId,this.controller.signal);
             if(this.options.farm)await this.options.farm.settle(this.options.petId);
+            if(this.options.cooker)await this.options.cooker.settle(this.options.petId);
             const before = await this.kernel.getState(this.options.petId);
             if (this.controller.signal.aborted) throw new Error('Scheduler stopped');
             let needsHandled=false;
