@@ -134,6 +134,7 @@ Object.assign(PetSprite.prototype, {
 
   onPointerUp(e) {
     const d = this.dragState;
+    if(!d.active)return;
     const wasDragging = d.dragging;
     d.active = false;
     d.dragging = false;
@@ -359,7 +360,8 @@ Object.assign(PetSprite.prototype, {
     // 光标存视口坐标（窗口原点 + 窗口内坐标）：窗口随宠物移动时贴光标不会漂。必须在 setTip 之前
     // 更新——setTip 变显隐时会立刻渲染一次，晚一步就会用上一次的光标摆位。
     if (inBody) this.tipCursor = { x: this.pos.x - this.winOffset.x + wx, y: this.pos.y - this.winOffset.y + wy };
-    this.setInteractive(inBody);
+    const overCoin=this.tokenScene?.nodes.size && document.elementFromPoint(wx,wy)?.closest('.pet-token-coin:not(:disabled)');
+    this.setInteractive(inBody || !!overCoin);
     // 悬浮提示与可交互判定同源（同一个 inBody）：进身体出现，离开收起
     this.setTip(inBody);
     // 跟随光标：位置依赖光标，每次移动都要重摆（setTip 只在显隐变化时渲染）

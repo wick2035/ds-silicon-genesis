@@ -37,7 +37,10 @@ function registerIpc({ ipcMain, petWindows, shell, openTarget, petRoute, hostReq
     const sender=BrowserWindow.fromWebContents(event.sender);
     const petId=[...petWindows.state.windows].find(([,win])=>win===sender)?.[0], current=restraint.get(petId);
     if(!petId||!current||current.sender!==event.sender||current.failed||!['semantic','labor-disturb','tokens','space','pet','feed','collision','impact','knock','utensil','sleep','wake'].includes(input?.kind))throw Error('桌宠互动来源无效');
-    await current.chain;
+    // Collecting a floor coin needs an authenticated window, but does not
+    // depend on the order of body grip/release observations.
+    if(input.kind==='tokens'&&input.detail?.action==='collect')await current.ready;
+    else await current.chain;
     const payload={epoch:current.windowEpoch,petId,eventId:require('node:crypto').randomUUID(),kind:input.kind,detail:input.detail};
     const response=await hostRequest('POST','/__silicon/interaction',JSON.stringify(payload));
     if(response.status!==200)throw Error('桌宠互动未保存');return JSON.parse(response.body||'{}');
@@ -84,7 +87,7 @@ function registerIpc({ ipcMain, petWindows, shell, openTarget, petRoute, hostReq
       if(response.status!==200) throw Error('可信观察未保存');
     });
     // A missing observation must not be followed by later state claims.
-    const entry={...previous,sequence,chain};
+    const entry={...previous,sequence,chain,ready:previous.ready??chain};
     chain.catch(() => {entry.failed=true;if(!sender.isDestroyed())sender.webContents.send('pet:restraint-retry');});
     restraint.set(petId,entry);
   });

@@ -143,7 +143,8 @@ export async function main():Promise<void> {
     const helper=createHelperChannel(humanity,commandChannel.bridge,[petId],observerAuthority,helperAuthority,commandChannel,
       (id,requestId,detail)=>domain.observeSpace(id,requestId,detail,observerAuthority),
       async(id,requestId,detail)=>{const action=(detail as any)?.action;
-        if(action==='hold'||action==='collect')commandChannel.cancelToken(id);
+        if(action==='hold')commandChannel.cancelToken(id);
+        if(action==='collect'&&typeof (detail as any).id==='string')commandChannel.cancelToken(id,(detail as any).id);
         const result=await tokens.handle(id,requestId,detail);
         if(action==='release'||action==='recover'||action==='collect')wakeTokenPickup(id);
         return result;

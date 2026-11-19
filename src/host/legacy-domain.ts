@@ -279,7 +279,11 @@ export class LegacyDomain {
   }
   collectToken(petId: string, requestId: string, coinId: string, authority: object): Promise<unknown> {
     if (authority !== this.#observerAuthority || typeof coinId !== 'string' || !coinId) throw new Error('饭钱收取缺少可信观察');
-    return this.mutate(petId,requestId,'token-collect',{coinId},store => store.collectToken(petId,coinId));
+    return this.mutate(petId,requestId,'token-collect',{coinId},store => {
+      const coin=store.read(petId).tokens?.coins?.find((c:Obj)=>c.id===coinId);
+      if(coin?.surface!=='desktop')throw Error('碎片不在当前桌面');
+      return store.collectToken(petId,coinId);
+    });
   }  async workStatus(petId: string): Promise<unknown> {
     const envelope = await this.reader.loadEnvelope(petId); if (!envelope) throw new Error('生命状态不存在');
     const legacy = envelope.legacy as Obj;

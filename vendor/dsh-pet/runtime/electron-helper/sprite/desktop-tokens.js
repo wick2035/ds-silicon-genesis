@@ -2,7 +2,7 @@
 (() => {
   const proto=PetSprite.prototype;
   let nextSpaceWatch=0;
-  const old=Object.fromEntries(['bindEvents','onPointerDown','onPointerMove','onPointerUp','onClick','fitWindow','reportWindow','inputBusy','onMouseMove','dispose','executeBody','playIdle'].map(k=>[k,proto[k]]));
+  const old=Object.fromEntries(['bindEvents','onPointerDown','onPointerMove','onPointerUp','onClick','fitWindow','reportWindow','dispose','executeBody','playIdle'].map(k=>[k,proto[k]]));
   const style=document.createElement('style');style.textContent=PET_TOKEN_CSS+`
     .pet-token-native .pet-token-layer{z-index:2147483000}
     .pet-token-crawl{position:absolute;inset:0;pointer-events:none;display:none;z-index:5;transform:scaleX(var(--token-facing,1))}
@@ -25,6 +25,7 @@
       overlayArea:()=>{const a=S.resolveRect(WORK_AREAS.length?WORK_AREAS:AREAS,this.pos.x+this.halfW,this.pos.y+this.halfH),o=this.tokenOrigin||{x:this.pos.x-this.winOffset.x,y:this.pos.y-this.winOffset.y};return{x:a.x-o.x,y:a.y-o.y,width:a.width,height:a.height};},
       overlayAnchor:()=>{const o=this.tokenOrigin||{x:this.pos.x-this.winOffset.x,y:this.pos.y-this.winOffset.y};return{x:this.pos.x+this.halfW-o.x,y:this.pos.y-o.y};},
       onOverlay:()=>this.syncInputRegions?.(),
+      onCollect:id=>{if(this.pickupCoinId===id)this.cancelBody?.();},
       onHold:held=>this.painStage?.classList.toggle('pet-token-held',held),isHovered:()=>this.hoverBody,
     });
     this.unsubscribeTokenSpace=window.petBridge?.onTokenSpace?.((id,pressed)=>{
@@ -108,9 +109,13 @@
   };
   proto.executeBody=async function(c,actions){
     if(c.source!=='tokens')return old.executeBody.call(this,c,actions);
-    const post=async(status,extra={})=>{const data=await window.petBridge.reportActionReceipt({id:c.id,actionId:c.actionId,coinId:c.coinId,index:c.index,surface:'desktop',status:status==='failed'?'interrupted':status,...extra});if(!data.ok)throw Error(data.message||'拾取未能保存');};
+    const post=async(status,extra={})=>{
+      if(status!=='interrupted' && this.tokenScene && !this.tokenScene.canPickUp(c.coinId))throw Error('这片饭钱已收起');
+      const data=await window.petBridge.reportActionReceipt({id:c.id,actionId:c.actionId,coinId:c.coinId,index:c.index,surface:'desktop',status:status==='failed'?'interrupted':status,...extra});if(!data.ok)throw Error(data.message||'拾取未能保存');
+    };
     if(this.sleeping||this.frozen||this.phoneUsing||this.dragState.active||this.tokenScene?.dragging){await post('interrupted',{reason:'身体被抓住、入睡或正在占用'}).catch(()=>{});return;}
-    this.bodyExecuting=true;this.bodyCommandId=c.id;this.stopMove();this.stopThrow();
+    if(this.tokenScene && !this.tokenScene.canPickUp(c.coinId)){await post('interrupted').catch(()=>{});return;}
+    this.bodyExecuting=true;this.bodyCommandId=c.id;this.pickupCoinId=c.coinId;this.stopMove();this.stopThrow();
     let timer,frame,played=false,front,ended;
     try{
       const asset=actions?.[c.steps[c.index].action]?.[0];
@@ -133,7 +138,7 @@
       });
       await post('completed',{played,x:(this.pos.x+this.halfW)/VIEW.w,y:(this.pos.y+this.height)/VIEW.h});
     }catch(e){if(!this.ac.signal.aborted&&!/爸爸抓住|身体被抓住|已收起/.test(e.message))this.tokenScene?.announce(e.message);await post('interrupted',{reason:e.message}).catch(()=>{});}
-    finally{clearTimeout(timer);cancelAnimationFrame(frame);if(front&&ended)front.removeEventListener('ended',ended);this.bodyExecuting=false;this.cancelBody=null;if(!this.ac.signal.aborted){this.pollTokenSoon();if(!this.bodyProtected&&!this.sleeping)this.playIdle();}}
+    finally{clearTimeout(timer);cancelAnimationFrame(frame);if(front&&ended)front.removeEventListener('ended',ended);this.bodyExecuting=false;this.pickupCoinId=null;this.cancelBody=null;if(!this.ac.signal.aborted){this.pollTokenSoon();if(!this.bodyProtected&&!this.sleeping)this.playIdle();}}
   };
   // A stable desktop canvas: only the character moves inside it. The floor layer
   // never inherits a moving OS window origin. Transparent regions still pass through.
@@ -148,6 +153,5 @@
     const next={x:0,y:0,width:VIEW.w,height:VIEW.h,offsetX:fit.x+fit.offsetX,offsetY:fit.y+fit.offsetY};this.tokenOrigin={x:0,y:0};this.applyWinOffset(next.offsetX,next.offsetY);return next;
   };
   proto.reportWindow=function(fit){old.reportWindow.call(this,fit);this.tokenScene?.paint();if(this.inputRegionElements)this.syncInputRegions();};
-  proto.onMouseMove=function(e){old.onMouseMove.call(this,e);for(const {el}of this.tokenScene?.nodes.values()||[]){if(el.disabled)continue;const r=el.getBoundingClientRect();if(e.clientX>=r.left&&e.clientX<=r.right&&e.clientY>=r.top&&e.clientY<=r.bottom){this.setInteractive(true);break;}}};
   proto.dispose=function(...args){clearTimeout(this.tokenClickTimer);this.stopTokenSpaceWatch();this.unsubscribeTokenSpace?.();this.tokenScene?.dispose();return old.dispose.apply(this,args);};
 })();

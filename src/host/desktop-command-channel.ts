@@ -164,7 +164,10 @@ export function createDesktopCommandChannel(store:Reader,sourceCapability:object
         catch{bridge.interruptPet(petId,sourceCapability);}
       }else bridge.accept({petId,actionId,kind,status:'interrupted',reason},sourceCapability);
     },
-    cancelToken(petId:string){if(pending.get(petId)?.command.kind==='token.pickup')this.cancelPet(petId);},
+    cancelToken(petId:string,coinId?:string){
+      const item=pending.get(petId);
+      if(item?.command.kind==='token.pickup' && (coinId===undefined||item.coin?.id===coinId))this.cancelPet(petId);
+    },
     close(){for(const item of pending.values())clearTimeout(item.timer);pending.clear();}
   };
 }

@@ -38,6 +38,7 @@ function createTokenScene(options) {
   const note=document.createElement('p');note.className='pet-token-note';note.setAttribute('role','status');host.append(note);
   const url=options.base+'/humanity/companion/tokens?pet='+encodeURIComponent(options.petId);
   const scene={get tokens(){return tokens;},get dragging(){return dragging;},get space(){return nativeSpace??space;},nodes};
+  scene.canPickUp=id=>!tokens || (tokens.coins.some(c=>c.id===id && c.surface===options.surface) && !nodes.get(id)?.el.disabled);
   function updateSpace(pressed, physical=false) {
     const wasPressed=scene.space;
     if(physical)nativeSpace=pressed;
@@ -105,9 +106,15 @@ function createTokenScene(options) {
       const el=document.createElement('button');el.type='button';el.className='pet-token-coin';el.dataset.coin=coin.id;el.title='收走 100 token';el.setAttribute('aria-label','收走这片 100 token，饭钱归爸爸');
       const face=document.createElement('span');face.className='pet-token-face';face.textContent='100';el.append(face);layer.append(el);nodes.set(coin.id,{el,coin});
       const collect=async e=>{
-        e.stopPropagation();if(e.type==='pointerdown'&&e.button!==0||el.disabled)return;el.disabled=true;el.style.visibility='hidden';options.onOverlay?.();
-        try{const d=await post('collect',{id:coin.id});announce(d.result?.status==='collected'?'已收走 100 token':'这片钱已经被她捡回了');}
-        catch(error){el.disabled=false;el.style.visibility='';announce(error.message);}
+        e.stopPropagation();if(e.type==='pointerdown'&&e.button!==0||el.disabled)return;
+        el.disabled=true;options.onOverlay?.();
+        try{
+          const claim=post('collect',{id:coin.id});
+          options.onCollect?.(coin.id);
+          const d=await claim;
+          announce(d.result?.status==='collected'?'已收走 100 token':'这片钱已经被她捡回了');
+        }
+        catch(error){el.disabled=false;announce(error.message);}
         finally{if(tokens)sync(tokens);}
       };
       // Take the coin on press; a pet/window move between down and up cannot eat the click.
@@ -132,6 +139,9 @@ function createTokenScene(options) {
   }
   function post(action,body={}) {
     mutations++;readEpoch++;
+    // A visible desktop coin already has a committed ID. Its claim must reach
+    // the host even while a release or layout acknowledgement is outstanding.
+    if(native&&action==='collect')return request({action,...body}).finally(()=>{mutations--;});
     const pending=new Promise((resolve,reject)=>{const item={action,body,resolve,reject};if(action==='collect')queue.unshift(item);else queue.push(item);});
     void drain();return pending;
   }

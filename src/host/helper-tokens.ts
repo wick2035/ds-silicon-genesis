@@ -18,7 +18,7 @@ export function createHelperTokens(store:Reader,domain:LegacyDomain,authority:ob
     if(body.action==='hold')holds.set(id,Date.now()+5000);
     else if(body.action==='release')holds.delete(id);
     else if(body.action==='drop'){if((holds.get(id)||0)<=Date.now())throw Error('需要按住空格拖动身体');result=await domain.dropToken(id,requestId,body,authority);}
-    else if(body.action==='collect'){const t=await snapshot(id);if(!t.coins.some((c:any)=>c.id===body.id&&c.surface==='desktop'))throw Error('碎片不在当前桌面');result=await domain.collectToken(id,requestId,body.id,authority);}
+    else if(body.action==='collect')result=await domain.collectToken(id,requestId,body.id,authority);
     else if(body.action==='layout')result=await domain.tokenLayout(id,requestId,body.positions,authority);
     else if(body.action==='recover'){if((holds.get(id)||0)>Date.now())throw Error('请先松开身体');result={status:'queued'};}
     else throw Error('未知碎片操作');

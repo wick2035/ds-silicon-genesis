@@ -45,17 +45,21 @@ app.whenReady().then(async () => {
   const authority = {};
   const tokens = createHelperTokens(store, new LegacyDomain(store, uow, gate, authority), authority);
   const actions = [];
-  let watch;
+  const receipts = [];
+  ipcMain.handle('pet:action-receipt', (_event, receipt) => {receipts.push(receipt);return {ok:true};});
+  let watch,finishRelease;
   ipcMain.on('pet:watch-token-space', (event, id, enabled) => {
     watch = enabled ? { sender: event.sender, id } : undefined;
   });
-  ipcMain.handle('pet:interaction', (_event, { kind, detail }) => {
+  ipcMain.handle('pet:interaction', async (_event, { kind, detail }) => {
     assert.equal(kind, 'tokens');
     actions.push(detail.action);
-    return tokens.handle('main', 'smoke-token-' + actions.length, detail);
+    const result=await tokens.handle('main', 'smoke-token-' + actions.length, detail);
+    if(detail.action==='release')await new Promise(resolve=>{finishRelease=resolve;});
+    return result;
   });
   const win = new BrowserWindow({
-    show: false,
+    show: false, width:1000,height:800,useContentSize:true,
     webPreferences: { preload: path.join(helper, 'preload.js'), backgroundThrottling: false },
   });
   await win.loadFile(page);
@@ -64,7 +68,7 @@ app.whenReady().then(async () => {
     const BASE = '';
     const VIEW = { w: 1000, h: 800 }, WORK_AREAS = [{ x: 0, y: 0, width: 1000, height: 800 }], AREAS = WORK_AREAS;
     const S = { resolveRect: areas => areas[0] }, toLocal = value => value;
-    window.fetch = async () => new Response(JSON.stringify({ ok: true, tokens: { coins: [], balance: 10000 } }));
+    window.fetch = async () => new Response(JSON.stringify({ ok: true, tokens: { version:0, coins: [], balance: 10000 } }));
     class PetSprite {
       pet = { id: 'main' };
       dragState = { active: false };
@@ -102,6 +106,27 @@ app.whenReady().then(async () => {
   await render('sprite.onPointerMove({ screenX: 500, screenY: 300 }); sprite.onPointerMove({ screenX: 400, screenY: 300 })');
   await render('sprite.pollTokenSoon = () => {}; sprite.onPointerUp()');
   await until(() => !watch && !tokens.held('main'));
+  await until(()=>!!finishRelease);
+  const id=state.legacy.tokens.coins[0].id;
+  const point=await render(`(() => {
+    const el=document.querySelector('.pet-token-coin'),r=el.getBoundingClientRect();
+    const x=Math.round(r.x+r.width/2),y=Math.round(r.y+r.height/2);
+    return {x,y,hit:el.contains(document.elementFromPoint(x,y))};
+  })()`);
+  assert.equal(point.hit,true,'the visible coin must receive the pointer');
+  const {x,y}=point;
+  win.webContents.sendInputEvent({type:'mouseDown',button:'left',x,y,clickCount:1});
+  win.webContents.sendInputEvent({type:'mouseUp',button:'left',x,y,clickCount:1});
+  await until(()=>state.legacy.tokens.collected===100);
+  finishRelease();
+  await until(()=>render('!document.querySelector(".pet-token-coin")'));
+  assert.equal(await render('sprite.tokenScene.canPickUp('+JSON.stringify(id)+')'),false);
+  const stalePickup={source:'tokens',id:'late-pickup',actionId:'late-pickup',coinId:id,index:1,steps:[{action:'walk'},{action:'pickup'}]};
+  await render('sprite.executeBody('+JSON.stringify(stalePickup)+',{})');
+  assert.deepEqual(receipts.map(r=>[r.coinId,r.status]),[[id,'interrupted']]);
+  assert.equal(state.legacy.wallet.balance,9900);
+  assert.equal(state.legacy.tokens.recovered,0);
+  assert.equal(state.life.memories.filter(m=>m.content.includes('爸爸抢走了')).length,1);
 
   await render('sprite.onPointerDown({ button: 0, screenX: 400, screenY: 300 })');
   await until(() => watch);
@@ -110,10 +135,10 @@ app.whenReady().then(async () => {
   assert.equal(await render('sprite.dragState.sling'), true);
   await render('sprite.onPointerUp()');
   await until(() => !watch);
-  assert.deepEqual(actions, ['hold', 'drop', 'release']);
+  assert.deepEqual(actions, ['hold', 'drop', 'release','collect']);
   assert.equal(state.legacy.wallet.balance, 9900);
   win.destroy();
   clearTimeout(deadline);
-  console.log('Unfocused Space drag dropped one 100-token coin and released the hold.');
+  console.log('Space drag dropped 100; mouse press collected it before release replied. Wallet 9900, collected 100, recovered 0, one memory.');
   app.exit(0);
 }).catch(error => { console.error(error); app.exit(1); });
