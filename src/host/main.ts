@@ -62,6 +62,7 @@ import {startStandalone} from './standalone.js';
 import {createLegacyServiceActions} from './legacy-service-actions.js';
 import {createDeterministicLife} from './deterministic-life.js';
 import {autonomousWorkTypes,createAutonomousWorkExecutors} from './autonomous-work.js';
+import {createFoodRequests} from './food-request.js';
 import {localRiceReconciler} from './rice-purchase.js';
 import {createHelperTokens} from './helper-tokens.js';
 import {isPresentationRoute} from './visual-routes.js';
@@ -274,11 +275,12 @@ export async function main():Promise<void> {
       }catch(error){console.error('[tokens] pickup:',error);}finally{pickupRuns.delete(id);}})();
     };
     wakeCognition=id=>{void scheduler?.requestWake(id).catch(error=>console.error('[cognition] 唤醒暂不可用',error));};
+    const foodRequests=createFoodRequests(store,lease,unitOfWork,budget,model,text=>{if(!publishWhisper)throw Error('桌宠显示尚未就绪');publishWhisper(text);});
     scheduler=new LifeScheduler(kernel,cognition,{connectionString:connectionUri(dbConfig.connection),petId,intervalSeconds:60,cognitiveIntervalSeconds:300,idle:desktopIdle,signal:lease.signal,development,
       groupConversation:{run:async(id,signal)=>{await groupConversation?.run(id,signal);}},
       reminders:{run:(id,signal)=>todos.remind(id,signal,t=>{if(!publishWhisper)throw Error('桌宠显示尚未就绪');publishWhisper('提醒：'+t.text);})},
       whisper:{settings:()=>model!.getSettings(),run:async(id,signal)=>{if(!publishWhisper)throw Error('桌宠显示尚未就绪');const text=await responses(id,'whisper',signal,undefined,{autonomous:true});if(!signal.aborted)publishWhisper(text);}},
-      wakeCoordinator:wakes,deterministic,resultCoordinator:coordinator,farm,cooker,
+      wakeCoordinator:wakes,deterministic,resultCoordinator:coordinator,farm,cooker,foodRequests,
       assertExclusive:async()=>lease.assertHeld()});
     app=await startStandalone({root,llm:model.llm,ai:{...model,queryBalance:meteredBalance,testConnection:(input:Record<string,unknown>)=>budget.runAs(petId,'interactive',()=>model!.testConnection(input))},agentDefaultModel:model.agentDefaultModel,helperChannel:helper,api,
       hostReady:(deps,helpers)=>{

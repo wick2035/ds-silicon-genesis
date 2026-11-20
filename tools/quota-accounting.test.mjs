@@ -67,3 +67,19 @@ test('综合决策共享自主额度，只为日记与反思预留两次',async(
  assert.equal(f.d.legacy.usage[day()].totalCalls,12);
  await assert.rejects(f.budget.runAs('main','diary',()=>f.budget.reserve('test','test',f.gate.signal)),/额度不足/);
 });
+
+test('食物专用请求真实发出后独立记录，不占自主和互动额度',async t=>{
+ const f=fixture(),s=await server(t),m=facade(f,s.url);f.d.legacy.config.learning.dailyModelCalls=0;f.d.legacy.config.modelBudget={interactiveDailyCalls:0};
+ const args={provider:'test',model:'test',messages:[{role:'user',content:'hi'}]};
+ await f.budget.runAs('main','food-request',()=>consume(m.llm.stream(args)));
+ const usage=f.d.legacy.usage[day()];assert.equal(s.requests(),1);assert.equal(usage.totalCalls,0);assert.equal(usage.modelCalls,0);assert.equal(usage.interactiveCalls,0);
+ assert.equal(usage.foodRequestCalls,1);assert.equal(usage.foodRequestDetails[0].status,'completed');assert.equal(usage.foodRequestDetails[0].model,'test');assert.equal(usage.callDetails,undefined);
+});
+
+test('食物专用请求失败与派发前取消均不影响自主额度',async t=>{
+ const f=fixture(),s=await server(t,500),m=facade(f,s.url),args={provider:'test',model:'test',messages:[{role:'user',content:'hi'}]};
+ await assert.rejects(f.budget.runAs('main','food-request',()=>consume(m.llm.stream(args))));
+ const usage=f.d.legacy.usage[day()];assert.equal(usage.totalCalls,0);assert.equal(usage.foodRequestCalls,1);assert.equal(usage.foodRequestDetails[0].status,'failed');
+ const release=await f.budget.runAs('main','food-request',()=>f.budget.reserve('test','test',f.gate.signal));await release('not-sent');
+ assert.equal(f.d.legacy.usage[day()].totalCalls,0);assert.equal(f.d.legacy.usage[day()].foodRequestCalls,1);assert.equal(f.d.legacy.usage[day()].foodRequestDetails.length,1);
+});

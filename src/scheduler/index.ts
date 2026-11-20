@@ -24,6 +24,7 @@ export interface SchedulerOptions {
   farm?:{settle(petId:string):Promise<unknown>};
   cooker?:{settle(petId:string):Promise<unknown>};
   groupConversation?: {run(petId:string,signal:AbortSignal):Promise<void>};
+  foodRequests?: {run(petId:string,signal:AbortSignal):Promise<void>};
   resultCoordinator: CognitiveResultCoordinator;
   development?: {run(petId:string,signal:AbortSignal):Promise<void>};
   reminders?: {run(petId:string,signal:AbortSignal):Promise<void>};
@@ -114,6 +115,9 @@ export class LifeScheduler {
               }
               this.report(result);
             }
+            // An independent, rate-limited appeal never takes priority over
+            // comprehensive cognition or spends its daily allowance.
+            if(this.options.foodRequests&&!this.controller.signal.aborted){try{await this.options.foodRequests.run(this.options.petId,this.controller.signal);}catch{this.report({status:'degraded',reason:'food_request_unavailable'});}}
             if (this.controller.signal.aborted) throw new Error('Scheduler stopped');
             await this.options.wakeCoordinator.finish(this.options.petId, claim.cursor, new Date(Date.now() + this.options.intervalSeconds * 1000).toISOString());
           } catch (error) {

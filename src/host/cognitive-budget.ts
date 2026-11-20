@@ -8,7 +8,7 @@ import type { KernelStore } from '../kernel/types.js';
 import type { PetGate, UnitOfWork } from '../storage/uow.js';
 import type { ModelBudget } from './model-facade.js';
 
-type Category='autonomous'|'diary'|'reflection'|'interactive';
+type Category='autonomous'|'diary'|'reflection'|'interactive'|'food-request';
 type Context={petId:string;category:Category;ticket?:object;consumed:boolean;purpose?:string};
 type Charge={id:string;day:string;spiritCost:number};
 type Outcome='completed'|'failed'|'not-sent';
@@ -33,10 +33,11 @@ export class DurableCognitiveBudget implements CognitiveBudget, ModelBudget {
   }
   private chargeDraft(draft:CanonicalEnvelope,category:Category,purpose='',provider='',model=''):Charge {
     let spiritCost:number;
-    try{const before=advanceSpirit(draft.life).value;if(category==='interactive')spendConversationSpirit(draft.life);else spendSpirit(draft.life,'thought');spiritCost=Math.max(0,before-draft.life.spirit!.value);}catch{throw exhausted;}
+    try{const before=advanceSpirit(draft.life).value;if(category==='interactive'||category==='food-request')spendConversationSpirit(draft.life);else spendSpirit(draft.life,'thought');spiritCost=Math.max(0,before-draft.life.spirit!.value);}catch{throw exhausted;}
     const pet=draft.legacy as Record<string,any>, constraints=draft.life.constraints;
     const limit=pet.config?.learning?.dailyModelCalls;
-    if(category!=='interactive' && (constraints.paused || !Number.isSafeInteger(limit) || limit<0))throw exhausted;
+    if(category!=='interactive' && (constraints.paused || category!=='food-request'&&(!Number.isSafeInteger(limit) || limit<0)))throw exhausted;
+    if(category==='food-request'&&(pet.config?.autonomousPaused||pet.growth?.stopAt||draft.humanity.sleeping))throw exhausted;
     if(!pet.usage || typeof pet.usage!=='object')throw new Error('模型预算记录不可用');
     const day=today();
     const usage=pet.usage[day] ||= {exploreRuns:0,modelCalls:0,diaryAttempts:0,diarySuccess:0,totalCalls:0,newStrategies:0,reflectionAttempts:0};
@@ -47,6 +48,13 @@ export class DurableCognitiveBudget implements CognitiveBudget, ModelBudget {
       const cap=pet.config?.modelBudget?.interactiveDailyCalls;
       if(cap!==undefined && (!Number.isSafeInteger(cap)||cap<0||usage.interactiveCalls>=cap))throw exhausted;
       usage.interactiveCalls++;
+    } else if(category==='food-request') {
+      // Food appeals have their own durable interval/hourly gate. They never
+      // consume the daily initiative allowance or interactive conversation cap.
+      usage.foodRequestCalls??=0;
+      if(!Number.isSafeInteger(usage.foodRequestCalls)||usage.foodRequestCalls<0)throw Error('要饭请求记录损坏');
+      usage.foodRequestCalls++;
+      (usage.foodRequestDetails??=[]).push({id,at:new Date().toISOString(),category,purpose,provider,model,status:'started'});
     } else {
       const cap=category==='autonomous'?Math.max(0,limit-2):limit;
       if(usage.totalCalls>=cap)throw exhausted;
@@ -62,10 +70,11 @@ export class DurableCognitiveBudget implements CognitiveBudget, ModelBudget {
       const current=await this.store.loadEnvelope(petId);if(!current)throw Error('生命状态不存在');
       await this.unitOfWork.apply(petId,current.version,draft=>{
         const pet=draft.legacy as Record<string,any>,usage=pet.usage?.[charge.day];
-        const details=usage?.callDetails;if(!Array.isArray(details))return {};
+        const details=category==='food-request'?usage?.foodRequestDetails:usage?.callDetails;if(!Array.isArray(details))return {};
         const index=details.findIndex((item:any)=>item.id===charge.id);if(index<0||details[index].status!=='started')return {};
         if(outcome==='not-sent'){
-          details.splice(index,1);usage.totalCalls--;usage.modelCalls--;
+          details.splice(index,1);
+          if(category==='food-request')usage.foodRequestCalls--;else {usage.totalCalls--;usage.modelCalls--;}
           const spirit=advanceSpirit(draft.life);spirit.value=Math.min(100,spirit.value+charge.spiritCost);
           Object.assign(draft.life.constraints,budgetView(pet,new Date()));
         }else details[index].status=outcome;
@@ -102,7 +111,7 @@ export class DurableCognitiveBudget implements CognitiveBudget, ModelBudget {
       context.consumed=true;this.tickets.delete(context.ticket);
       if(context.category==='interactive')return ()=>{};
     }
-    const purpose=context.purpose??({autonomous:'自主行为',diary:'日记整理',reflection:'成长反思',interactive:'互动'}[context.category]);
+    const purpose=context.purpose??({autonomous:'自主行为',diary:'日记整理',reflection:'成长反思',interactive:'互动','food-request':'独立食物决策（不占自主额度）'}[context.category]);
     const charged=await this.charge(context.petId,context.category,purpose,first,_model??'',signal);
     if(!charged)throw new Error('模型调用额度不足');
     if(signal.aborted){await this.finish(context.petId,context.category,charged,'not-sent');throw new Error('模型请求已取消');}
@@ -116,7 +125,7 @@ export class DurableCognitiveBudget implements CognitiveBudget, ModelBudget {
   /** Host wraps each non-cognitive entry point with the correct trusted pet
    * and category; callers must not supply this context from model output. */
   runAs<T>(petId:string,category:Category,fn:()=>Promise<T>,purpose?:string):Promise<T>{
-    if(!petId || !['autonomous','diary','reflection','interactive'].includes(category))throw new Error('模型预算类别无效');
+    if(!petId || !['autonomous','diary','reflection','interactive','food-request'].includes(category))throw new Error('模型预算类别无效');
     return this.context.run({petId,category,consumed:false,purpose},fn);
   }
 }

@@ -1,5 +1,6 @@
 import {riceInventory,riceAvailability,validateRiceMeal} from './rice-inventory.js';
 import {cookerFacts} from './rice-cooker.js';
+import {autonomousDecisionKey,repeatedAutonomousAction} from './autonomous-context.js';
 import {FARM_WEATHER_AWARENESS,farmFacts,farmVisit} from './farm.js';
 import {COMPANION_PERSONALITY,TIME_AWARENESS,riceMotivation} from './companion-personality.js';
 import {createHash} from 'node:crypto';
@@ -16,7 +17,7 @@ import type {PetGate,UnitOfWork,OutboxDispatcher} from '../storage/uow.js';
 import type {ActionCoordinator} from './action-coordinator.js';
 
 type Stream={stream(input:any):AsyncIterable<any>};
-type Speech={petId:string;requestId:string;sourceIds:string[];contextExcludeIds?:string[];allowActions:boolean;privateTime?:boolean;finishOnFarmReceipt?:boolean};
+type Speech={petId:string;requestId:string;sourceIds:string[];contextExcludeIds?:string[];allowActions:boolean;actionAllowlist?:readonly string[];privateTime?:boolean;finishOnFarmReceipt?:boolean};
 const empty={type:'object',properties:{},additionalProperties:false};
 const executable=new Set(Object.keys(actionCatalog));
 executable.add('care.water');
@@ -61,6 +62,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
   }
   async function execute(speech:Speech,type:string,parameters:Record<string,unknown>,key:string,signal:AbortSignal,expectedFacts:string){
     if(!speech.allowActions||signal.aborted||gate.signal.aborted)throw Error('当前发言不能执行行动');
+    if(speech.actionAllowlist&&!speech.actionAllowlist.includes(type))throw Error('当前入口不允许执行这项行动');
     if(type==='work.enter'){if(!enterWork)throw Error('工地不可用');return enterWork(speech.petId);}
     if(type==='work.stop'){if(!stopWork)throw Error('工地不可用');return stopWork(speech.petId);}
     if(type==='work.begin')return beginWork(speech.petId,speech.sourceIds,key);
@@ -74,6 +76,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
       if(decisionFacts(current)!==expectedFacts)throw Error('状态已变化，请先根据最新实况重新判断，不要重复旧决定');
       const prior=current.life.actions.find(a=>a.id===id);
       if(prior){if(prior.actionType!==type||JSON.stringify(prior.parameters)!==JSON.stringify(parameters))throw Error('行动标识冲突');return;}
+      if(speech.actionAllowlist&&repeatedAutonomousAction(current,type,parameters))throw Error('相同条件下已尝试过这项行动，请依据结果换办法或等待新条件');
       if(type==='service.eat-rice')validateRiceMeal(current,parameters.itemId);
       if(conflicts(current,type,parameters))throw Error('身体还有未确认的行动，先等结果');
       const now=new Date().toISOString();
@@ -85,7 +88,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
           if(!sourceIds.includes(field.weatherEventId))sourceIds.push(field.weatherEventId);
         }
         const interruptPolicy=type==='body.activity'||type==='farm.tend'?'interruptible':'safe-point';
-        draft.life.actions.push({id,petId:speech.petId,actionType:type,parameters,priority:60,interruptPolicy,requiredCapabilities:[type],expectedStateVersion:draft.version,sourceIds,status:'PROPOSED',createdAt:now,updatedAt:now});return {};
+        draft.life.actions.push({id,petId:speech.petId,actionType:type,parameters,...(speech.actionAllowlist?{autonomous:true,decisionKey:autonomousDecisionKey(draft,type,parameters)}:{}),priority:60,interruptPolicy,requiredCapabilities:[type],expectedStateVersion:draft.version,sourceIds,status:'PROPOSED',createdAt:now,updatedAt:now});return {};
       });
       current=await reader.loadEnvelope(speech.petId);if(!current)throw Error('行动状态不可用');
       try{await actions.queue(speech.petId,id,current.version);}catch(error){
@@ -101,7 +104,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
     const speech=options.embodied as Speech|undefined;
     if(!speech){yield* model.stream(options);return;}
     const signal=AbortSignal.any([options.signal??gate.signal,gate.signal,AbortSignal.timeout(90000)]);
-    const canPublishMoment=speech.allowActions&&speech.privateTime===true;
+    const canPublishMoment=speech.allowActions&&speech.privateTime===true&&!speech.actionAllowlist;
     const lastUser=options.messages.findLast((m:any)=>m.role==='user')?.content;
     const query=typeof lastUser==='string'?lastUser:Array.isArray(lastUser)?lastUser.filter((b:any)=>b.type==='text').map((b:any)=>b.text).join(' '):'';
     // The prepared snapshot may predate a queued operation or the model budget.
@@ -110,6 +113,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
     const initial=await sense(speech.petId,speech.contextExcludeIds??speech.sourceIds,query),messages=[...options.messages];
     const allowed=initial.envelope.life.constraints.capabilities.filter(c=>c.enabled&&(!c.requiresPermission||initial.envelope.life.constraints.permissions.includes(c.requiresPermission))).map(c=>c.name).filter(n=>executable.has(n)&&n!=='labor.step'&&!['care.feed','care.pet','care.soothe','care.accompany'].includes(n));
     if(!initial.envelope.life.constraints.capabilities.some(c=>c.name==='care.water')&&initial.envelope.life.constraints.capabilities.some(c=>c.name==='care.feed'&&c.enabled))allowed.push('care.water');
+    if(speech.actionAllowlist)for(let i=allowed.length-1;i>=0;i--)if(!speech.actionAllowlist.includes(allowed[i]))allowed.splice(i,1);
     const tools=[{name:'sense_self',description:'感知此刻身体、需求、钱包、稻田天气、近期真实互动与行动结果。',inputSchema:empty},
       ...(canPublishMoment?[{name:'publish_moment',description:'把自己写的一两句说说真实发布到本机生命空间。正文160字以内，用自己的口吻分享具体经历与感受；sourceId 必须取自当前说说实况的 sources。不复述私聊原话、他人隐私或系统术语。这不是发QQ消息。收到 COMPLETED 才算发布成功。',inputSchema:{type:'object',properties:{text:{type:'string',minLength:1,maxLength:160},sourceId:{type:'string'}},required:['text','sourceId'],additionalProperties:false}}]:[]),
       ...(speech.allowActions?[{name:'act',description:'按需要选择一次真实行动。吃饭优先选锅里的熟饭（source=cooker），再选冰箱库存；没饭才考虑买。自己煮饭用 service.cook-rice。'+JSON.stringify(actionCatalog),inputSchema:{type:'object',properties:{actionType:{type:'string',enum:allowed},parameters:{type:'object'}},required:['actionType','parameters'],additionalProperties:false}},
@@ -118,6 +122,7 @@ export function createEmbodiedSpeech(reader:{loadEnvelope(id:string):Promise<Can
       {name:'begin_work',description:'在工地恢复普通工作，之后持续搬砖；不创建合同，不触发强制模式。',inputSchema:empty},
       {name:'stop_work',description:'自主决定在工地停工，留在工地；强制工作期间不能覆盖爸爸的强制命令。',inputSchema:empty},
       {name:'leave_worksite',description:'自主离开自己进入的工地；被爸爸放进去时须等他接出。',inputSchema:empty}]:[])];
+    if(speech.actionAllowlist)for(let i=tools.length-1;i>=0;i--)if(!['act','sense_self'].includes(tools[i].name))tools.splice(i,1);
     const personality=STABLE_PERSONALITY+'\n'+(options.system.includes('【你自己的心思和口吻】')?'':COMPANION_PERSONALITY+'\n'+TIME_AWARENESS);
     // Live body and actionable inventory are required inputs, never optional history.
     const liveFoodFor=(envelope:CanonicalEnvelope)=>{const pet=envelope.legacy as any;return {身体:envelope.humanity.stats,睡眠:{sleeping:envelope.humanity.sleeping,restingUntil:envelope.humanity.restingUntil},food:{...riceMotivation(envelope.humanity as any,pet.config??{}),price:pet.config?.costs?.feed,frozen:pet.wallet?.frozen===true,cooker:cookerFacts(envelope)},饭钱:pet.wallet?.balance,库存:riceInventory(envelope),食物可用性:riceAvailability(envelope)};};
