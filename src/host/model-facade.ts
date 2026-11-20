@@ -44,7 +44,8 @@ export function createModelFacade(config: ImportedModelConfig, options: ModelFac
       if (!allowed(o.provider,o.model)) return fail('所选模型未授权或租约不可用');
       if (o.signal && typeof o.signal.addEventListener !== 'function') return fail('取消信号无效');
       const system=o.system ?? '';
-      if (typeof system !== 'string' || system.length>limit || !Array.isArray(o.messages)) return fail('模型输入无效');
+      if (typeof system !== 'string' || !Array.isArray(o.messages)) return fail('模型输入无效');
+      if(system.length>limit)throw new CognitiveError('context_overflow','模型输入超过限制');
       if (o.maxTokens !== undefined && (!Number.isInteger(o.maxTokens) || o.maxTokens < 1 || o.maxTokens > 8192)) return fail('模型输出限制无效');
       if (o.temperature !== undefined && (!Number.isFinite(o.temperature) || o.temperature < 0 || o.temperature > 2)) return fail('模型温度无效');
       const timeoutMs=settings.timeoutMs, maxTokens=Math.min(o.maxTokens??settings.maxTokens,settings.maxTokens);

@@ -154,7 +154,7 @@ test('模型返回空内容时不会发布虚构的照料回应',async()=>{
   const base={petId:'main',humanity:{lastThought:'喝到啦'},life:{events:[],invalidSources:{}}},shown=[];
   const observe=createCareReactions(base,async()=>'',text=>shown.push(text));
   observe({...base,life:{...base.life,events:[{eventId:'care-water:test',type:'social.care',payload:{action:'water'}}]}});
-  assert.match(await observe.wait('care-water:test'),/^【系统反馈】/);assert.equal(shown.length,1);assert.match(shown[0],/暂时未能生成回应/);
+  assert.match(await observe.wait('care-water:test'),/^【系统反馈】/);assert.equal(shown.length,1);assert.match(shown[0],/模型未返回完整回应/);
 });
 
 test('照料回应显示期间不会被普通心情气泡盖掉',async()=>{

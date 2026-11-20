@@ -1,4 +1,5 @@
 import type {CanonicalEnvelope} from '../storage/postgres.js';
+import {runReaction} from './reaction-response.js';
 
 type Event = CanonicalEnvelope['life']['events'][number];
 /** A bounded account of committed human input; never expose configuration secrets. */
@@ -42,15 +43,8 @@ export function createInteractionReactions(initial:CanonicalEnvelope,
     running=true;
     try{while(queued.length&&!signal.aborted){
       const batch=queued;queued=[];
-      const controller=new AbortController();
-      let timer:ReturnType<typeof setTimeout>|undefined;
-      const deadline=new Promise<string>(resolve=>{timer=setTimeout(()=>{controller.abort();resolve('');},30000);});
-      const aborted=new Promise<string>(resolve=>{const stop=()=>resolve('');controller.signal.addEventListener('abort',stop,{once:true});});
-      const stop=()=>controller.abort();signal.addEventListener('abort',stop,{once:true});
-      let text='';
-      try{text=await Promise.race([Promise.resolve().then(()=>respond(initial.petId,{eventId:batch.at(-1)!.eventId,description:batch.map(e=>e.description).join('；'),sourceIds:batch.map(e=>e.eventId)},AbortSignal.any([signal,controller.signal]))).catch(()=>''),deadline,aborted]);}
-      finally{clearTimeout(timer);signal.removeEventListener('abort',stop);}
-      if(!signal.aborted)try{publish(text.trim()||'【系统反馈】操作已记录，她暂时未能生成回应。可检查模型连接后继续和她说话。');}catch(error){console.error('[interaction] 无法显示反馈',error);}
+      const result=await runReaction(signal=>respond(initial.petId,{eventId:batch.at(-1)!.eventId,description:batch.map(e=>e.description).join('；'),sourceIds:batch.map(e=>e.eventId)},signal),'interaction',signal);
+      if(result&&!signal.aborted)try{publish(result.text);}catch(error){console.error('[interaction] 无法显示反馈',error);}
     }}finally{running=false;}
   };
   return (state:CanonicalEnvelope)=>{

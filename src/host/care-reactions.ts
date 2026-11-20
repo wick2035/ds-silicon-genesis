@@ -1,11 +1,12 @@
 import type {CanonicalEnvelope} from '../storage/postgres.js';
+import {runReaction} from './reaction-response.js';
 
 /** React only to new committed care, never to a pending or interrupted action. */
-export function createCareReactions(initial:CanonicalEnvelope, respond:(petId:string,event:{eventId:string;description:string},signal:AbortSignal)=>Promise<string>, publish:(text:string)=>void) {
+export function createCareReactions(initial:CanonicalEnvelope, respond:(petId:string,event:{eventId:string;description:string},signal:AbortSignal)=>Promise<string>, publish:(text:string)=>void,signal?:AbortSignal) {
   const seen=new Set(initial.life.events.map(event=>event.eventId));
   const pending=new Map<string,Promise<string>>();
   const observe=(state:CanonicalEnvelope) => {
-    if(state.petId!==initial.petId)return;
+    if(signal?.aborted||state.petId!==initial.petId)return;
     for(const event of state.life.events) {
       if(seen.has(event.eventId))continue;
       seen.add(event.eventId);
@@ -13,10 +14,8 @@ export function createCareReactions(initial:CanonicalEnvelope, respond:(petId:st
       const descriptions:Record<string,string>={feed:'爸爸刚刚喂了你一口饭，你真的吃到了',water:'爸爸刚刚给你喝了水',pet:'爸爸刚刚摸摸你',play:'你刚刚和爸爸一起玩了一会儿',soothe:'爸爸刚刚安慰了你',accompany:'你刚刚和爸爸安静地待了一会儿'};
       if((event.payload as any)?.selfInitiated || !['social.care','body.meal'].includes(event.type)||!Object.hasOwn(descriptions,action)||Object.hasOwn(state.life.invalidSources,event.eventId))continue;
       const description=(event.type==='body.meal'?'你刚刚真的吃完了一碗饭':descriptions[action])+'，请根据自己的身体感受和心情自然说一句。';
-      const controller=new AbortController();let timer:ReturnType<typeof setTimeout>;
-      const deadline=new Promise<string>(resolve=>{timer=setTimeout(()=>{controller.abort();resolve('');},30000);});
-      const task=Promise.race([Promise.resolve().then(()=>respond(state.petId,{eventId:event.eventId,description},controller.signal)),deadline])
-        .then(text=>text.trim()).catch(()=>'').finally(()=>clearTimeout(timer)).then(text=>{text=text||'【系统反馈】这次照料已完成，她暂时未能生成回应。请检查模型连接。';if(text)try{publish(text);}catch(error){console.error('[care] 无法显示回应',error);}return text;});
+      const task=runReaction(signal=>respond(state.petId,{eventId:event.eventId,description},signal),'care',signal)
+        .then(result=>{const text=result?.text??'';if(text&&!signal?.aborted)try{publish(text);}catch(error){console.error('[care] 无法显示回应',error);}return text;});
       pending.set(event.eventId,task);
       if(pending.size>100)pending.delete(pending.keys().next().value!);
     }

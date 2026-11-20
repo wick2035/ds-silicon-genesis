@@ -12,6 +12,7 @@ import {readMemeChoices,withMemeSpeech,type MemeSource} from './meme-speech.js';
 import {createEmbodiedSpeech} from './embodied-speech.js';
 import {initializeSpirit} from './spirit-initialization.js';
 import {createCanonicalTodos,createTodoRoute} from './canonical-todos.js';
+import {runReaction} from './reaction-response.js';
 import {createLegacyResponses} from './legacy-responses.js';
 import {createCareReactions,careReactionLeaf} from './care-reactions.js';
 import {createWorksiteReactions} from './worksite-reactions.js';
@@ -246,7 +247,7 @@ export async function main():Promise<void> {
     const coordinator=new CognitiveResultCoordinator(store,unitOfWork,lease,projectBody,actions,dispatcher);
     const development=createDevelopment(store,lease,unitOfWork,budget,model);
     const responses=createLegacyResponses(store,lease,unitOfWork,budget,model,persona,grounding,rememberMeme);
-    semanticResponse=async(id,requestId,detail)=>{const d=detail as any;const descriptions:Record<string,string>={'drag-start':'爸爸开始拖动我','drag-end':'爸爸松开了我','flight-start':'我开始飞行，尚不知道是否发生碰撞','flight-end':'飞行结束','prop-take':'爸爸拿起我的饭碗','prop-release':'爸爸放下我的饭碗','menu-anim':'爸爸选择了一个动画','go-home':'爸爸选择回家','open-chat':'爸爸打开聊天','open-care':'爸爸打开照料面板','open-todo':'爸爸打开待办','show-balance':'爸爸查看余额'};const description=descriptions[d?.action];if(!description)throw Error('互动类型无效');const event:any=await domain.record(id,requestId,'interaction',description,requestId,{},observerAuthority);if(!event?.id)throw Error('互动来源未保存');const text=await responses(id,'physical',AbortSignal.any([lease.signal,AbortSignal.timeout(30000)]),{eventId:`legacy:event:${encodeURIComponent(event.id)}`,description}).catch(()=> '【系统反馈】这次互动已记录，她暂时未能生成回应。请检查模型连接。');return {ok:true,reaction:{text}};};
+    semanticResponse=async(id,requestId,detail)=>{const d=detail as any;const descriptions:Record<string,string>={'drag-start':'爸爸开始拖动我','drag-end':'爸爸松开了我','flight-start':'我开始飞行，尚不知道是否发生碰撞','flight-end':'飞行结束','prop-take':'爸爸拿起我的饭碗','prop-release':'爸爸放下我的饭碗','menu-anim':'爸爸选择了一个动画','go-home':'爸爸选择回家','open-chat':'爸爸打开聊天','open-care':'爸爸打开照料面板','open-todo':'爸爸打开待办','show-balance':'爸爸查看余额'};const description=descriptions[d?.action];if(!description)throw Error('互动类型无效');const event:any=await domain.record(id,requestId,'interaction',description,requestId,{},observerAuthority);if(!event?.id)throw Error('互动来源未保存');const result=await runReaction(signal=>responses(id,'physical',signal,{eventId:`legacy:event:${encodeURIComponent(event.id)}`,description}),'physical',lease.signal);if(!result)throw Error('互动已取消');return {ok:true,reaction:{text:result.text}};};
     let waitCareResponse:((eventId:string)=>Promise<string|undefined>)|undefined;
     const adapter=createLegacyRequestAdapter({store,gate:lease,domain,humanity,service,development,responses,waitCareResponse:eventId=>waitCareResponse?.(eventId)??Promise.resolve(undefined),interrupt:id=>dispatcher.interrupt(id),tokenSnapshot:id=>tokens.snapshot(id),providers:{search:true,fetch:true,bili:true,image:true,model:true},view:id=>commandChannel.view(id),resolvePet:url=>{
       const selected=url.searchParams.get('pet')||petId;if(selected!==petId)throw Error('宠物不存在');return {petId,name:'大肥鱼'};}});
@@ -297,10 +298,10 @@ export async function main():Promise<void> {
         const notifyCompletion=createLaborCompletionNotices(store,petId,(id,event,signal)=>responses(id,'completion',signal,event,{autonomous:true}),
           text=>deps.state.writePet(petId,'say',{...careReactionLeaf(text,helpers.readAllConfig(deps.configPaths).main?.voiceEnabled===true),...(replyMemes.has(text)?{image:replyMemes.get(text)}:{})}),lease.signal);
         observeCommits(notifyCompletion);notifyCompletion(reactionBaseline);
-        const reactToCare=createCareReactions(reactionBaseline,(id,event,signal)=>responses(id,'care',AbortSignal.any([lease.signal,signal]),event),text=>deps.state.writePet(petId,'say',{...careReactionLeaf(text,helpers.readAllConfig(deps.configPaths).main?.voiceEnabled===true),...(replyMemes.has(text)?{image:replyMemes.get(text)}:{})}));
+        const reactToCare=createCareReactions(reactionBaseline,(id,event,signal)=>responses(id,'care',signal,event),text=>deps.state.writePet(petId,'say',{...careReactionLeaf(text,helpers.readAllConfig(deps.configPaths).main?.voiceEnabled===true),...(replyMemes.has(text)?{image:replyMemes.get(text)}:{})}),lease.signal);
         waitCareResponse=eventId=>reactToCare.wait(eventId);
         observeCommits(reactToCare);
-        const reactToWorksite=createWorksiteReactions(reactionBaseline,(id,event,signal)=>responses(id,'worksite',AbortSignal.any([lease.signal,signal]),event),async(id,event,text,fallback)=>{
+        const reactToWorksite=createWorksiteReactions(reactionBaseline,(id,event,signal)=>responses(id,'worksite',signal,event),async(id,event,text,fallback)=>{
           const published=await lease.run(id,async()=>{const current=await store.loadEnvelope(id);if(!current)return false;let valid=false;
             await unitOfWork.apply(id,current.version,draft=>{const transitions=draft.life.events.filter(e=>e.type==='interaction.worksite'&&['enter-forced','enter-voluntary','release','leave-voluntary','force-work','touch','drag'].includes((e.payload as any)?.action));
               const site=(draft.legacy as any).worksite;if(transitions.at(-1)?.eventId!==event.eventId||!site||(event.action==='release'?site.inside:!site.inside))return {};
@@ -309,7 +310,7 @@ export async function main():Promise<void> {
             });return valid;});
           // These two manually requested reactions speak even if general chat voice is off.
           if(published&&!lease.signal.aborted)deps.state.writePet(id,'say',{...careReactionLeaf(text,false),...(replyMemes.has(text)?{image:replyMemes.get(text)}:{}),worksiteReaction:true});
-        });
+        },lease.signal);
         observeCommits(reactToWorksite);
         validateWhisperSurface=(surface?:string)=>{const params=new URLSearchParams({pet:petId,...(surface?{surface}:{})});if(!deps.requirePet(params,()=>helpers.readAllConfig(deps.configPaths),{surface:true}).ok)throw Error('当前显示端不可用');};
         resolveWhisperImage=async(name:string,surface?:string)=>{const key=name.trim();if(!key||key.length>120||/[\/\\:\x00-\x1f]/.test(key)||key==='.'||key==='..')throw Error('表情名称无效');const params=new URLSearchParams({pet:petId,...(surface?{surface}:{})});const who=deps.requirePet(params,()=>helpers.readAllConfig(deps.configPaths),{surface:true});if(!who.ok)throw Error('当前显示端不可用');const memes=who.conf?.memes;if(!memes||!Object.hasOwn(memes,key)||typeof memes[key]!=='string'||!memes[key].trim())throw Error('表情不在当前素材池');for(const dir of deps.memeDirsFor(who.entry)){try{const base=await realpath(dir),file=await realpath(join(dir,key+'.png')),rel=relative(base,file);if(!rel||rel==='..'||rel.startsWith('..'+(process.platform==='win32'?'\\':'/'))||isAbsolute(rel))continue;const info=await stat(file);if(info.isFile())return key;}catch{}}throw Error('表情图片不可用');};

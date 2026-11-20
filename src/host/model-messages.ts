@@ -1,3 +1,4 @@
+import {CognitiveError} from '../cognition/diagnostics.js';
 export type ImageResolver = (attachment: unknown, signal: AbortSignal) => Promise<{mediaType:string; data:Uint8Array}>;
 const media = new Set(['image/png','image/jpeg','image/webp','image/gif']);
 /** Resolve only through the host's authenticated attachment service. */
@@ -23,7 +24,7 @@ export async function convertMessages(input: unknown[], provider: 'openai-comple
         else {let parsed:unknown;try{parsed=JSON.parse(b.arguments);}catch{throw new Error('工具参数无效');}content.push({type:'tool_use',id:b.id,name:b.name,input:parsed});}
       } else throw new Error('不支持的消息内容');
     }
-    if(total>32768)throw new Error('模型输入超过限制');
+    if(total>32768)throw new CognitiveError('context_overflow','模型输入超过限制');
     if(m.role==='tool') {
       const id=m.toolCallId ?? m.source?.callId;
       if(typeof id!=='string'||!id || content.some(x=>x.type!=='text'))throw new Error('工具结果无效');

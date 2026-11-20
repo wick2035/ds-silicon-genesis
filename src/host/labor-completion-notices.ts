@@ -1,4 +1,5 @@
 import {interactionDescription} from './interaction-reactions.js';
+import {REACTION_TIMEOUT_MS} from './reaction-response.js';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 
 /** The existing event journal is the outbox: a committed reply consumes a completion.
@@ -27,7 +28,7 @@ export function createLaborCompletionNotices(
         const event=candidate(state);if(!event)return;
         try{
           const text=await respond(petId,{eventId:event.eventId,description:interactionDescription(event,state)!,sourceIds:[event.eventId]},
-            AbortSignal.any([signal,AbortSignal.timeout(30000)]));
+            AbortSignal.any([signal,AbortSignal.timeout(REACTION_TIMEOUT_MS)]));
           // Respond commits the sourced conversation before any desktop/QQ delivery.
           const current=await reader.loadEnvelope(petId);
           if(!signal.aborted&&current&&!current.life.constraints.paused&&!(current.legacy as any).growth?.stopAt&&!(current.legacy as any).config?.autonomousPaused&&
