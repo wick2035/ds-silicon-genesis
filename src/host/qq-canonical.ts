@@ -8,7 +8,7 @@ import type { ActionProposal, LifeState } from '../kernel/types.js';
 import type { BodyProjection, CanonicalEnvelope } from '../storage/postgres.js';
 import type { PetGate, UnitOfWork, OutboxIntent, ExecutionReceipt } from '../storage/uow.js';
 
-interface Reader { loadEnvelope(petId:string): Promise<CanonicalEnvelope|null> }
+interface Reader { loadEnvelope(petId:string): Promise<CanonicalEnvelope|null>; loadLifeSettings?(petId:string):Promise<{groupChatBlocked:boolean}> }
 type Obj = Record<string,any>;
 const hash = (s:string) => createHash('sha256').update(s).digest('hex');
 const key = (s:unknown): s is string => typeof s === 'string' && s.length > 0 && s.length <= 200 && !/[\x00-\x1f]/.test(s);
@@ -44,14 +44,21 @@ export class CanonicalQQ {
   }
   private async change<T>(petId:string, edit:(draft:CanonicalEnvelope)=>{value:T; intents?:OutboxIntent[]}):Promise<T> {
     return this.gate.run(petId,async()=>{
-      const envelope=await this.reader.loadEnvelope(petId); if(!envelope || envelope.petId!==petId) throw new Error('生命状态不存在');
       if(this.gate.signal.aborted) throw new Error('写入租约已失去');
       let value!:T;
-      await this.uow.apply(petId,envelope.version,draft=>{const result=edit(draft);value=structuredClone(result.value);return {intents:result.intents};});
+      const change=(draft:CanonicalEnvelope)=>{const result=edit(draft);value=structuredClone(result.value);return {intents:result.intents};};
+      // The UoW already locks and reads the current envelope. Do not transfer
+      // the entire archive once more just to obtain its version.
+      if(this.uow.applyCurrent)await this.uow.applyCurrent(petId,change);
+      else {
+        const envelope=await this.reader.loadEnvelope(petId);if(!envelope||envelope.petId!==petId)throw Error('生命状态不存在');
+        await this.uow.apply(petId,envelope.version,change);
+      }
       return value;
     });
   }
   async groupBlocked(petId:string):Promise<boolean> {
+    if(this.reader.loadLifeSettings)return (await this.reader.loadLifeSettings(petId)).groupChatBlocked;
     const state=await this.reader.loadEnvelope(petId);
     return !state || groupChatBlocked(state);
   }
@@ -236,39 +243,48 @@ export class CanonicalQQ {
   async enableRelay(petId:string):Promise<void> {
     if(!this.#relayStarted.has(petId))this.#relayStarted.set(petId,Date.now());
   }
+  private relayCandidate(draft:CanonicalEnvelope) {
+    const qq=(draft.legacy as Obj).qq,started=this.#relayStarted.get(draft.petId),now=Date.now();
+    if(!Number.isFinite(started)||!key(qq?.identity?.ownerOpenid)||!qq.outbound)return;
+    if((Object.values(qq.outbound) as Obj[]).some(e=>e.proactive===true&&Number.isFinite(e.at)&&now-e.at<CONTACT_INTERVAL))return;
+    const wallet=(draft.legacy as Obj).wallet;
+    if(!Number.isFinite(wallet?.balance)||wallet.balance<SENTENCE_PRICE)return;
+    for(const event of draft.life.events){
+      if(event.type!=='conversation.assistant'||event.source!=='desktop')continue;
+      const at=Date.parse(event.receivedAt);
+      if(!Number.isFinite(at)||at<started!||at>now||now-at>RELAY_LIFETIME)continue;
+      const id=relayKey(event.eventId);if(qq.outbound[id])continue;
+      const content=relayText(draft,event.eventId);if(!content)continue;
+      const amount=Math.round(sentences(content).length*SENTENCE_PRICE*100)/100;
+      if(wallet.balance>=amount)return {event,id,content,amount};
+    }
+  }
+  /** A committed snapshot can wake the relay without a read or a write. */
+  hasPendingRelay(state:CanonicalEnvelope):boolean {return !!this.relayCandidate(state);}
   /** Forward one recent proactive expression directly, without a QQ reply anchor. */
   async enqueueNextRelay(petId:string,authority:object):Promise<string|null> {
     if(authority!==this.#ingress)throw Error('QQ 通道凭据无效');
+    const current=await this.reader.loadEnvelope(petId);
+    if(!current||!this.hasPendingRelay(current))return null;
     return this.change(petId,draft=>{
-      const qq=(draft.legacy as Obj).qq, started=this.#relayStarted.get(petId), now=Date.now();
-      if(!Number.isFinite(started)||!key(qq?.identity?.ownerOpenid)||!qq.outbound)return {value:null};
-      const attempts=(Object.values(qq.outbound) as Obj[]).filter(e=>e.proactive===true && Number.isFinite(e.at));
-      if(attempts.some(e=>now-e.at<CONTACT_INTERVAL))return {value:null};
-
-      for(const event of draft.life.events){
-        const at=Date.parse(event.receivedAt);
-        if(!Number.isFinite(at)||at<started!||at>now||now-at>RELAY_LIFETIME)continue;
-        const content=relayText(draft,event.eventId);if(!content)continue;
-        const id=relayKey(event.eventId);if(qq.outbound[id])continue;
-        const wallet=(draft.legacy as Obj).wallet, amount=Math.round(sentences(content).length*SENTENCE_PRICE*100)/100;
-        if(!Number.isFinite(wallet?.balance)||wallet.balance<amount)continue;
-        const scene='c2c', actionId='qq-send:'+id, sourceEventId=event.eventId;
-        const fingerprint=hash(JSON.stringify({scene,text:content,sourceEventId}));
-        const proposal:ActionProposal={id:actionId,petId,actionType:'qq.send',parameters:{scene,destination:qq.identity.ownerOpenid,content,proactive:true},priority:50,interruptPolicy:'noninterruptible',requiredCapabilities:['qq.send'],expectedStateVersion:draft.version,sourceIds:[sourceEventId]};
-        qq.outbound[id]={at:now,state:'pending',actionId,fingerprint,proactive:true,amount};
-        const state:LifeState={...structuredClone(draft.life),petId,version:draft.version,...this.body(draft)};validateQQReply(draft,state,proposal);
-        // Reserve the price with the durable send intent. Unknown delivery must
-        // never be retried or charged a second time. Explicit contact fees also
-        // apply when ordinary daily consumption is frozen.
-        wallet.balance=Math.round((wallet.balance-amount)*100)/100;
-        if(wallet.balance===0){wallet.emptySince=now;delete wallet.emptyAskedAt;}
-        const financeId='finance:'+actionId,stampFinance=new Date(now).toISOString();
-        ((draft.legacy as Obj).events ||= []).push({id:financeId,kind:'wallet-spend',text:`主动联系消耗 ${amount} token，余额 ${wallet.balance} token`,ts:now});
-        draft.life.events.push({eventId:financeId,petId,type:'wallet.spend',source:'canonical',occurredAt:stampFinance,receivedAt:stampFinance,evidenceLevel:'observed',payload:{kind:'proactive',amount,balance:wallet.balance}});
-        const stamp=new Date(now).toISOString();draft.life.actions.push({...proposal,status:'PENDING',createdAt:stamp,updatedAt:stamp});
-        return {value:actionId,intents:[{id:actionId,type:'qq.send',payload:{actionId,petId,actionType:'qq.send',parameters:proposal.parameters}}]};
-      }
-      return {value:null};
+      // Recheck under the writer gate: the preflight is only an optimization.
+      const candidate=this.relayCandidate(draft);if(!candidate)return {value:null};
+      const {event,id,content,amount}=candidate,qq=(draft.legacy as Obj).qq,wallet=(draft.legacy as Obj).wallet,now=Date.now();
+      const scene='c2c', actionId='qq-send:'+id, sourceEventId=event.eventId;
+      const fingerprint=hash(JSON.stringify({scene,text:content,sourceEventId}));
+      const proposal:ActionProposal={id:actionId,petId,actionType:'qq.send',parameters:{scene,destination:qq.identity.ownerOpenid,content,proactive:true},priority:50,interruptPolicy:'noninterruptible',requiredCapabilities:['qq.send'],expectedStateVersion:draft.version,sourceIds:[sourceEventId]};
+      qq.outbound[id]={at:now,state:'pending',actionId,fingerprint,proactive:true,amount};
+      const state:LifeState={...structuredClone(draft.life),petId,version:draft.version,...this.body(draft)};validateQQReply(draft,state,proposal);
+      // Reserve the price with the durable send intent. Unknown delivery must
+      // never be retried or charged a second time. Explicit contact fees also
+      // apply when ordinary daily consumption is frozen.
+      wallet.balance=Math.round((wallet.balance-amount)*100)/100;
+      if(wallet.balance===0){wallet.emptySince=now;delete wallet.emptyAskedAt;}
+      const financeId='finance:'+actionId,stampFinance=new Date(now).toISOString();
+      ((draft.legacy as Obj).events ||= []).push({id:financeId,kind:'wallet-spend',text:`主动联系消耗 ${amount} token，余额 ${wallet.balance} token`,ts:now});
+      draft.life.events.push({eventId:financeId,petId,type:'wallet.spend',source:'canonical',occurredAt:stampFinance,receivedAt:stampFinance,evidenceLevel:'observed',payload:{kind:'proactive',amount,balance:wallet.balance}});
+      const stamp=new Date(now).toISOString();draft.life.actions.push({...proposal,status:'PENDING',createdAt:stamp,updatedAt:stamp});
+      return {value:actionId,intents:[{id:actionId,type:'qq.send',payload:{actionId,petId,actionType:'qq.send',parameters:proposal.parameters}}]};
     });
   }
 }

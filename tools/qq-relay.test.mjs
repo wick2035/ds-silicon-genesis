@@ -10,8 +10,45 @@ function fixture(){
   const uow={apply:async(_id,version,change)=>{assert.equal(version,state.version);const draft=structuredClone(state),result=change(draft);draft.version++;Object.assign(state,draft);intents.push(...(result.intents||[]));}};
   const qq=new CanonicalQQ(reader,uow,gate,()=>({body:{},emotions:{}}),authority);
   const expression=(id,kind='whisper',text='今天心情不错')=>{state.life.events.push(event('request-'+id,'interaction.requested','scheduler','',{payload:{kind}}),event(id,'conversation.assistant','desktop',text,{causationId:'request-'+id}));};
-  return {state,event,intents,authority,qq,expression};
+  return {state,event,intents,authority,qq,expression,reader,uow,gate};
 }
+
+test('ordinary chat and cooldown checks never rewrite the archive or advance its version',async()=>{
+  const f=fixture();await f.qq.enableRelay('main');
+  f.state.life.events.push(f.event('group','social.message','qq','你好'),f.event('answer','conversation.assistant','qq-group','本鱼来啦'));
+  const before=JSON.stringify(f.state);
+  assert.equal(f.qq.hasPendingRelay(f.state),false);
+  for(let i=0;i<5;i++)assert.equal(await f.qq.enqueueNextRelay('main',f.authority),null);
+  assert.equal(JSON.stringify(f.state),before);
+  f.expression('new');assert.equal(f.qq.hasPendingRelay(f.state),true);
+  await f.qq.enqueueNextRelay('main',f.authority);
+  const version=f.state.version;
+  f.expression('later');assert.equal(f.qq.hasPendingRelay(f.state),false);
+  assert.equal(await f.qq.enqueueNextRelay('main',f.authority),null);
+  assert.equal(f.state.version,version);assert.equal(f.intents.length,1);
+});
+
+test('relay rechecks the latest locked balance after a successful preflight',async()=>{
+  const f=fixture();await f.qq.enableRelay('main');f.expression('new');
+  f.uow.applyCurrent=async(_id,change)=>{f.state.legacy.wallet.balance=0;change(f.state);};
+  assert.equal(await f.qq.enqueueNextRelay('main',f.authority),null);
+  assert.equal(f.intents.length,0);
+});
+
+test('QQ ingress uses the locked current state without a redundant archive read',async()=>{
+  const f=fixture();f.state.life.relationships=[];
+  f.reader.loadEnvelope=async()=>{throw Error('redundant archive read');};
+  f.uow.applyCurrent=async(_id,change)=>{const draft=structuredClone(f.state);change(draft);draft.version++;Object.assign(f.state,draft);};
+  const result=await f.qq.receive('main',{messageId:'m1',scene:'c2c',actorOpenid:'owner',text:'你好',occurredAt:new Date().toISOString()},f.authority);
+  assert.equal(result.accepted,true);assert.equal(f.state.life.events.length,1);
+});
+
+test('group access reads only settings and fails closed on read errors',async()=>{
+  const f=fixture();f.reader.loadEnvelope=async()=>{throw Error('redundant archive read');};
+  f.reader.loadLifeSettings=async()=>({groupChatBlocked:true});assert.equal(await f.qq.groupBlocked('main'),true);
+  f.reader.loadLifeSettings=async()=>({groupChatBlocked:false});assert.equal(await f.qq.groupBlocked('main'),false);
+  f.reader.loadLifeSettings=async()=>{throw Error('settings unavailable');};await assert.rejects(f.qq.groupBlocked('main'),/settings unavailable/);
+});
 
 test('forwards only new proactive expression text without a QQ reply window',async()=>{
   const f=fixture();f.expression('old');f.state.life.events.forEach(e=>e.receivedAt=new Date(Date.now()-10000).toISOString());await f.qq.enableRelay('main');

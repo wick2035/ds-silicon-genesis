@@ -17,20 +17,19 @@ function fixture(t,onTurn) {
   return {gateway,turns,sent,receive,tick};
 }
 
-test('busy group batches four messages per reply and respects delivery cooldown',async t=>{
+test('busy group coalesces the whole waiting burst instead of replaying old batches',async t=>{
   const f=fixture(t);
   for(let i=0;i<12;i++)await f.receive();
   await f.tick(0);
-  assert.deepEqual(f.turns.map(batch=>batch.length),[4]);
-  await f.tick(9999);assert.equal(f.sent.length,1);
-  await f.tick(1);assert.deepEqual(f.turns.map(batch=>batch.length),[4,4]);
-  await f.tick(10000);assert.deepEqual(f.turns.map(batch=>batch.length),[4,4,4]);
+  assert.deepEqual(f.turns.map(batch=>batch.length),[12]);
+  await f.tick(20000);assert.equal(f.sent.length,1);assert.equal(f.turns.length,1);
   assert.deepEqual(f.turns.flat().map(m=>m.eventId),Array.from({length:12},(_,i)=>'m'+(i+1)));
+  assert.equal(f.sent[0][5],'m12');
 });
 
-test('quiet group gets a turn after four seconds without filling a batch',async t=>{
+test('quiet group gets a turn after one second without filling a batch',async t=>{
   const f=fixture(t);await f.receive();
-  await f.tick(3999);assert.equal(f.turns.length,0);
+  await f.tick(999);assert.equal(f.turns.length,0);
   await f.tick(1);assert.equal(f.turns[0].length,1);
 });
 
@@ -42,7 +41,7 @@ test('send uses the chosen eligible batch message as the QQ reply anchor',async 
   assert.deepEqual(f.sent[0].slice(1,6),['reply:m2','group','在这儿','m2','m2']);
 });
 
-test('new messages wait for the current generation and its send cooldown',async t=>{
+test('new messages supersede the unsent generation and are considered together next',async t=>{
   let release;
   const pending=new Promise(resolve=>{release=resolve;});
   const f=fixture(t,()=>pending);
@@ -51,8 +50,45 @@ test('new messages wait for the current generation and its send cooldown',async 
   for(let i=0;i<4;i++)await f.receive();
   await f.tick(20000);assert.equal(f.turns.length,1);
   release('本鱼来啦');await settle();
-  await f.tick(9999);assert.equal(f.turns.length,1);
-  await f.tick(1);assert.equal(f.turns.length,2);
+  assert.equal(f.sent.length,0);
+  await f.tick(0);assert.equal(f.turns.length,2);
+  assert.deepEqual(f.turns[1].map(m=>m.eventId),['m5','m6','m7','m8']);
+  assert.equal(f.sent.length,1);assert.equal(f.sent[0][5],'m8');
+});
+
+test('generation overlaps cooldown while actual group sends remain ten seconds apart',async t=>{
+  const f=fixture(t);await f.receive();await f.tick(1000);
+  await f.receive();await f.tick(1000);
+  assert.equal(f.turns.length,2);assert.equal(f.sent.length,1);
+  await f.tick(8999);assert.equal(f.sent.length,1);
+  await f.tick(1);assert.equal(f.sent.length,2);
+});
+
+test('a newer message replaces an unsent cooldown draft without resending it',async t=>{
+  const f=fixture(t);await f.receive();await f.tick(1000);
+  await f.receive();await f.tick(1000);assert.equal(f.turns.length,2);
+  await f.receive();await f.tick(1000);assert.equal(f.turns.length,3);
+  await f.tick(8000);
+  assert.deepEqual(f.sent.map(args=>args[5]),['m1','m3']);
+});
+
+test('group batch is captured after the private lane clears, including later messages',async t=>{
+  let release;
+  const privateTurn=new Promise(resolve=>{release=resolve;});
+  const f=fixture(t,input=>input.scene==='c2c'?privateTurn:'跟上啦');
+  await f.gateway.receive({id:'private',content:'你好',timestamp:new Date().toISOString(),author:{user_openid:'owner'}});
+  await settle();
+  for(let i=0;i<4;i++)await f.receive();await f.tick(0);
+  for(let i=0;i<4;i++)await f.receive();
+  release('爸爸好');await settle();
+  assert.deepEqual(f.turns.map(batch=>batch.length),[1,8]);
+  assert.equal(f.sent.at(-1)[5],'m8');
+});
+
+test('an overflowing burst keeps the newest 24 messages in one bounded turn',async t=>{
+  const f=fixture(t);for(let i=0;i<40;i++)await f.receive();await f.tick(0);
+  assert.equal(f.turns.length,1);assert.equal(f.turns[0].length,24);
+  assert.equal(f.turns[0][0].eventId,'m17');assert.equal(f.sent[0][5],'m40');
 });
 
 test('stop cancels pending group timers',async t=>{

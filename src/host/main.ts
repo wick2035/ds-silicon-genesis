@@ -372,7 +372,7 @@ export async function main():Promise<void> {
           catch(error){console.error('QQ 消息转发暂未完成：'+(error instanceof Error?error.message:'未知错误'));}
           finally {running=false;}};
         const wake=(state:any)=>{if(state.petId!==petId||lease.signal.aborted)return;const events=state.life.events,actions=state.life.actions;const next=events.length+':'+(events.at(-1)?.eventId||'')+':'+actions.length;
-          if(next===signature)return;signature=next;if(running){dirty=true;return;}if(!timer)lease.detach(()=>{timer=setTimeout(()=>void run(),100);timer.unref();});};
+          if(next===signature)return;signature=next;if(!canonical.hasPendingRelay(state))return;if(running){dirty=true;return;}if(!timer)lease.detach(()=>{timer=setTimeout(()=>void run(),100);timer.unref();});};
         observeCommits(wake);
         lease.signal.addEventListener('abort',()=>{if(timer)clearTimeout(timer);},{once:true});
         const current=await store.loadEnvelope(petId);if(current)wake(current);
