@@ -4,7 +4,7 @@ import type {LifeEvent} from '../kernel/types.js';
 import {assertGroupReplyAllowed} from './qq-group-access.js';
 
 export const GROUP_SLEEP_REPLY='本鱼正在睡觉，晚点回';
-export type QQTurnResult=string|null|{replies:Array<{anchorEventId:string;text:string}>};
+export type QQTurnResult=string|null|{replies:Array<{anchorEventId:string;text:string;mentionActorId?:string;freshOnly?:boolean}>};
 
 /** QQ allows five minutes; leave two minutes for queued generation and delivery. */
 export function groupReplyWindow(event:LifeEvent,now=Date.now()):boolean {

@@ -84,6 +84,16 @@ test('gateway falls back to a valid account username when nickname is missing or
  assert.equal(f.state.life.events.find(e=>e.type==='social.message').payload.nickname,'账号昵称');
 });
 
+test('current QQ @ markup identifies an inline subject without treating that person as the addressee',async t=>{
+ const f=await fixture(t);f.state.life.invalidSources={};f.state.life.relationships=[];
+ await f.gateway.receive(f.message('<qqbot-at-user id="bot-id" /> /绑定群 private-code'),'group','GROUP_AT_MESSAGE_CREATE');
+ await f.gateway.receive({...f.message('我在'),id:'member',author:{member_openid:'private-friend'}},'group','GROUP_MESSAGE_CREATE');
+ await f.gateway.receive({...f.message('<qqbot-at-user id="bot-id" /> 帮我叫一下<qqbot-at-user id="private-friend" />'),id:'call'},'group','GROUP_AT_MESSAGE_CREATE');
+ const [member,call]=f.state.life.events.filter(e=>e.type==='social.message');
+ assert.deepEqual(call.payload.addressing,{mentionsPet:true,referencedActors:[member.actorId]});
+ assert.doesNotMatch(call.payload.text,/private-friend|qqbot/);
+});
+
 test('authenticated group ingress records @ targets and reply references without member OpenIDs in the text',async t=>{
  const f=await fixture(t);
  f.state.life.invalidSources={};f.state.life.relationships=[];

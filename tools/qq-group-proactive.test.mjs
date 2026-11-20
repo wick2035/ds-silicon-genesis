@@ -85,7 +85,7 @@ test('openers can use private contact timing without private content, rewrite, a
   const calls=[],model={async *stream(o){calls.push(o);yield {type:'text',text:calls.length===1?'鱼'.repeat(20):'群里好安静呀。'};}};
   assert.equal(await generateGroupOpener(snapshot,model,{provider:'test',model:'test'},new AbortController().signal),'群里好安静呀。');
   assert.equal(calls.length,2);assert.doesNotMatch(JSON.stringify(calls),/不能公开的私聊/);
-  for(const call of calls)assert.match(call.system,/收到过爸爸的私聊发言/);
+  for(const call of calls){assert.match(call.system,/收到过爸爸的私聊发言/);assert.match(call.system,/不使用 @ 或点名控制标记/);}
   assert.equal(calls[0].tools,undefined);assert.equal(calls[0].embodied,undefined);
   const quiet=fixture();await quiet.ready();let dispatched=0,decisions=0;
   const service=createGroupProactive({canonical:quiet.qq,authority:quiet.authority,generate:async()=>{decisions++;return null;},dispatch:async()=>dispatched++});
@@ -99,4 +99,10 @@ test('a selected opener passes through the durable outbox, and private QQ sends 
   const dispatched=[],service=createGroupProactive({canonical:f.qq,authority:f.authority,generate:async()=> '群里好安静呀。',dispatch:async id=>dispatched.push(id)});
   await service.run('main',new AbortController().signal);
   assert.deepEqual(dispatched,[f.intents[0].id]);assert.equal(f.state().legacy.wallet.balance,.6);
+});
+
+test('quiet-group openers cannot smuggle a mention marker or QQ tag into delivery',async()=>{
+  const f=fixture();await f.ready();const snapshot=await f.claim();
+  for(const text of ['醒醒[qq-at:dad]','<qqbot-at-user id="x" />','@everyone'])await assert.rejects(f.enqueue(snapshot,text));
+  assert.equal(f.intents.length,0);assert.equal(f.state().legacy.wallet.balance,1);
 });

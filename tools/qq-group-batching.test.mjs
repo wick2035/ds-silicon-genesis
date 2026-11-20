@@ -96,6 +96,27 @@ test('stop cancels pending group timers',async t=>{
   await f.tick(30000);assert.equal(f.turns.length,0);assert.equal(f.sent.length,0);
 });
 
+test('structured mentions yield to new input during generation',async t=>{
+ let release;const pending=new Promise(resolve=>{release=resolve;});
+ const f=fixture(t,()=>pending);for(let i=0;i<4;i++)await f.receive();await f.tick(0);
+ await f.receive();release({replies:[{anchorEventId:'m2',text:'请回答',mentionActorId:'qq-member:friend',freshOnly:true}]});await settle();
+ assert.equal(f.sent.length,0);
+});
+
+test('structured mentions retain their selected reply anchor',async t=>{
+ const g=fixture(t,()=>({replies:[{anchorEventId:'m2',text:'请回答',mentionActorId:'qq-member:friend',freshOnly:true}]}));
+ for(let i=0;i<4;i++)await g.receive();await g.tick(0);
+ assert.equal(g.sent[0][5],'m2');assert.equal(g.sent[0][7],'qq-member:friend');
+});
+
+test('structured mention drafts waiting for cooldown are discarded',async t=>{
+ const f=fixture(t,input=>({replies:[{anchorEventId:input.messages.at(-1).eventId,text:'请回答',mentionActorId:'qq-member:friend',freshOnly:true}]}));
+ for(let i=0;i<4;i++)await f.receive();await f.tick(0);assert.equal(f.sent.length,1);
+ for(let i=0;i<4;i++)await f.receive();await f.tick(0);assert.equal(f.sent.length,1);
+ await f.receive();await f.tick(1000);await f.tick(9000);
+ assert.equal(f.sent.length,2);assert.equal(f.sent[1][5],'m9');
+});
+
 test('group ban discards buffered and prohibited messages while private QQ stays available',async t=>{
   const f=fixture(t);await f.receive();f.gateway.setGroupBlocked(true);
   await f.receive();await f.tick(20000);assert.equal(f.turns.length,0);

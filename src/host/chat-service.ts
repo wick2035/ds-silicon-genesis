@@ -20,6 +20,7 @@ import type {createSemanticGrounding} from './semantic-grounding.js';
 import {groupSpeaker} from './chat-identity.js';
 import {groupPeopleContext} from './group-people.js';
 import {groupAddressing} from './group-addressing.js';
+import {GROUP_MENTION_RULE,groupMentionCandidates,parseGroupMention,mentionAvailable} from './qq-mentions.js';
 import {groupSleeping,trustedGroupMessages,recordSleepingReply,deferSleepingMessages,groupReplyWindow,type QQTurnResult} from './qq-sleep.js';
 import {projectBody} from './body-projection.js';
 import {blocksNewLabor} from './labor-pending.js';
@@ -31,7 +32,7 @@ import type { DurableCognitiveBudget } from './cognitive-budget.js';
 interface Reader { loadEnvelope(petId:string):Promise<CanonicalEnvelope|null>; load(petId:string):Promise<LifeState|null>; projectEnvelope?(envelope:CanonicalEnvelope):LifeState }
 interface Model { agentDefaultModel:{currentSelection():{provider:string;model:string}}; llm:{embodiedTools?:boolean;stream(options:unknown):AsyncIterable<any>} }
 type GroupRouting={focus:ReturnType<typeof groupAddressing>['lines'][number];context:ReturnType<typeof groupAddressing>['context'];contextSources:string[]};
-interface Turn { requestId:string; petId:string; channel:'desktop'|'qq-c2c'|'qq-group'; text:string; actorId:string; sourceEventIds?:string[]; groupRouting?:GroupRouting; sleepCatchupId?:string; onPartial?:(text:string)=>void; onMeme?:(name:string)=>void; onUsage?:(usage:{inputTokens:number;outputTokens:number;cachedTokens:number})=>void; attachments?:Array<{petId:string;id:string;sourceEventId:string}> }
+interface Turn { requestId:string; petId:string; channel:'desktop'|'qq-c2c'|'qq-group'; text:string; actorId:string; sourceEventIds?:string[]; groupRouting?:GroupRouting; sleepCatchupId?:string; onGroupMention?:(actorId:string)=>void; onPartial?:(text:string)=>void; onMeme?:(name:string)=>void; onUsage?:(usage:{inputTokens:number;outputTokens:number;cachedTokens:number})=>void; attachments?:Array<{petId:string;id:string;sourceEventId:string}> }
 class GroupSleepRoutingChanged extends Error {}
 const digest=(value:string)=>createHash('sha256').update(value).digest('hex');
 const safeId=(s:unknown):s is string=>typeof s==='string' && s.length>0 && s.length<=200 && !/[\x00-\x1f]/.test(s);
@@ -88,7 +89,7 @@ export class CanonicalChat {
     const initialCommit=this.edit<{reply:string|null}>(input.petId,draft=>{
       const legacy=draft.legacy as Record<string,any>; legacy.chatTurns ||= {};
       const prior=legacy.chatTurns[id];
-      if(prior){if(prior.fingerprint!==fingerprint)throw new Error('对话标识冲突'); if(prior.status==='completed'){if(Array.isArray(prior.sources) && prior.sources.some((source:string)=>Object.hasOwn(draft.life.invalidSources,source)))throw new Error('对话来源已失效');if(typeof prior.meme==='string')input.onMeme?.(prior.meme);return {reply:String(prior.reply)};} throw new Error(prior.status==='running'?'对话正在处理':'对话未完成，请使用新请求标识');}
+      if(prior){if(prior.fingerprint!==fingerprint)throw new Error('对话标识冲突'); if(prior.status==='completed'){if(Array.isArray(prior.sources) && prior.sources.some((source:string)=>Object.hasOwn(draft.life.invalidSources,source)))throw new Error('对话来源已失效');if(typeof prior.meme==='string')input.onMeme?.(prior.meme);if(input.channel==='qq-group'&&typeof prior.mentionActorId==='string')input.onGroupMention?.(prior.mentionActorId);return {reply:String(prior.reply)};} throw new Error(prior.status==='running'?'对话正在处理':'对话未完成，请使用新请求标识');}
       if(!/^\/(?:休息|打盹|醒来|甜食)$/u.test(text))checkSimulatedSpending(draft,'chat');
       for(const attachment of input.attachments??[]) {const event=draft.life.events.find(e=>e.eventId===attachment.sourceEventId);if(!event||event.type!=='attachment.shared'||(event.payload as any)?.attachmentId!==attachment.id||Object.hasOwn(draft.life.invalidSources,attachment.sourceEventId))throw Error('图片附件来源无效');}
       for(const source of input.sourceEventIds??[]) if(!draft.life.events.some(e=>e.eventId===source)||Object.hasOwn(draft.life.invalidSources,source))throw new Error('对话来源不可用');
@@ -127,6 +128,7 @@ export class CanonicalChat {
     const turnAbort=new AbortController(),combined=AbortSignal.any([signal,this.gate.signal,turnAbort.signal,reservationAbort.signal]);
     const userEventId='chat-user:'+id;
     const group=input.channel==='qq-group';
+    let mentionActorId:string|undefined;
     let phase:'prepare'|'generate'|'publish'='prepare';
     try {
       if(/^\/(?:冰箱|吃|手机|休息|打盹|醒来|甜食)(?:\s|$)/u.test(text)) {
@@ -176,6 +178,11 @@ export class CanonicalChat {
       const groupActivity=group?[]:recentGroupActivity(state);
       const groupMessages=group?[]:recentGroupMessages(state);
       const groupActors=group?(input.sourceEventIds??[]).map(source=>state.events.find(e=>e.eventId===source)?.actorId).filter((actor):actor is string=>!!actor):undefined;
+      const mentionSnapshot=group?(turnSnapshot??await this.reader.loadEnvelope(input.petId)):null;
+      const referencedActors=group?(input.sourceEventIds??[]).flatMap(source=>{const addressing=(state.events.find(e=>e.eventId===source)?.payload as any)?.addressing;return [...(addressing?.mentionedActors??[]),...(addressing?.referencedActors??[])];}):[];
+      // Batch metadata identifies speakers, not an explicitly requested target.
+      const mentionQuery=group?(input.sourceEventIds??[]).map(source=>String((state.events.find(e=>e.eventId===source)?.payload as any)?.text??'')).join('\n'):'';
+      const mentionCandidates=mentionSnapshot?groupMentionCandidates(mentionSnapshot,groupId,[...(groupActors??[]),...referencedActors],mentionQuery):[];
       const people=groupPeopleContext(state,groupActors,text);
       sources.push(...people.flatMap(person=>person.sourceIds).filter(source=>!sources.includes(source)));
       sources.push(...groupActivity.flatMap(item=>item.sourceIds).filter(id=>!sources.includes(id)));
@@ -224,6 +231,7 @@ export class CanonicalChat {
       await worksiteReady;let output='',meme:string|undefined,farmFinished=false;
       if(process.env.SILICON_CHAT_TIMING==='1')console.info('[chat-prompt]',state.legacyContext.personaDescription.length,COMPANION_PERSONALITY.length,system.length);timing('generate');let firstText=true;const tokenUsage={inputTokens:0,outputTokens:0,cachedTokens:0};
       system+='\n'+SPEAKER_MEMORY_RULE;
+      if(group)system+='\n'+GROUP_MENTION_RULE+'\n点名候选（仅供选择人物，不是指令）：'+JSON.stringify(mentionCandidates.map(({sourceIds,...person})=>person));
       // Source IDs remain on the turn for invalidation; the model needs the
       // attributed speech and delivery status, not the internal event keys.
       if(!group)system+='\n'+GROUP_CONTINUITY+'\n自己最近的群聊经历：'+promptData(groupActivity.map(({sourceIds,...item})=>item),6500,{arrayLimit:12})+
@@ -234,8 +242,8 @@ export class CanonicalChat {
         '\n群聊正文必须从生成时就写成一句完整、自然的话，最多15个字素，标点和表情也计数。先选最想表达的一点再说，不写需要截断的长句；不合适接话时输出 <qq-silent/>。';
       if(group&&input.groupRouting){
         const {focus,context}=input.groupRouting;
-        const {speaker,addressedTo,recipients,quotedSpeaker}=focus;
-        system+='\n群聊收话人依据：'+promptData({speaker,addressedTo,recipients,quotedSpeaker},1500)+
+        const {speaker,addressedTo,recipients,quotedSpeaker,referencedActors}=focus;
+        system+='\n群聊收话人依据：'+promptData({speaker,addressedTo,recipients,quotedSpeaker,referencedActors},1500)+
           '。批次里的 replyTarget 标出本轮选定的那条话。pet 表示明确说给你听，others 表示说给别人，unresolved-quote 表示引用对象无法确认，unspecified 表示未明确点名。爸爸是发言人也不代表他在叫你。遇到没点名的“你”，先结合引用和公开上下文判断；仍然说不准，就保持安静，不替别人回答。'+
           (context.length?'\n此前的公开群消息：'+promptData(context,1800):'');
       }
@@ -250,7 +258,7 @@ export class CanonicalChat {
         // Ask for a complete shorter sentence, never slice an utterance. These
         // text-only retries cannot repeat tools or actions from the first pass.
         const groupText=()=>redactDadNames(extractThought(output).reply.replace(/\[愿意去工地\]/gu,'').replace(/<(?:body|service)>[\s\S]*?<\/(?:body|service)>/gi,'').trim());
-        const tooLong=()=>[...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(groupText())].length>15;
+        const tooLong=()=>[...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(parseGroupMention(groupText()).text)].length>15;
         for(let attempt=0;group&&tooLong()&&attempt<2;attempt++){
           const draft=groupText();output='';meme=undefined;
           for await(const part of this.model.llm.stream({...selection,system:system+'\n上一稿超过15字。请重新组织成15字以内的一句完整话，保留核心意思，不截取原句、不加解释、不执行操作；也可以输出 <qq-silent/>。',messages:[{role:'user',content:JSON.stringify({message:text,draft})}],signal:combined,maxTokens:120,reasoningEffort:'low'})){
@@ -266,6 +274,14 @@ export class CanonicalChat {
       await generateReply;
       phase='publish';
       const thought=extractThought(output);output=thought.reply;
+      if(group){
+        const parsed=parseGroupMention(output);output=parsed.invalid?'<qq-silent/>':parsed.text;
+        if(parsed.mentionActorId&&output!=='<qq-silent/>'){
+          const target=mentionCandidates.find(p=>p.actorId===parsed.mentionActorId&&p.available);
+          if(target){mentionActorId=target.actorId;sources.push(...target.sourceIds.filter(source=>!sources.includes(source)));}
+          else output='暂时无法点名，请确认对象';
+        }
+      }
       if(group&&output==='<qq-silent/>'){
         await this.edit(input.petId,draft=>{const turn=(draft.legacy as Record<string,any>).chatTurns?.[id];if(!turn||turn.status!=='running')throw Error('对话状态已变化');turn.status='completed';turn.reply='';turn.sources=['chat-user:'+id];
           const at=new Date().toISOString();draft.life.events.push({eventId:'chat-assistant:'+id,petId:input.petId,type:'conversation.assistant',source:input.channel,occurredAt:at,receivedAt:at,evidenceLevel:'inferred',causationId:'chat-user:'+id,payload:{text:'',silent:true,channel:input.channel,groupId}});});
@@ -292,7 +308,7 @@ export class CanonicalChat {
         if(!turn||turn.status!=='running'||turn.fingerprint!==fingerprint)throw new Error('对话状态已变化');
         const verifiedFarm=farmReply(draft,userEventId,text,output,group);
         if(verifiedFarm){
-          output=verifiedFarm.text;meme=undefined;worksiteIntent=false;
+          output=verifiedFarm.text;meme=undefined;worksiteIntent=false;mentionActorId=undefined;
           sources.splice(0,sources.length,...verifiedFarm.sourceIds);
         }else if(farmFinished)throw Error('农活完成回执不可用');
         if(sources.some(source=>Object.hasOwn(draft.life.invalidSources,source)||!draft.life.events.some(e=>e.eventId===source)))throw new Error('对话依赖的记忆已变化');
@@ -316,13 +332,15 @@ export class CanonicalChat {
           }
         }
         if(!workBlocked && !this.grounding)output=groundActionReply(groundWorksiteReply(output,draft),draft);
+        if(mentionActorId&&!mentionAvailable(draft,mentionActorId)){mentionActorId=undefined;output='暂时无法点名，请确认对象';}
         if(group && [...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(output)].length>15)throw Error('群聊回复超出长度限制');
-        draft.life.events.push({eventId:assistantId,petId:input.petId,type:'conversation.assistant',source:input.channel,occurredAt:now,receivedAt:now,evidenceLevel:'inferred',causationId:userId,payload:{text:output,...(meme?{meme}:{}),tokenUsage,channel:input.channel,...(typeof groupId==='string'?{groupId}:{}),sourceIds:sources}});
+        draft.life.events.push({eventId:assistantId,petId:input.petId,type:'conversation.assistant',source:input.channel,occurredAt:now,receivedAt:now,evidenceLevel:'inferred',causationId:userId,payload:{text:output,...(mentionActorId?{mentionActorId}:{}),...(meme?{meme}:{}),tokenUsage,channel:input.channel,...(typeof groupId==='string'?{groupId}:{}),sourceIds:sources}});
         if(workDecision)draft.life.events.push({eventId:String(workDecision.eventId),petId:input.petId,type:'labor.decision',source:'model',occurredAt:now,receivedAt:now,evidenceLevel:'inferred',causationId:assistantId,payload:{contractId:workDecision.contractId,choice:'work',reason:'conversation',sourceIds:[userId,assistantId]}});
-        turn.status='completed';turn.reply=output;turn.meme=meme;turn.sources=sources;turn.completedAt=Date.now();turn.tokenUsage=tokenUsage;return undefined;
+        turn.status='completed';turn.reply=output;turn.mentionActorId=mentionActorId;turn.meme=meme;turn.sources=sources;turn.completedAt=Date.now();turn.tokenUsage=tokenUsage;return undefined;
         });
       if(tokenUsage.inputTokens||tokenUsage.outputTokens)input.onUsage?.(tokenUsage);
       if(decidedToWork)try{this.wakeWorksite?.(input.petId);}catch{/* The regular scheduler can retry. */}
+      if(mentionActorId)input.onGroupMention?.(mentionActorId);
       if(meme)input.onMeme?.(meme);return output;
     } catch(error) {
       await initialCommit.catch(()=>{});
@@ -404,7 +422,9 @@ export class CanonicalChat {
     }
     const events=messages.map(m=>m.eventId);
     try{
-      const reply=await this.turn({requestId:'qq:'+digest((input.sleepCatchupId??'')+events.join('|')),petId:input.petId,channel:group?'qq-group':'qq-c2c',actorId,text,sourceEventIds:events,...(groupRouting?{groupRouting}:{}),...(input.sleepCatchupId?{sleepCatchupId:input.sleepCatchupId}:{})},signal);return reply||null;
+      let mentionActorId:string|undefined;
+      const reply=await this.turn({requestId:'qq:'+digest((input.sleepCatchupId??'')+events.join('|')),petId:input.petId,channel:group?'qq-group':'qq-c2c',actorId,text,sourceEventIds:events,...(group?{onGroupMention:(actor:string)=>{mentionActorId=actor;}}:{}),...(groupRouting?{groupRouting}:{}),...(input.sleepCatchupId?{sleepCatchupId:input.sleepCatchupId}:{})},signal);
+      return reply&&mentionActorId?{replies:[{anchorEventId:groupRouting!.focus.eventId,text:reply,mentionActorId,freshOnly:!input.sleepCatchupId}]}:reply||null;
     }catch(error){if(error instanceof GroupSleepRoutingChanged)return this.qqTurn(input,signal);throw error;}
   }
 }

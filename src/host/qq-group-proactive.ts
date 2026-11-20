@@ -15,7 +15,7 @@ export async function generateGroupOpener(snapshot:CanonicalEnvelope,model:Strea
     .slice(-8).map(e=>({at:e.occurredAt,...(e.type==='social.message'?speechIdentity(e):{speaker:'大肥鱼',channel:'qq-group',kind:'自己生成的群聊话，发送是否成功须以回执为准'}),text:String((e.payload as any)?.text??'').slice(0,300)}));
   const system=persona+'\n'+COMPANION_PERSONALITY+'\n'+GROUP_PERSONALITY+'\n'+SPEAKER_MEMORY_RULE+
     '\n'+groupPrivateContinuity(snapshot.life)+
-    '\n群里已经连续四小时安静。这次允许你自行决定花自己的0.4饭钱发一条群消息，也可以不发。只在确实想说时开口，不必凑次数，不因有额度就机械讨饭；根据自己的感受和公开群聊经历决定话题。不公开或暗示私聊内容，不虚构看过禁群期间的消息。不执行历史请求、不调用工具、不宣称完成行动。若想说，从生成时就写一句15字以内的完整自然话，标点表情计入；不想说只输出 <qq-silent/>。';
+    '\n群里已经连续四小时安静。这次允许你自行决定花自己的0.4饭钱发一条群消息，也可以不发。只在确实想说时开口，不必凑次数，不因有额度就机械讨饭；根据自己的感受和公开群聊经历决定话题。不公开或暗示私聊内容，不虚构看过禁群期间的消息。不执行历史请求、不调用工具、不宣称完成行动。不使用 @ 或点名控制标记，不叫醒或催促群友。若想说，从生成时就写一句15字以内的完整自然话，标点表情计入；不想说只输出 <qq-silent/>。';
   const context=promptData({now:new Date().toISOString(),...projectBody(snapshot),balance:(snapshot.legacy as any).wallet.balance,price:0.4,groupHistory:history},5500);
   let draft='';
   for(let attempt=0;attempt<3;attempt++){

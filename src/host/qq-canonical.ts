@@ -2,6 +2,7 @@ import { createHash,randomUUID } from 'node:crypto';
 import {groupChatBlocked,groupMessageAllowed,assertGroupReplyAllowed} from './qq-group-access.js';
 import {groupSleeping,deferSleepingMessages,trustedGroupMessages,sleepReplyAnchor} from './qq-sleep.js';
 import {boundGroupId,groupProactiveState,assertGroupOpportunity,GROUP_OPENER_PRICE} from './qq-group-proactive-policy.js';
+import {groupActorId,rememberGroupMember,resolveGroupMember,mentionAvailable,rawMentionMarkup,type GroupMention} from './qq-mentions.js';
 import { redactDadNames } from '../../vendor/pet-plugins/behavior/memory-privacy.mjs';
 import { rebuildRelationships, validateProposal } from '../kernel/index.js';
 import type { ActionProposal, LifeState } from '../kernel/types.js';
@@ -30,8 +31,7 @@ function nextReplySeq(draft:CanonicalEnvelope,replyTo:string,scene:string):numbe
   return Math.max(0,...draft.life.actions.filter(a=>a.actionType==='qq.send' && (a.parameters as Obj).replyTo===replyTo && (a.parameters as Obj).scene===scene).map(a=>Number((a.parameters as Obj).replySeq)||1))+1;
 }
 export interface QQIdentity { appId:string; ownerOpenid?:string; groupOpenid?:string; groupOwnerOpenid?:string; groupEnabled:boolean; groupMode:'owner'|'mentions'|'all' }
-export interface QQIncoming { messageId:string; scene:'c2c'|'group'; actorOpenid:string; groupOpenid?:string; text:string; occurredAt:string; mentioned?:boolean; nickname?:string; mentionsPet?:boolean; mentionOpenids?:string[]; replyToMessageId?:string }
-const groupActorId=(identity:QQIdentity,openid:string)=>openid===identity.groupOwnerOpenid?'dad':'qq-member:'+hash(identity.appId+':'+openid).slice(0,24);
+export interface QQIncoming { messageId:string; scene:'c2c'|'group'; actorOpenid:string; groupOpenid?:string; text:string; occurredAt:string; mentioned?:boolean; nickname?:string; mentionsPet?:boolean; mentionOpenids?:string[]; referencedOpenids?:string[]; replyToMessageId?:string }
 
 /** Canonical storage for one already authenticated QQ account. It never opens
  * a socket, reads old files, stores appSecret, or invokes the old QQ bridge. */
@@ -135,13 +135,16 @@ export class CanonicalQQ {
       if(Object.hasOwn(draft.life.invalidSources,eventId)) throw new Error('已删除事件不可重新导入');
       const now=new Date().toISOString(); qq.seen[receiptKey]={at:Date.now(),eventId};
       const mentionedActors=Array.isArray(message.mentionOpenids)?[...new Set(message.mentionOpenids.slice(0,16).filter(key).map(id=>groupActorId(identity,id)))]:[];
+      const referencedActors=Array.isArray(message.referencedOpenids)?[...new Set(message.referencedOpenids.slice(0,16).filter(key).map(id=>groupActorId(identity,id)))].filter(id=>!mentionedActors.includes(id)):[];
       const addressing=message.scene==='group'?{
         ...((message.mentionsPet??message.mentioned)===true?{mentionsPet:true}:{}),
         ...(mentionedActors.length?{mentionedActors}:{}),
+        ...(referencedActors.length?{referencedActors}:{}),
         ...(key(message.replyToMessageId)&&message.replyToMessageId!==message.messageId?{replyToMessageId:message.replyToMessageId}:{})
       }:undefined;
       draft.life.events.push({eventId,petId,type:'social.message',source:'qq',actorId:message.scene==='group'?groupActorId(identity,message.actorOpenid):'dad',occurredAt:message.occurredAt,receivedAt:now,evidenceLevel:'observed',payload:{scene:message.scene,...(message.scene==='group'?{groupId:hash(identity.appId+':'+message.groupOpenid)}:{}),messageId:message.messageId,text:redactDadNames(message.text),isOwner,...(addressing&&Object.keys(addressing).length?{addressing}:{}),...(message.scene==='group' && typeof message.nickname==='string' && message.nickname.trim() && message.nickname.trim().length<=40 && !/[\x00-\x1f<>]/u.test(message.nickname) ? {nickname:message.nickname.trim()} : {})}});
       rebuildRelationships(draft.life);
+      if(message.scene==='group')rememberGroupMember(draft,message.actorOpenid,eventId);
       if(message.scene==='group'&&!isOwner&&groupSleeping(draft)){
         const event=draft.life.events.find(e=>e.eventId===eventId)!;
         deferSleepingMessages(draft,[event]);
@@ -171,13 +174,14 @@ export class CanonicalQQ {
     });
   }
   /** Queues a send, never sends it. Destination comes solely from the paired identity. */
-  async enqueue(petId:string, requestId:string, scene:'c2c'|'group', text:string, sourceEventId:string, replyTo:string, authority:object):Promise<string> {
+  async enqueue(petId:string, requestId:string, scene:'c2c'|'group', text:string, sourceEventId:string, replyTo:string, authority:object,mentionActorId?:string):Promise<string> {
     if(authority!==this.#ingress || !key(replyTo) || !key(requestId)||!['c2c','group'].includes(scene)||typeof text!=='string'||!text.trim()||text.length>1800||!key(sourceEventId)) throw new Error('QQ 发送意图无效');
     if(scene==='group' && [...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(text.trim())].length>15) throw new Error('群回复超过 15 字');
+    if(rawMentionMarkup(text)||mentionActorId!==undefined&&scene!=='group')throw Error('QQ 点名意图无效');
     return this.change(petId,draft=>{
       const qq=(draft.legacy as Obj).qq; if(!qq?.identity || !qq.outbound) throw new Error('QQ 尚未接管');
       const id=hash(requestId), previous=qq.outbound[id];
-      const fingerprint=hash(JSON.stringify({scene,text:redactDadNames(text.trim()),sourceEventId,replyTo}));
+      const fingerprint=hash(JSON.stringify({scene,text:redactDadNames(text.trim()),sourceEventId,replyTo,...(mentionActorId!==undefined?{mentionActorId}:{})}));
       if(previous) { if(previous.actionId && previous.fingerprint===fingerprint) return {value:String(previous.actionId)}; throw new Error('QQ 发送标识已有历史回执或内容冲突，不能重发'); }
       const identity=qq.identity as QQIdentity; const destination=scene==='c2c'?identity.ownerOpenid:identity.groupOpenid;
       if(!key(destination) || (scene==='group'&&!identity.groupEnabled)) throw new Error('QQ 目标尚未绑定');
@@ -185,15 +189,26 @@ export class CanonicalQQ {
       if(replyTo && (!source || (source.payload as Obj)?.messageId!==replyTo)) throw new Error('QQ 回复来源不匹配');
       const actionId='qq-send:'+id;
       const content=redactDadNames(text.trim());
+      const member=mentionActorId!==undefined?resolveGroupMember(draft,mentionActorId):undefined;
+      if(mentionActorId!==undefined&&(!member||!mentionAvailable(draft,mentionActorId)))throw Error('QQ 点名目标不可用或仍在提醒间隔内');
       const replySeq=nextReplySeq(draft,replyTo,scene);if(replySeq>MAX_REPLIES)throw Error('QQ 连续回复最多三条');
-      const proposal:ActionProposal={id:actionId,petId,actionType:'qq.send',parameters:{scene,destination,content,replyTo,replySeq},priority:50,interruptPolicy:'noninterruptible',requiredCapabilities:['qq.send'],expectedStateVersion:draft.version,sourceIds:[sourceEventId]};
+      const proposal:ActionProposal={id:actionId,petId,actionType:'qq.send',parameters:{scene,destination,content,replyTo,replySeq,...(member?{mentionActorId,mentionSourceEventId:member.sourceEventId}:{})},priority:50,interruptPolicy:'noninterruptible',requiredCapabilities:['qq.send'],expectedStateVersion:draft.version,sourceIds:[sourceEventId]};
       const state:LifeState={...structuredClone(draft.life),petId,version:draft.version,...this.body(draft)};
-      qq.outbound[id]={at:Date.now(),state:'pending',actionId,fingerprint};
+      qq.outbound[id]={at:Date.now(),state:'pending',actionId,fingerprint,...(member?{mentionSourceEventId:member.sourceEventId}:{})};
       validateQQReply(draft,state,proposal);
       const at=new Date().toISOString();
       draft.life.actions.push({...proposal,status:'PENDING',createdAt:at,updatedAt:at});
       return {value:actionId,intents:[{id:actionId,type:'qq.send',payload:{actionId,petId,actionType:'qq.send',parameters:proposal.parameters}}]};
     });
+  }
+  /** Resolve private transport data only after a persisted action was claimed. */
+  async mentionForSend(petId:string,input:QQSendInput):Promise<string|undefined> {
+    if(!input.mention)return;
+    const draft=await this.reader.loadEnvelope(petId);
+    const action=draft?.life.actions.find(a=>a.id===input.mention!.actionId),p=action?.parameters;
+    if(!draft||!action||action.status!=='DISPATCHED'||input.scene!=='group'||p?.scene!==input.scene||p.destination!==input.destination||p.content!==input.content||p.replyTo!==input.replyTo||p.replySeq!==input.replySeq||p.mentionActorId!==input.mention.actorId||p.mentionSourceEventId!==input.mention.sourceEventId)throw Error('QQ 点名发送来源无效');
+    validateQQReply(draft,{...draft.life,petId,version:draft.version,...this.body(draft)},{...action,expectedStateVersion:draft.version});
+    return resolveGroupMember(draft,input.mention.actorId,input.mention.sourceEventId)!.memberOpenid;
   }
   async claimGroupOpportunity(petId:string,authority:object):Promise<CanonicalEnvelope|null> {
     if(authority!==this.#ingress)throw Error('QQ 通道凭据无效');
@@ -291,14 +306,16 @@ export class CanonicalQQ {
 
 /** Host supplies an authenticated transport using retained local credentials;
  * unknown delivery is never retried by this adapter. */
-export interface QQTransport { send(input:{scene:'c2c'|'group';destination:string;content:string;replyTo?:string;replySeq?:number},signal:AbortSignal):Promise<{messageId:string}> }
+export type QQSendInput={scene:'c2c'|'group';destination:string;content:string;replyTo?:string;replySeq?:number;mention?:GroupMention&{actionId:string}};
+export interface QQTransport { send(input:QQSendInput,signal:AbortSignal):Promise<{messageId:string}> }
 export class QQPlatformRejection extends Error {}
 export function createQQExecutor(transport:QQTransport) {
   return async (petId:string,intent:OutboxIntent,signal:AbortSignal):Promise<ExecutionReceipt>=>{
     const p=intent.payload.parameters as Obj;
     if(signal.aborted || intent.type!=='qq.send'||intent.payload.petId!==petId||intent.payload.actionId!==intent.id || !p || !['c2c','group'].includes(p.scene)||!key(p.destination)||typeof p.content!=='string'||!p.content.trim()||p.content.length>1800) return {status:'unknown',evidence:{reason:'QQ 发送意图无效'}};
     try {
-      const result=await transport.send({scene:p.scene,destination:p.destination,content:p.content,...(typeof p.replyTo==='string'?{replyTo:p.replyTo}:{}),...(Number.isInteger(p.replySeq)?{replySeq:p.replySeq}:{})},signal);
+      if(rawMentionMarkup(p.content)||p.mentionActorId!==undefined&&(p.scene!=='group'||typeof p.mentionActorId!=='string'||!key(p.mentionSourceEventId)))throw Error('QQ 点名意图无效');
+      const result=await transport.send({scene:p.scene,destination:p.destination,content:p.content,...(typeof p.replyTo==='string'?{replyTo:p.replyTo}:{}),...(Number.isInteger(p.replySeq)?{replySeq:p.replySeq}:{}),...(p.mentionActorId!==undefined?{mention:{actionId:intent.id,actorId:p.mentionActorId,sourceEventId:p.mentionSourceEventId}}:{})},signal);
       if(!result || !key(result.messageId)) return {status:'unknown',evidence:{reason:'QQ 未返回消息回执'}};
       return {status:'completed',evidence:{actionId:intent.id,kind:'qq.send',messageId:result.messageId}};
     } catch(error) { return p.groupProactive===true&&error instanceof QQPlatformRejection?{status:'failed',evidence:{reason:'QQ 平台拒绝主动群消息'}}:{status:'unknown',evidence:{reason:'QQ 发送结果不明，必须先对账'}}; }
@@ -321,7 +338,11 @@ export function validateQQReply(draft:CanonicalEnvelope,state:LifeState,proposal
   if(p.scene==='group')assertGroupReplyAllowed(draft,proposal.sourceIds[0]);
   const source=draft.life.events.find(e=>e.eventId===proposal.sourceIds[0]);
   const entry=Object.values(qq?.outbound||{}).find((x:any)=>x.actionId===proposal.id) as Obj|undefined;
-  const fingerprint=hash(JSON.stringify({scene:p.scene,text:p.content,sourceEventId:proposal.sourceIds[0],replyTo:p.replyTo}));
+  const fingerprint=hash(JSON.stringify({scene:p.scene,text:p.content,sourceEventId:proposal.sourceIds[0],replyTo:p.replyTo,...(p.mentionActorId!==undefined?{mentionActorId:p.mentionActorId}:{})}));
+  if(typeof p.content!=='string'||rawMentionMarkup(p.content))throw Error('QQ 正文包含未授权点名标记');
+  if(p.mentionActorId!==undefined){
+    if(p.scene!=='group'||p.proactive||p.groupProactive||typeof p.mentionActorId!=='string'||!key(p.mentionSourceEventId)||entry?.mentionSourceEventId!==p.mentionSourceEventId||p.destination!==qq?.identity?.groupOpenid||!resolveGroupMember(draft,p.mentionActorId,p.mentionSourceEventId)||!mentionAvailable(draft,p.mentionActorId,Date.now(),proposal.id))throw Error('QQ 点名目标或来源无效');
+  }else if(p.mentionSourceEventId!==undefined)throw Error('QQ 点名来源无效');
   if(p.groupProactive===true){
     const answer=draft.life.events.find(e=>e.eventId===proposal.sourceIds[1]);
     if(proposal.actionType!=='qq.send'||proposal.sourceIds.length!==2||!entry?.groupProactive||entry!==qq.outbound[hash('group-proactive:'+proposal.sourceIds[0])]||entry.fingerprint!==fingerprint||entry.amount!==GROUP_OPENER_PRICE||p.scene!=='group'||p.destination!==qq.identity.groupOpenid||p.replyTo!==undefined||p.replySeq!==undefined||answer?.type!=='conversation.assistant'||answer.source!=='qq-group'||answer.causationId!==source?.eventId||(answer.payload as Obj)?.text!==p.content)throw Error('QQ 群聊主动表达来源无效');

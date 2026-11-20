@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { writeFileSync, renameSync } from 'node:fs';
 import { QQPetBridge } from '../../vendor/pet-plugins/behavior/qq-bridge.mjs';
-import { CanonicalQQ, createQQExecutor, QQPlatformRejection, type QQIncoming, type QQTransport } from './qq-canonical.js';
+import { CanonicalQQ, createQQExecutor, QQPlatformRejection, type QQIncoming, type QQTransport, type QQSendInput } from './qq-canonical.js';
+import {qqMentionContent} from './qq-mentions.js';
 import type { OutboxIntent, ExecutionReceipt } from '../storage/uow.js';
 import type {QQTurnResult} from './qq-sleep.js';
 import {platformNickname} from './group-people.js';
@@ -45,7 +46,7 @@ export class CanonicalQQGateway extends QQPetBridge {
   #batchStarted=0;
   #lastGroupReply=0;
   #groupPending=false;
-  #groupReplies:Array<{anchor:Item;text:string;epoch:number;freshOnly?:boolean}>=[];
+  #groupReplies:Array<{anchor:Item;text:string;epoch:number;freshOnly?:boolean;mentionActorId?:string}>=[];
   #replyTimer?:ReturnType<typeof setTimeout>;
   #sendingGroup=false;
   #catchupItems:Item[]=[];
@@ -102,15 +103,17 @@ export class CanonicalQQGateway extends QQPetBridge {
     if(!response.ok) { if(response.status===401)this.expiresAt=0;if(response.status>=400&&response.status<500&&response.status!==408)throw new QQPlatformRejection('QQ 平台拒绝消息');throw new Error('QQ 平台请求失败'); }
     return response.json();
   }
-  private async sendMessage(input:{scene:'c2c'|'group';destination:string;content:string;replyTo?:string;replySeq?:number},signal:AbortSignal):Promise<{messageId:string}> {
+  private async sendMessage(input:QQSendInput,signal:AbortSignal):Promise<{messageId:string}> {
     if(input.scene==='group'){
       const epoch=this.#groupEpoch;
       if(this.#groupBlocked || await this.#options.canonical.groupBlocked?.(this.#options.config.petId||'main') || epoch!==this.#groupEpoch)throw Error('爸爸已禁止群聊');
       signal=AbortSignal.any([signal,this.#groupAbort.signal]);
     }
     if(input.scene==='group' && [...new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(input.content)].length>15) throw new Error('群回复超过 15 字');
+    const memberOpenid=input.mention?await this.#options.canonical.mentionForSend(this.#options.config.petId||'main',input):undefined;
+    const content=qqMentionContent(input.content,memberOpenid);
     const route=(input.scene==='group'?'/v2/groups/':'/v2/users/')+encodeURIComponent(input.destination)+'/messages';
-    const result=await this.request(route,{content:input.content,msg_type:0,...(input.replyTo?{msg_id:input.replyTo,msg_seq:input.replySeq??1}:{})},signal);
+    const result=await this.request(route,{content,msg_type:0,...(input.replyTo?{msg_id:input.replyTo,msg_seq:input.replySeq??1}:{})},signal);
     if(typeof result?.id!=='string'||!result.id) throw new Error('QQ 未返回消息回执');
     return {messageId:result.id};
   }
@@ -122,9 +125,9 @@ export class CanonicalQQGateway extends QQPetBridge {
     const actor=scene==='group'?message?.author?.member_openid:message?.author?.user_openid;
     if(typeof actor!=='string'||typeof message?.id!=='string'||typeof message?.content!=='string'||message.author?.bot===true || (scene==='group'&&this.botId===actor)) {this.#diagnostic('inbound',{scene,eventType,result:'invalid-or-self-message'});return;}
     const age=Date.now()-Date.parse(message.timestamp); if(!Number.isFinite(age)||age>240000||age < -60000){this.#diagnostic('inbound',{scene,eventType,result:'invalid-or-stale-timestamp'});return;}
-    const text:string=message.content.trim();
+    const text:string=message.content.trim().replace(/<qqbot-at-user\s+id=(["'])([^"'<>\s]+)\1\s*\/>/giu,(_tag:string,_quote:string,id:string)=>`<@!${id}>`);
     const platformAt=eventType==='GROUP_AT_MESSAGE_CREATE';
-    let mentionsPet=false,mentionOpenids:string[]=[];
+    let mentionsPet=false,mentionOpenids:string[]=[],referencedOpenids:string[]=[];
     if(scene==='group') {
       const isPet=(id:string)=>id===this.botId||id===this.#options.config.appId;
       const inline=[...text.matchAll(/<@!?([^>\s]+)>/gu)];
@@ -139,10 +142,11 @@ export class CanonicalQQGateway extends QQPetBridge {
       mentionsPet=inline.length===0?(platformAt||known.some(isPet)):
         leading.some(isPet)||platformAt&&leading.length>0&&!inline.some(m=>isPet(m[1]));
       mentionOpenids=[...new Set((inline.length?leading:known).filter(qqId).filter(id=>!isPet(id)))].slice(0,16);
+      referencedOpenids=[...new Set(inline.map(m=>m[1]).filter(qqId).filter(id=>!isPet(id)&&!mentionOpenids.includes(id)))].slice(0,16);
     }
     const reference=message.message_reference?.message_id;
     const input:QQIncoming={messageId:message.id,scene,actorOpenid:actor,text,occurredAt:message.timestamp,...(scene==='group'?{
-      groupOpenid:message.group_openid,mentioned:platformAt,mentionsPet,mentionOpenids,...(qqId(reference)?{replyToMessageId:reference}:{}),
+      groupOpenid:message.group_openid,mentioned:platformAt,mentionsPet,mentionOpenids,referencedOpenids,...(qqId(reference)?{replyToMessageId:reference}:{}),
       nickname:platformNickname(message.author)
     }:{})};
     this.#diagnostic('inbound',{scene,eventType,characters:text.length,
@@ -241,7 +245,7 @@ export class CanonicalQQGateway extends QQPetBridge {
     if(superseded)return;
     if(typeof text==='string'){if(text.trim())await this.respond(scene,[anchor],text,scene==='group'&&!anchor.sleepCatchupId);}
     else if(text&&scene==='group'){
-      for(const reply of text.replies){const target=items.find(item=>item.eventId===reply.anchorEventId);if(target&&reply.text.trim())this.#groupReplies.push({anchor:target,text:reply.text,epoch});}
+      for(const reply of text.replies){const target=items.find(item=>item.eventId===reply.anchorEventId);if(target&&reply.text.trim()&&!(reply.freshOnly&&this.#items.length))this.#groupReplies.push({anchor:target,text:reply.text,epoch,freshOnly:reply.freshOnly,mentionActorId:reply.mentionActorId});}
       await this.flushGroupReplies();
     }
   }
@@ -260,15 +264,15 @@ export class CanonicalQQGateway extends QQPetBridge {
     if(this.#groupReplies.length&&delay>0){this.#replyTimer=setTimeout(()=>{this.#replyTimer=undefined;void this.flushGroupReplies().catch(()=>this.statusSafe('message-failed'));},delay);return;}
     const reply=this.#groupReplies.shift();if(!reply){this.scheduleGroup();return;}
     this.#sendingGroup=true;
-    try{if(reply.epoch===this.#groupEpoch&&Date.now()-reply.anchor.receivedAt<=240000)await this.sendResponse('group',[reply.anchor],reply.text);}
+    try{if(reply.epoch===this.#groupEpoch&&Date.now()-reply.anchor.receivedAt<=240000)await this.sendResponse('group',[reply.anchor],reply.text,reply.mentionActorId);}
     finally{this.#sendingGroup=false;if(this.#groupReplies.length)this.#replyTimer=setTimeout(()=>{this.#replyTimer=undefined;void this.flushGroupReplies().catch(()=>this.statusSafe('message-failed'));},Math.max(0,this.#lastGroupReply+10000-Date.now()));else this.scheduleGroup();}
   }
-  private async sendResponse(scene:'c2c'|'group',items:Item[],text:string):Promise<void> {
+  private async sendResponse(scene:'c2c'|'group',items:Item[],text:string,mentionActorId?:string):Promise<void> {
     const epoch=this.#groupEpoch;if(scene==='group'&&this.#groupBlocked)return;
     const last=items.at(-1); if(!last||this.#closed||this.#options.signal.aborted)return;
     const target=last.deliveryAnchor??last;
     const started=Date.now();this.#diagnostic('sendStarted',{scene,anchorAgeMs:started-last.receivedAt});
-    const action=await this.#options.canonical.enqueue(this.#options.config.petId||'main',(last.sleepCatchupId?last.sleepCatchupId+':':'reply:')+target.messageId,scene,text,target.eventId,target.messageId,this.#options.ingressAuthority);
+    const action=await this.#options.canonical.enqueue(this.#options.config.petId||'main',(last.sleepCatchupId?last.sleepCatchupId+':':'reply:')+target.messageId,scene,text,target.eventId,target.messageId,this.#options.ingressAuthority,mentionActorId);
     if(!this.#closed&&!this.#options.signal.aborted && (scene!=='group'||!this.#groupBlocked&&epoch===this.#groupEpoch)) { try{await this.#options.dispatch(action);}finally{if(scene==='group')this.#lastGroupReply=Date.now();this.#diagnostic('sendFinished',{scene,durationMs:Date.now()-started});} }
   }
   stop():void {

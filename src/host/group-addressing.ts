@@ -5,7 +5,7 @@ import {groupSpeaker} from './chat-identity.js';
 import {groupPeople} from './group-people.js';
 
 type Payload={scene?:string;groupId?:string;messageId?:string;text?:string;addressing?:{
-  mentionsPet?:boolean;mentionedActors?:string[];replyToMessageId?:string
+  mentionsPet?:boolean;mentionedActors?:string[];referencedActors?:string[];replyToMessageId?:string
 }};
 const payload=(event:LifeEvent)=>event.payload as Payload|undefined;
 const nameKey=(name:string)=>name.normalize('NFKC').trim().toLowerCase();
@@ -24,13 +24,13 @@ export function groupAddressing(state:CanonicalEnvelope,batch:LifeEvent[]) {
     createHash('sha256').update(identity.appId+':'+identity.groupOpenid).digest('hex')===groupId;
   const inboundIds=new Set(batch.map(event=>event.eventId));
   const namedPeople=groupId?groupPeople(state.life,groupId):[];
-  const currentNames=new Map(namedPeople.map(person=>[person.actorId,person.names.at(-1)?.name]));
+  const currentNames=new Map(namedPeople.map(person=>[person.actorId,person.remark?.name??person.names.at(-1)?.name]));
   const describe=(actor:string)=>{
     const name=currentNames.get(actor);
     return name?`${name}（${label(actor)}）`:label(actor);
   };
   const names=new Map<string,Set<string>>([['爸爸',new Set(['dad'])]]);
-  for(const person of namedPeople)for(const evidence of person.names){
+  for(const person of namedPeople)for(const evidence of [...person.names,...(person.remark?[person.remark]:[])]){
     const key=nameKey(evidence.name),people=names.get(key)??new Set<string>();
     people.add(person.actorId);names.set(key,people);
   }
@@ -60,6 +60,7 @@ export function groupAddressing(state:CanonicalEnvelope,batch:LifeEvent[]) {
     }
     const addressedTo:Audience=direct.has('pet')?'pet':direct.size?'others':quoteId&&!quoteActor?'unresolved-quote':'unspecified';
     return {eventId:event.eventId,speaker:groupSpeaker(event.actorId),actorId:event.actorId,text,addressedTo,
+      ...(address?.referencedActors?.length?{referencedActors:address.referencedActors}:{}),
       ...(direct.size?{recipients:[...direct].map(describe)}:{}),
       ...(quoteId?{quotedSpeaker:quoteActor?describe(quoteActor):'引用对象未确认'}:{})};
   }
