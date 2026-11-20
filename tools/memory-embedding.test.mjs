@@ -28,15 +28,15 @@ test('无关键词重合时语义候选仍可进入本地重排，失败时关�
   state.memories.push({id:'a',kind:'semantic',content:'爸爸喜欢茉莉花茶',valid:true,sourceIds:[],evidenceLevel:'reported',createdAt:'2026-01-01T00:00:00Z'});
   const scored=[],reranker={score:async(_q,docs)=>{scored.push(...docs);return docs.map(()=>.9)}};
   const embedding={candidates:async(_p,_q,docs)=>docs},retrieval=new CanonicalMemoryRetrieval({},undefined,reranker,undefined,embedding);
-  assert.equal((await retrieval.search('main','常喝的饮品',8,state))[0].id,'a');assert.match(scored[0],/茉莉/);
+  assert.equal((await retrieval.searchSnapshot(state,'常喝的饮品',8))[0].id,'a');assert.match(scored[0],/茉莉/);
   const fallback=new CanonicalMemoryRetrieval({},undefined,{score:async()=>null},undefined,{candidates:async()=>[]});
-  assert.equal((await fallback.search('main','茉莉花茶',8,state))[0].id,'a');
+  assert.equal((await fallback.searchSnapshot(state,'茉莉花茶',8))[0].id,'a');
 });
 test('低相关重排结果不会被当成可用记忆',async()=>{
   const state=createInitialState('main','2026-01-01T00:00:00Z');
   state.memories.push({id:'a',kind:'semantic',content:'爸爸喜欢茉莉花茶',valid:true,sourceIds:[],evidenceLevel:'reported',createdAt:'2026-01-01T00:00:00Z'});
   const retrieval=new CanonicalMemoryRetrieval({},undefined,{score:async()=>[.0001]},undefined,{candidates:async(_p,_q,docs)=>docs});
-  assert.deepEqual(await retrieval.search('main','火星火山',8,state),[]);
+  assert.deepEqual(await retrieval.searchSnapshot(state,'火星火山',8),[]);
 });
 
 test('并行启动语义检索，并等待语义候选和重排结果',async()=>{
@@ -47,7 +47,7 @@ test('并行启动语义检索，并等待语义候选和重排结果',async()=>
   const embedding={candidates:async(_p,_q,docs)=>{semanticStarted=true;await new Promise(resolve=>{releaseSemantic=resolve;});return docs;}};
   const reranker={score:async(_q,docs)=>{rankStarted=true;await new Promise(resolve=>{releaseRank=resolve;});return docs.map(()=>.9);}};
   const retrieval=new CanonicalMemoryRetrieval({},undefined,reranker,index,embedding);
-  const result=retrieval.search('main','常喝的饮品',8,state).then(value=>{finished=true;return value;});
+  const result=retrieval.searchSnapshot(state,'常喝的饮品',8).then(value=>{finished=true;return value;});
   assert.equal(semanticStarted,true);releaseIndex();await new Promise(setImmediate);
   assert.equal(finished,false);releaseSemantic();await new Promise(setImmediate);
   assert.equal(rankStarted,true);assert.equal(finished,false);releaseRank();

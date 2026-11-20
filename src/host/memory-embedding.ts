@@ -1,3 +1,4 @@
+import {abortable,CognitiveError} from '../cognition/diagnostics.js';
 import {createHash} from 'node:crypto';
 import type {CanonicalEnvelope,PostgresKernelStore} from '../storage/postgres.js';
 import type {WriterLease} from './writer-lease.js';
@@ -35,6 +36,7 @@ export function cosine(a:number[],b:number[]):number{
 }
 
 export class MemoryEmbedding {
+  private readonly vectors=new Map<string,number[]>();
   private readonly provider?:{url:string;key:string};
   private pending?:CanonicalEnvelope;
   private running=false;
@@ -51,12 +53,25 @@ export class MemoryEmbedding {
     lease.signal.addEventListener('abort',()=>{if(this.timer)clearTimeout(this.timer);},{once:true});
   }
   status(){return {state:this.state,indexed:this.count,total:this.total};}
-  private async embed(texts:string[],kind:'query'|'document',timeout:number):Promise<number[][]>{
+  private async embed(texts:string[],kind:'query'|'document',timeout:number,signal?:AbortSignal):Promise<number[][]>{
+    signal?.throwIfAborted();
+    const key=(text:string)=>MODEL+':'+kind+':'+contentHash(text);
+    const missing=[...new Set(texts)].filter(text=>!this.vectors.has(key(text)));
+    if(missing.length){
+      const vectors=await this.requestEmbeddings(missing,kind,timeout,signal);
+      signal?.throwIfAborted();
+      for(let i=0;i<missing.length;i++)this.vectors.set(key(missing[i]),vectors[i]);
+    }
+    const result=texts.map(text=>{const k=key(text),vector=this.vectors.get(k)!;this.vectors.delete(k);this.vectors.set(k,vector);return [...vector];});
+    while(this.vectors.size>512)this.vectors.delete(this.vectors.keys().next().value!);
+    return result;
+  }
+  private async requestEmbeddings(texts:string[],kind:'query'|'document',timeout:number,signal?:AbortSignal):Promise<number[][]>{
     if(!this.provider||!texts.length||texts.length>20)throw Error('embedding unavailable');
     const response=await fetch(this.provider.url,{method:'POST',redirect:'error',headers:{authorization:`Bearer ${this.provider.key}`,'content-type':'application/json'},
       body:JSON.stringify({model:MODEL,input:{texts},parameters:{dimension:DIMENSIONS,text_type:kind,...(kind==='query'?{instruct:'Retrieve relevant past conversations and memories that help respond to this conversation.'}:{})}}),
-      signal:AbortSignal.any([this.lease.signal,AbortSignal.timeout(timeout)])});
-    if(!response.ok)throw Error('embedding request failed');
+      signal:AbortSignal.any([this.lease.signal,AbortSignal.timeout(timeout),...(signal?[signal]:[])])});
+    if(!response.ok)throw new CognitiveError(response.status===401||response.status===403?'authentication_error':'recall_degraded',response.status===401||response.status===403?'authentication_error':'embedding_unavailable');
     const body:any=await response.json(),items=body?.output?.embeddings;
     if(!Array.isArray(items)||items.length!==texts.length)throw Error('invalid embeddings');
     const ordered=new Array<number[]>(texts.length);
@@ -103,15 +118,17 @@ export class MemoryEmbedding {
     }catch{this.state='degraded';if(!this.pending&&!this.lease.signal.aborted){this.pending=envelope;this.pendingSince=Date.now();}}
     finally{this.running=false;if(this.pending)this.schedule(this.pending,this.state==='degraded'?30000:1000);}
   }
-  async candidates(petId:string,query:string,docs:RecallDocument[]):Promise<RecallDocument[]>{
-    if(!this.provider||!docs.length)return [];
+  async candidates(petId:string,query:string,docs:RecallDocument[],signal?:AbortSignal):Promise<RecallDocument[]>{
+    signal?.throwIfAborted();
+    if(!docs.length)return [];
+    if(!this.provider)throw new CognitiveError('recall_degraded','embedding_unavailable');
     try{
-      const [vector]=await this.embed([query],'query',4000),buckets=queryBuckets(vector);
-      const rows=await this.lease.query(`SELECT document_id,content_hash,embedding FROM silicon_genesis.memory_index_embedding WHERE pet_id=$1 AND model=$2 AND buckets && $3::text[]
-        ORDER BY (SELECT count(*) FROM unnest(buckets) b WHERE b=ANY($3::text[])) DESC,document_id LIMIT 1000`,[petId,MODEL,buckets]);
+      const [vector]=await this.embed([query],'query',4000,signal),buckets=queryBuckets(vector);
+      const rows=await abortable(this.lease.query(`SELECT document_id,content_hash,embedding FROM silicon_genesis.memory_index_embedding WHERE pet_id=$1 AND model=$2 AND buckets && $3::text[]
+        ORDER BY (SELECT count(*) FROM unnest(buckets) b WHERE b=ANY($3::text[])) DESC,document_id LIMIT 1000`,[petId,MODEL,buckets]),signal);
       const live=new Map(docs.map(d=>[d.id,d]));
       return rows.rows.map(row=>{const doc=live.get(String(row.document_id));return {doc,score:doc&&contentHash(doc.content)===row.content_hash?cosine(vector,row.embedding):-1};})
         .filter((x):x is {doc:RecallDocument;score:number}=>!!x.doc&&x.score>=.25).sort((a,b)=>b.score-a.score).slice(0,24).map(x=>x.doc);
-    }catch{this.state='degraded';return [];}
+    }catch(error){if(signal?.aborted)throw signal.reason;this.state='degraded';throw error;}
   }
 }

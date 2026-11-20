@@ -1,3 +1,4 @@
+import {CognitiveError} from '../cognition/diagnostics.js';
 import {checkSpirit,advanceSpirit,spendSpirit,spendConversationSpirit} from '../kernel/spirit.js';
 import {budgetView} from './budget-view.js';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
@@ -113,7 +114,7 @@ export class DurableCognitiveBudget implements CognitiveBudget, ModelBudget {
     }
     const purpose=context.purpose??({autonomous:'自主行为',diary:'日记整理',reflection:'成长反思',interactive:'互动','food-request':'独立食物决策（不占自主额度）'}[context.category]);
     const charged=await this.charge(context.petId,context.category,purpose,first,_model??'',signal);
-    if(!charged)throw new Error('模型调用额度不足');
+    if(!charged)throw new CognitiveError('budget_exhausted','模型调用额度不足');
     if(signal.aborted){await this.finish(context.petId,context.category,charged,'not-sent');throw new Error('模型请求已取消');}
     let finished=false;
     return async (outcome:Outcome='completed')=>{if(finished)return;finished=true;await this.finish(context.petId,context.category,charged,outcome);};

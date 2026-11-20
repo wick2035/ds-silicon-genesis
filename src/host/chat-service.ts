@@ -59,7 +59,7 @@ function workAvailability(draft:CanonicalEnvelope) {
 export class CanonicalChat {
   constructor(private readonly reader:Reader,private readonly gate:PetGate,private readonly uow:UnitOfWork,
     private readonly budget:DurableCognitiveBudget,private readonly model:Model,
-    private readonly search:(petId:string,query:string,snapshot?:LifeState)=>Promise<Memory[]>,
+    private readonly search:(petId:string,query:string,snapshot:LifeState,signal?:AbortSignal)=>Promise<Memory[]>,
     private readonly laborAction?:(petId:string,requestId:string,input:Record<string,unknown>)=>Promise<unknown>,
     private readonly service?:(petId:string,input:Record<string,unknown>)=>Promise<unknown>,
     private readonly wakeWorksite?:(petId:string)=>void,
@@ -167,7 +167,7 @@ export class CanonicalChat {
       const privateActivity=group?recentPrivateActivity(state):[];
       const recallText=group&&input.groupRouting?[input.groupRouting.focus.text,...input.groupRouting.context.slice(-2).map(e=>e.text)].join(' '):text;
       const memoryQuery=[recallText,...privateHistory.slice(-4).reverse().map(e=>e.content.slice(0,100))].join(' ').slice(0,500);
-      const memories=(await this.search(input.petId,memoryQuery,state)).filter(m=>m.valid && m.sourceIds.every(source=>live(state,source))).slice(0,8);
+      const memories=(await this.search(input.petId,memoryQuery,state,combined)).filter(m=>m.valid && m.sourceIds.every(source=>live(state,source))).slice(0,8);
       const primaryEvidence=evidenceMemoryPrompt(memories,state);
       const otherMemories=memories.filter(m=>!m.id.startsWith('worksite-episode:'));
       timing('memories');

@@ -56,7 +56,7 @@ test('对话问题不会被账本挤掉，真实阅读回执可召回并随来�
   assert.deepEqual(state.memories[0].sourceIds,[`action-result:${proposal.id}`,'question']);
   let terms;
   const search=new CanonicalMemoryRetrieval({query:async(_sql,args)=>{terms=args[1];return {rows:state.memories.filter(m=>terms.some(t=>m.content.includes(t))).map(m=>({m}))};}});
-  const memories=await search.search('main','被遗弃');
+  const memories=await search.searchArchive('main','被遗弃');
   assert.equal(memories.length,1);assert.ok(terms.includes('遗弃'));
   state.invalidSources.question='删除聊天';invalidateDependents(state);
   assert.equal(state.memories[0].valid,false);

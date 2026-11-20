@@ -1,3 +1,4 @@
+import {CognitiveError} from '../cognition/diagnostics.js';
 import { convertMessages, type ImageResolver } from './model-messages.js';
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
@@ -124,12 +125,12 @@ export function createModelFacade(config: ImportedModelConfig, options: ModelFac
             if(chunk.type==='content_block_delta' && chunk.delta.type==='input_json_delta') yield {type:'tool-call-delta',index:chunk.index,id:toolIds.get(chunk.index) || '',argumentsDelta:chunk.delta.partial_json};
           }
         }
-        if(!chars && !toolEvents) throw new Error('empty');
+        if(!chars && !toolEvents) throw new ModelResultError('模型未返回有效内容');
         completed=true;
       } catch (error) {
         const status=typeof error==='object' && error!==null && 'status' in error ? Number(error.status) : 0;
         const message=controller.signal.aborted?'模型请求已取消或超时':error instanceof ModelResultError?error.message:status===401||status===403?'模型服务认证失败，请检查 API 密钥和访问权限':status===404?'模型或接口不存在，请检查模型名称和服务地址':status===429?'模型服务额度不足或请求过于频繁':status>=500?'模型服务暂时不可用，请稍后重试':'模型请求未能完整完成，请检查服务配置';
-        throw new Error(message);
+        throw new CognitiveError(controller.signal.aborted?(o.signal?.aborted?'stopped':'model_timeout'):status===401||status===403?'authentication_error':error instanceof ModelResultError?'invalid_model_output':error instanceof CognitiveError?error.code:'model_unavailable',message);
       }
       finally {clearTimeout(timer);if(firstByteTimer)clearTimeout(firstByteTimer);leaseSignal.removeEventListener('abort',abort);o.signal?.removeEventListener('abort',abort);controller.abort();active.delete(controller);if(release) await release(!sent?'not-sent':completed?'completed':'failed');}
     }

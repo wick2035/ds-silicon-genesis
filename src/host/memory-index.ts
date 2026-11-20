@@ -1,3 +1,4 @@
+import {abortable} from '../cognition/diagnostics.js';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 import type {PostgresKernelStore} from '../storage/postgres.js';
 import type {WriterLease} from './writer-lease.js';
@@ -47,13 +48,14 @@ export class MemoryIndex {
     }catch{failed=true;if(!this.pending&&!this.lease.signal.aborted){this.pending=envelope;this.pendingSince=Date.now();}/* Retry while chat uses the canonical snapshot. */}
     finally{this.running=false;if(this.pending)this.schedule(this.pending,failed?30000:1000);}
   }
-  async candidates(stateVersion:number,petId:string,query:string):Promise<Set<string>|null>{
+  async candidates(stateVersion:number,petId:string,query:string,signal?:AbortSignal):Promise<Set<string>|null>{
+    signal?.throwIfAborted();
     const terms=[...new Set(recallTerms(query))].slice(0,40);if(!terms.length)return null;
-    try{const result=await this.lease.query(`SELECT d.document_id FROM silicon_genesis.memory_index_status s
+    try{const result=await abortable(this.lease.query(`SELECT d.document_id FROM silicon_genesis.memory_index_status s
       JOIN silicon_genesis.memory_index_document d ON d.pet_id=s.pet_id AND d.source_version=s.source_version
       WHERE s.pet_id=$1 AND s.source_version=$2 AND d.terms && $3::text[]
-      ORDER BY (SELECT count(*) FROM unnest($3::text[]) t WHERE t=ANY(d.terms)) DESC,d.document_id LIMIT 500`,[petId,stateVersion,terms]);
+      ORDER BY (SELECT count(*) FROM unnest($3::text[]) t WHERE t=ANY(d.terms)) DESC,d.document_id LIMIT 500`,[petId,stateVersion,terms]),signal);
       return result.rows.length?new Set(result.rows.map(r=>String(r.document_id))):null;
-    }catch{return null;}
+    }catch(error){if(signal?.aborted)throw signal.reason;return null;}
   }
 }

@@ -1,3 +1,4 @@
+import {createCognitionDiagnostics} from './cognition-diagnostics.js';
 import {createWorksiteReviews} from './worksite-reviews.js';
 import {createWorksiteChatWait} from './worksite-chat-coordination.js';
 import {createLaborCompletionNotices} from './labor-completion-notices.js';
@@ -87,6 +88,7 @@ function connectionUri(config:any):string {
 }
 
 export async function main():Promise<void> {
+  const cognitionDiagnostics=createCognitionDiagnostics(join(root,'data','logs'));
   const dbConfig=await readJson(join(root,'data','dsh','dsh-pet','companion','postgres.json'));
   if(dbConfig.namespace!=='desktop-pet')throw Error('数据库来源配置无效');
   const parser=await import(pathToFileURL(join(root,'vendor','dsh-pet','src','host','config','jsonc.ts')).href);
@@ -214,7 +216,7 @@ export async function main():Promise<void> {
     const initialIndexState=await store.loadEnvelope(petId);if(initialIndexState){scheduleMemory(initialIndexState);worksiteReviews.observe(initialIndexState);}
     const waitForWorksiteStep=createWorksiteChatWait(store,[unitOfWork,dispatcher]);
     const resumeWorkAfterChat=(id:string)=>{void store.loadEnvelope(id).then(current=>{const pet=current?.legacy as any;if(pet?.worksite?.inside&&(pet.worksite.workState!=='stopped'||pet.worksite.forced===true)&&pet.labor?.contracts?.some((c:any)=>['working','queued'].includes(c.status)&&c.done<c.trips))worksiteWake(id);}).catch(()=>{});};
-    const retrieval=new CanonicalMemoryRetrieval(lease,desktopIdle,reranker,memoryIndex,embedding), chat=new CanonicalChat(store,lease,unitOfWork,budget,model,(id,q,snapshot)=>retrieval.search(id,q,12,snapshot),(id,key,input)=>domain.laborAction(id,key,input),(id,input)=>service(id,input),id=>worksiteWake(id),grounding,waitForWorksiteStep,resumeWorkAfterChat);
+    const retrieval=new CanonicalMemoryRetrieval(lease,desktopIdle,reranker,memoryIndex,embedding), chat=new CanonicalChat(store,lease,unitOfWork,budget,model,(id,q,snapshot,signal)=>retrieval.searchSnapshot(snapshot,q,12,{signal}),(id,key,input)=>domain.laborAction(id,key,input),(id,input)=>service(id,input),id=>worksiteWake(id),grounding,waitForWorksiteStep,resumeWorkAfterChat);
     let requestShutdown=()=>{};
     let companionManagement:ReturnType<typeof createCompanionManagement>;
     const loadCommitted=(id:string)=>store.loadCommittedEnvelope(id);
@@ -237,7 +239,7 @@ export async function main():Promise<void> {
         throw Error('模型操作无效');
       }},
       manage:createLifeManagement(store,lease,unitOfWork,projectBody,id=>dispatcher.interrupt(id),blocked=>qq?.setGroupBlocked(blocked)),
-      searchMemories:async(id,q)=>retrieval.search(id,q,12,await kernel.getState(id)),memoryGraph:async(id,q)=>({...memoryGraph(await kernel.getState(id),q),reranker:reranker.status(),embedding:embedding.status()}),links:{play:`/dsh-pet-7340/humanity?pet=${encodeURIComponent(petId)}`}});
+      searchMemories:async(id,q)=>retrieval.searchSnapshot(await kernel.getState(id),q,12),memoryGraph:async(id,q)=>({...memoryGraph(await kernel.getState(id),q),reranker:reranker.status(),embedding:embedding.status()}),links:{play:`/dsh-pet-7340/humanity?pet=${encodeURIComponent(petId)}`}});
     const chatApi=createChatHttp(chat,()=>true,()=>petId);
     const meteredBalance=()=>budget.runAs(petId,'interactive',async()=>{const release=await budget.reserve('balance','balance',lease.signal);try{return await model!.queryBalance();}finally{await release();}});
     const api=async(request:Request)=>{const url=new URL(request.url);if(url.pathname==='/dsh-pet-7340/attachment'){const raw=url.searchParams.get('id')||'',id=raw.startsWith('sha256:')?'image:'+raw.slice(7):raw;try{const image=await attachments.resolve({petId,id},request.signal);return new Response(image.data as BodyInit,{headers:{'content-type':image.mediaType,'cache-control':'no-store','x-content-type-options':'nosniff'}});}catch{return new Response('附件不存在',{status:404});}}return await chatApi(request) ?? await lifeApi(request);};
@@ -281,6 +283,7 @@ export async function main():Promise<void> {
       reminders:{run:(id,signal)=>todos.remind(id,signal,t=>{if(!publishWhisper)throw Error('桌宠显示尚未就绪');publishWhisper('提醒：'+t.text);})},
       whisper:{settings:()=>model!.getSettings(),run:async(id,signal)=>{if(!publishWhisper)throw Error('桌宠显示尚未就绪');const text=await responses(id,'whisper',signal,undefined,{autonomous:true});if(!signal.aborted)publishWhisper(text);}},
       wakeCoordinator:wakes,deterministic,resultCoordinator:coordinator,farm,cooker,foodRequests,
+      onResult:result=>{void cognitionDiagnostics.record(result);},
       assertExclusive:async()=>lease.assertHeld()});
     app=await startStandalone({root,llm:model.llm,ai:{...model,queryBalance:meteredBalance,testConnection:(input:Record<string,unknown>)=>budget.runAs(petId,'interactive',()=>model!.testConnection(input))},agentDefaultModel:model.agentDefaultModel,helperChannel:helper,api,
       hostReady:(deps,helpers)=>{
@@ -389,7 +392,7 @@ export async function main():Promise<void> {
         if(!pending||pending.rowCount===0)break;
         await new Promise(resolve=>setTimeout(resolve,100));
       }
-      commandChannel.close();
+      commandChannel.close();await cognitionDiagnostics.flush();
       const results=await Promise.allSettled([app!.close(),lease.close()]);
       if(results[1].status==='fulfilled')await pool.end();
       if([...schedulerResult,...results].some(result=>result.status==='rejected'))console.error('部分组件未能正常关闭，请检查本次运行状态。');};
@@ -404,7 +407,7 @@ export async function main():Promise<void> {
       browser.unref();
     }
   } catch(error) {
-    qq?.stop();await scheduler?.stop().catch(()=>{});model?.dispose();bili?.close();await app?.close().catch(()=>{});await stores?.lease.close().catch(()=>{});await pool.end();throw error;
+    qq?.stop();await scheduler?.stop().catch(()=>{});await cognitionDiagnostics.flush();model?.dispose();bili?.close();await app?.close().catch(()=>{});await stores?.lease.close().catch(()=>{});await pool.end();throw error;
   }
 }
 

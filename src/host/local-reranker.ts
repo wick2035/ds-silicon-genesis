@@ -17,10 +17,17 @@ export class LocalReranker {
     child.on('error',stop);child.on('exit',stop);signal.addEventListener('abort',()=>this.close(),{once:true});
   }
   status(){return this.ready?'ready':'degraded';}
-  async score(query:string,documents:string[]):Promise<number[]|null>{
+  async score(query:string,documents:string[],signal?:AbortSignal):Promise<number[]|null>{
+    signal?.throwIfAborted();
     if(!this.ready||!this.child||this.pending.size||!documents.length)return null;
     const id=++this.serial;
-    return new Promise(resolve=>{const timer=setTimeout(()=>{this.pending.delete(id);this.close();resolve(null);},4000);this.pending.set(id,{resolve,timer});this.child!.stdin.write(JSON.stringify({id,query,documents:documents.slice(0,24)})+'\n',error=>{if(error){clearTimeout(timer);this.pending.delete(id);resolve(null);}});});
+    return new Promise(resolve=>{
+      const finish=(value:number[]|null)=>{const item=this.pending.get(id);if(!item)return;clearTimeout(item.timer);this.pending.delete(id);signal?.removeEventListener('abort',abort);resolve(value);};
+      const abort=()=>finish(null),timer=setTimeout(()=>finish(null),4000);
+      this.pending.set(id,{resolve:value=>{signal?.removeEventListener('abort',abort);resolve(value);},timer});
+      signal?.addEventListener('abort',abort,{once:true});
+      this.child!.stdin.write(JSON.stringify({id,query,documents:documents.slice(0,24)})+'\n',error=>{if(error)finish(null);});
+    });
   }
   close(){this.ready=false;this.child?.kill();this.child=undefined;}
 }

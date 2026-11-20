@@ -75,9 +75,8 @@ test('旧目标来源超过最近事件窗口后仍能显示，失效来源不�
  assert.equal(body.value.sources.question.text,'被遗弃是什么意思？');
  s.invalidSources.question='deleted';body=await (await api(new Request('http://localhost/api/life/snapshot'))).json();assert.equal(body.value.sources.question,undefined);
 });
-test('目标单独检索，避免长对话挤掉旧问题的解释',async()=>{
+test('目标合并进同轮检索，避免长对话挤掉旧问题的解释',async()=>{
  const s=fixture();s.events.push({eventId:'long',type:'conversation.user',payload:{text:'其他话题'.repeat(150)}});
- const calls=[],retrieval=new CanonicalMemoryRetrieval({query:async()=>({rows:[]})});
- retrieval.search=async(_id,query)=>{calls.push(query);return query===s.goals[0].title?[s.memories[0]]:[]};
- const memories=await retrieval.forCognition(s);assert.ok(calls.includes(s.goals[0].title));assert.equal(memories[0].id,'explanation-memory');
+ const calls=[],retrieval=new CanonicalMemoryRetrieval({},undefined,{score:async(q,docs)=>docs.map(()=>.9)},undefined,{candidates:async(_id,query,docs)=>{calls.push(query);return docs;}});
+ const memories=await retrieval.forCognition(s);assert.equal(calls.length,1);assert.ok(calls[0].includes(s.goals[0].title));assert.ok(memories.some(m=>m.id==='explanation-memory'));
 });

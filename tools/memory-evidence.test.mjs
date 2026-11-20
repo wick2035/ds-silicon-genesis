@@ -24,10 +24,10 @@ test('按钮真实回执组成最近经历，图谱和聊天均优先提供历�
  const q='你好好回忆一下上次我按下按钮发生了什么';assert.match(memoryGraph(s,q).nodes[0].id,/button-new/);
  // A stale index and an unhelpful reranker cannot hide primary observed evidence.
  const index={candidates:async()=>new Set(['memory:other'])};const ranker={score:async(_q,docs)=>docs.map(()=>0)};
- const search=new CanonicalMemoryRetrieval({},undefined,ranker,index);const found=await search.search('main',q,8,s);
+ const search=new CanonicalMemoryRetrieval({},undefined,ranker,index);const found=await search.searchSnapshot(s,q,8);
  assert.equal(found[0].id,'worksite-episode:button-new');assert.match(found[0].content,/恐惧 99 → 100/);
  assert.match(evidenceMemoryPrompt([...found,...Array(10).fill({id:'noise',content:'x'.repeat(1000)})],s),/疼痛 79 → 82/);
- for(const text of ['强制干活','强制开工','强迫搬砖','搬砖按钮','强制工作'])assert.equal((await search.search('main',text,8,s))[0].id,'worksite-episode:button-new');
+ for(const text of ['强制干活','强制开工','强迫搬砖','搬砖按钮','强制工作'])assert.equal((await search.searchSnapshot(s,text,8))[0].id,'worksite-episode:button-new');
 });
 test('事件来源被撤销、回执失败、记忆被删除时不会伪造结果',()=>{
  const s=fixture();s.invalidSources.result4='撤销';let episode=forcedWorkEpisodes(s)[0];assert.match(episode.content,/疼痛 2 → 6/);assert.doesNotMatch(episode.content,/79 → 82/);
@@ -38,7 +38,7 @@ test('事件来源被撤销、回执失败、记忆被删除时不会伪造结�
 test('一般经历也可按来源描述检索，避免借关联暴露已删除来源',async()=>{
  const s=fixture();assert.equal(lexicalRecall(recallDocuments(s),'柜子',8)[0].memory.id,'other');
  const index={candidates:async()=>new Set(['unrelated'])};const search=new CanonicalMemoryRetrieval({},undefined,undefined,index);
- assert.equal((await search.search('main','柜子',8,s))[0].id,'other');
+ assert.equal((await search.searchSnapshot(s,'柜子',8))[0].id,'other');
  s.invalidSources.context='删除';assert.equal(lexicalRecall(recallDocuments(s),'柜子',8).length,0);
  assert.equal(asksAboutForcedWork('手机音量按钮怎么按'),false);
 });
