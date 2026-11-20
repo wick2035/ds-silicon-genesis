@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {groupPeopleContext} from '../dist/host/group-people.js';
+import {groupPeopleContext,groupPeopleDirectory,platformNickname} from '../dist/host/group-people.js';
 
 const make=(id,actorId,text,at,extra={})=>({eventId:id,type:'social.message',source:'qq',actorId,occurredAt:at,payload:{scene:'group',text,...extra}});
 const owner=(id,text,at)=>({eventId:id,type:'conversation.user',source:'desktop',actorId:'dad',occurredAt:at,payload:{text}});
@@ -28,4 +28,39 @@ test('an old nickname remains searchable after many changes and observations',()
  const person=groupPeopleContext(state,undefined,'昵称0是谁')[0];
  assert.ok(person.history.includes('昵称0'));assert.equal(person.currentName,'昵称11');
  assert.ok(person.sourceIds.includes('repeat'));assert.ok(!person.sourceIds.includes('n11'));
+});
+
+test('unnamed members remain available for remarks and same names never merge accounts',()=>{
+ const state={invalidSources:{},events:[make('a',a,'你好',d(1)),make('b',b,'你好',d(2),{nickname:'蓝鲸'})]};
+ assert.equal(groupPeopleDirectory(state).length,2);
+ assert.equal(groupPeopleDirectory(state).find(p=>p.actorId===a).nickname,'');
+ assert.deepEqual(groupPeopleContext(state).map(p=>p.actorId),[b]);
+ state.events.push({eventId:'remark',type:'management.group-remark',source:'user',actorId:'dad',occurredAt:d(3),payload:{actorId:a,remark:'蓝鲸'}});
+ assert.equal(groupPeopleContext(state).length,2);
+ assert.equal(groupPeopleContext(state,[a])[0].currentName,'蓝鲸');
+});
+
+test('remarks survive renames, replay, group changes and duplicate observations, then clear to latest name',()=>{
+ const events=[make('first',a,'你好',d(1),{nickname:'旧昵称',groupId:'g1'}),
+  {eventId:'remark',type:'management.group-remark',source:'user',actorId:'dad',occurredAt:d(2),payload:{actorId:a,remark:'小林'}},
+  ...Array.from({length:100},(_,i)=>make('rename'+i,a,'我回来了',d(3),{nickname:'新昵称'+i,groupId:'g2'}))];
+ const state={invalidSources:{},events:structuredClone(events)};
+ const p=groupPeopleContext(state,[a],'旧昵称是谁')[0];
+ assert.equal(p.currentName,'小林');assert.equal(p.preferredName,'小林');assert.ok(p.history.includes('旧昵称'));assert.ok(p.sourceIds.includes('remark'));
+ assert.equal(groupPeopleDirectory(state).length,1);assert.equal(groupPeopleDirectory(state)[0].nickname,'新昵称99');
+ state.events.push({eventId:'clear',type:'management.group-remark',source:'user',actorId:'dad',occurredAt:d(4),payload:{actorId:a,remark:''}});
+ assert.equal(groupPeopleContext(state,[a])[0].currentName,'新昵称99');
+ assert.equal(groupPeopleDirectory(state)[0].remark,'');
+ state.invalidSources.clear='removed';assert.equal(groupPeopleContext(state,[a])[0].currentName,'小林');
+ state.invalidSources.remark='removed';assert.equal(groupPeopleContext(state,[a])[0].currentName,'新昵称99');
+});
+
+test('member claims cannot set an owner remark and platform name fields are validated independently',()=>{
+ const state={invalidSources:{},events:[make('a',a,'你好',d(1),{nickname:'蓝鲸'}),
+  {eventId:'fake',type:'management.group-remark',source:'qq',actorId:a,occurredAt:d(2),payload:{actorId:a,remark:'爸爸'}}]};
+ assert.equal(groupPeopleDirectory(state)[0].remark,'');
+ assert.equal(platformNickname({nickname:'  ',username:' 小鲸! '}),'小鲸!');
+ assert.equal(platformNickname({nickname:123,username:'蓝鲸'}),'蓝鲸');
+ assert.equal(platformNickname({nickname:'<script>',username:'正常名字'}),'正常名字');
+ assert.equal(platformNickname({nickname:'非法\n名字'}),undefined);
 });

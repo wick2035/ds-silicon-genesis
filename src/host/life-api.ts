@@ -7,6 +7,7 @@ import { momentEventType, readMoments } from '../kernel/moments.js';
 import type { CanonicalEnvelope, BodyProjection } from '../storage/postgres.js';
 import type { PetGate, UnitOfWork } from '../storage/uow.js';
 import { isOwnerPrivateConversation } from './chat-identity.js';
+import {cleanGroupName,groupPeopleDirectory} from './group-people.js';
 
 type PageState = LifeState & {diaryDates?:Record<string,string>};
 
@@ -33,6 +34,7 @@ export type ManagementCommand =
   | {kind:'spirit'; value:number; requestId:string; reason:string; version:number}
   | {kind:'pause'; paused:boolean; reason:string; version:number}
   | {kind:'group-chat'; blocked:boolean; reason:string; version:number}
+  | {kind:'group-remark'; actorId:string; remark:string; expectedRemark:string; reason:string; version:number}
   | {kind:'goal'; id:string; status:'active'|'paused'|'abandoned'; expectedStatus:string; reason:string; version:number}
   | {kind:'revoke'; permission:string; reason:string; version:number}
   | {kind:'memory'; id:string; action:'delete'|'correct'; expectedContent:string; content?:string; reason:string; version:number};
@@ -52,6 +54,14 @@ export function createLifeManagement(reader: Reader, gate: PetGate, uow: UnitOfW
     if (!current || gate.signal.aborted) throw new Error('状态已变化，请刷新后重试');
     await uow.apply(petId,current.version,draft=>{
       const life=draft.life, now=new Date().toISOString(), eventId=`management:${randomUUID()}`;
+      if(command.kind==='group-remark'){
+        const person=groupPeopleDirectory(life).find(p=>p.actorId===command.actorId);
+        if(!person||person.remark!==command.expectedRemark)throw Error('群友备注已变化，请刷新后重试');
+        if(typeof command.remark!=='string'||(command.remark.trim()!==''&&!cleanGroupName(command.remark)))throw Error('备注姓名无效');
+        const remark=command.remark.trim();
+        if(remark!==person.remark)life.events.push({eventId,petId,type:'management.group-remark',source:'user',actorId:'dad',occurredAt:now,receivedAt:now,evidenceLevel:'reported',payload:{actorId:command.actorId,remark,reason:command.reason}});
+        return {};
+      }
       if(command.kind==='spirit') {
         const legacy=draft.legacy as Record<string,any>, receipts=legacy.spiritAdjustments??={};
         const prior=receipts[command.requestId];
@@ -236,7 +246,7 @@ export function createLifeApi(host:LifeApiHost) {
         const raw=await request.text();if(raw.length>8192)return response(413,{ok:false,error:'请求过大'});
         let c:any;try{c=JSON.parse(raw);}catch{return response(400,{ok:false,error:'请求格式无效'});}
         if(!c || typeof c!=='object' || Array.isArray(c) || !Number.isSafeInteger(c.version) || c.version<0 || !validText(c.reason) ||
-          !(c.kind==='spirit' && typeof c.value==='number' && Number.isFinite(c.value) && c.value>=0 && c.value<=100 && typeof c.requestId==='string' && /^[A-Za-z0-9:-]{8,140}$/.test(c.requestId) || c.kind==='pause' && typeof c.paused==='boolean' || c.kind==='group-chat' && typeof c.blocked==='boolean' || c.kind==='goal' && validText(c.id,512) && validText(c.expectedStatus,30) && ['active','paused','abandoned'].includes(c.status) ||
+          !(c.kind==='group-remark' && typeof c.actorId==='string' && /^qq-member:[a-zA-Z0-9_-]{1,100}$/.test(c.actorId) && typeof c.remark==='string' && c.remark.length<=40 && (c.remark===''||!!cleanGroupName(c.remark)) && typeof c.expectedRemark==='string' && c.expectedRemark.length<=40 || c.kind==='spirit' && typeof c.value==='number' && Number.isFinite(c.value) && c.value>=0 && c.value<=100 && typeof c.requestId==='string' && /^[A-Za-z0-9:-]{8,140}$/.test(c.requestId) || c.kind==='pause' && typeof c.paused==='boolean' || c.kind==='group-chat' && typeof c.blocked==='boolean' || c.kind==='goal' && validText(c.id,512) && validText(c.expectedStatus,30) && ['active','paused','abandoned'].includes(c.status) ||
             c.kind==='revoke' && validText(c.permission,200) || c.kind==='memory' && validText(c.id,512) && typeof c.expectedContent==='string' && c.expectedContent.length<=5000 && ['delete','correct'].includes(c.action) && (c.action!=='correct'||validText(c.content,5000))))return response(400,{ok:false,error:'操作内容或原因无效'});
         await host.manage(id,c as ManagementCommand);
       }
@@ -267,7 +277,7 @@ export function createLifeApi(host:LifeApiHost) {
           break;
         }
         case 'relationships':
-          value=state.relationships;
+          value=view==='page'?{version:state.version,items:state.relationships,people:groupPeopleDirectory(state)}:state.relationships;
           break;
         case 'growth':
           value=view==='moments'?{moments:readMoments(state)}:view==='archive'?growthArchive(state):{...growthArchive(state),moments:readMoments(state)};

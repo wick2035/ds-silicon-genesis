@@ -52,7 +52,7 @@ window.lifeApi = Object.freeze({
   getGoals: signal => request('goals',{signal}),
   getTimeline: signal => request('timeline?view=page',{signal}),
   getChatHistory: signal => request('chat-history',{signal}),
-  getRelationships: signal => request('relationships',{signal}),
+  getRelationships: signal => request('relationships?view=page',{signal}),
   getGrowth: (section,signal) => request('growth?view='+encodeURIComponent(section),{signal}),
   searchMemories: query => request('memory-search?q='+encodeURIComponent(query)),
   getMemoryGraph: query => request('memory-graph?q='+encodeURIComponent(query||'')),

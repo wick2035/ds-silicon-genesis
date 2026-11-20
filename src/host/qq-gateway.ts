@@ -4,6 +4,7 @@ import { QQPetBridge } from '../../vendor/pet-plugins/behavior/qq-bridge.mjs';
 import { CanonicalQQ, createQQExecutor, QQPlatformRejection, type QQIncoming, type QQTransport } from './qq-canonical.js';
 import type { OutboxIntent, ExecutionReceipt } from '../storage/uow.js';
 import type {QQTurnResult} from './qq-sleep.js';
+import {platformNickname} from './group-people.js';
 
 interface QQConfig { enabled:boolean; appId:string; appSecret:string; petId?:string; sandbox?:boolean; ownerOpenid?:string; groupOpenid?:string; groupOwnerOpenid?:string; groupEnabled?:boolean; groupMode?:'owner'|'mentions'|'all'; pairingCode?:string; pairingExpiresAt?:number; groupPairingCode?:string; groupPairingExpiresAt?:number }
 export async function readQQConfig(path:string):Promise<QQConfig> {
@@ -142,7 +143,7 @@ export class CanonicalQQGateway extends QQPetBridge {
     const reference=message.message_reference?.message_id;
     const input:QQIncoming={messageId:message.id,scene,actorOpenid:actor,text,occurredAt:message.timestamp,...(scene==='group'?{
       groupOpenid:message.group_openid,mentioned:platformAt,mentionsPet,mentionOpenids,...(qqId(reference)?{replyToMessageId:reference}:{}),
-      nickname:message.author?.nickname??message.author?.username
+      nickname:platformNickname(message.author)
     }:{})};
     this.#diagnostic('inbound',{scene,eventType,characters:text.length,
       hasBindingWord:text.includes('绑定群'),commandOffset:text.indexOf('/绑定群'),

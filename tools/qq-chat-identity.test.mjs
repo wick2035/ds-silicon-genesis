@@ -238,3 +238,14 @@ test('private and group prompts include source-backed names after the original e
  assert.match(groupChat.calls[0].system,/小金鲸/);assert.match(groupChat.calls[0].system,/蓝鲸/);
  assert.ok(groupChat.state().life.events.find(e=>e.type==='conversation.assistant').payload.sourceIds.includes('known-name'));
 });
+
+test('manual remarks are preferred in group replies after a platform rename and carry their source',async()=>{
+ const friend='qq-member:abcdef123456';
+ const events=[event('original','social.message','qq','你好',friend,{scene:'group',groupId:'g1',nickname:'小鲸'}),
+  event('remark','management.group-remark','user','', 'dad',{actorId:friend,remark:'小林'}),
+  event('renamed','social.message','qq','还记得我吗',friend,{scene:'group',groupId:'g1',nickname:'海盐'})];
+ const f=fixture(events);
+ await f.chat.qqTurn({petId:'main',scene:'group',messages:[{eventId:'renamed',isOwner:false,text:'还记得我吗'}]},new AbortController().signal);
+ assert.match(f.calls[0].system,/"currentName":"小林"/);assert.match(f.calls[0].system,/"preferredName":"小林"/);assert.match(f.calls[0].system,/海盐/);
+ assert.ok(f.state().life.events.find(e=>e.type==='conversation.assistant').payload.sourceIds.includes('remark'));
+});

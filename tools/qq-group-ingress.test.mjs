@@ -77,6 +77,13 @@ test('gateway persists available group nickname without changing actor identity'
  assert.equal(messages[0].actorId,messages[1].actorId);
 });
 
+test('gateway falls back to a valid account username when nickname is missing or empty',async t=>{
+ const f=await fixture(t);f.state.life.invalidSources={};f.state.life.relationships=[];
+ await f.gateway.receive(f.message('/绑定群 private-code'),'group','GROUP_MESSAGE_CREATE');
+ await f.gateway.receive({...f.message('你好'),id:'fallback',author:{member_openid:'someone',nickname:' ',username:'账号昵称'}},'group','GROUP_MESSAGE_CREATE');
+ assert.equal(f.state.life.events.find(e=>e.type==='social.message').payload.nickname,'账号昵称');
+});
+
 test('authenticated group ingress records @ targets and reply references without member OpenIDs in the text',async t=>{
  const f=await fixture(t);
  f.state.life.invalidSources={};f.state.life.relationships=[];
