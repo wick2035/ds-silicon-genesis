@@ -53,7 +53,7 @@ export function farmReply(envelope:CanonicalEnvelope,userEventId:string,question
   if(group){
     const result=work?workText[work.operation]:field?.stage==='empty'?'田里现在是空的':field?.stage==='ripe'?'水稻已成熟':growing?'田里有水稻':'稻田状态待确认';
     const care=currentDay&&field.weatherBlocked?'，灾害期间暂停进田':currentDay&&growing
-      ? `，农活${field.careCompleted}/${field.careTarget}` : '';
+      ? `，照料${field.careProgress}/${field.careTarget}` : '';
     return {text:result+care+'。',sourceIds:[...sourceIds]};
   }
 
@@ -78,11 +78,12 @@ export function farmReply(envelope:CanonicalEnvelope,userEventId:string,question
     if(field.stage==='ripe')lines.push(field.operation==='harvest'?'水稻已经成熟，可以收割了。':'水稻已经成熟。');
     if(sameTurn?.operation==='plant'||/库存|种子/u.test(question+' '+draft))lines.push(`种子库存还剩 ${field.seeds.stock} 束。`);
     if(currentDay&&growing){
-      const remaining=field.careTarget-field.careCompleted;
+      const remaining=field.careTarget-field.careProgress;
       const available=field.operation==='water'?'，现在可以浇水':field.operation==='fertilize'?'，现在可以施肥':'';
       if(field.rain)lines.push(`雨水已补 ${field.rain} 次${field.waterNeeded?'':'，今天的水够了'}。`);
       else if(!field.waterNeeded)lines.push('今天的水够了。');
-      lines.push(remaining?`今天还差 ${remaining} 次农活${available}。`:'今天的农活已达标。');
+      lines.push(`人工照料 ${field.careCompleted} 次。`);
+      lines.push(remaining?`今天还差 ${remaining} 次照料${available}。`:'今天的照料已达标。');
     }
     if(currentDay&&field.weatherBlocked)lines.push(`${field.weatherLabel}期间先暂停进田。`);
   }

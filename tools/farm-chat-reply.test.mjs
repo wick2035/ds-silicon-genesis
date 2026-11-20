@@ -70,7 +70,7 @@ test('a confirmed plant receipt produces a persisted SSE reply without a second 
   assert.match(reply.payload.text,/用 24 束种子种下了一季水稻/);
   assert.match(reply.payload.text,/237\.6 token/);
   assert.match(reply.payload.text,/库存还剩 0 束/);
-  assert.match(reply.payload.text,/雨水已补 1 次。今天还差 2 次农活，现在可以施肥/);
+  assert.match(reply.payload.text,/雨水已补 1 次。人工照料 0 次。今天还差 1 次照料，现在可以施肥/);
   assert.match(wire,/用 24 束种子种下了一季水稻/);
   assert.ok(reply.payload.sourceIds.some(id=>id.startsWith('action-result:')));
   assert.equal(await chat.turn(message,f.gate.signal),reply.payload.text);
@@ -91,7 +91,7 @@ test('failure after accounting still saves and returns the confirmed result exac
     const message=input('plant-recovery','先去买点种子');
     const reply=await chat.turn(message,request.signal);
     assert.match(reply,/种下了一季水稻/);
-    assert.match(reply,/今天还差 2 次农活，现在可以施肥/);
+    assert.match(reply,/今天还差 1 次照料，现在可以施肥/);
     const [turn]=Object.values(f.get().legacy.chatTurns);
     assert.deepEqual(turn.failure,{phase:'generate',reason:cancelled?'cancelled':'timeout'});
     assert.equal(turn.status,'completed');
@@ -110,7 +110,7 @@ test('the reported draft cannot deny an earlier successful planting or count lig
     yield {type:'text',text:'本鱼进稻田了，可要播种时它说这会儿不能种。眼下还下着小雨，水是够的。'};
   }});
   const reply=await chat.turn({...input('farm-followup','自己进去稻田里，我教你种地\n先去买点种子'),onPartial:text=>partials.push(text)},f.gate.signal);
-  assert.match(reply,/种下了一季水稻.*幼苗期.*库存还剩 0 束.*今天还差 2 次农活，现在可以施肥/);
+  assert.match(reply,/种下了一季水稻.*幼苗期.*库存还剩 0 束.*今天还差 1 次照料，现在可以施肥/);
   assert.doesNotMatch(reply,/不能种|水是够的|买了 24/);
   assert.deepEqual(partials,[]);
   assert.equal(f.get().life.events.filter(e=>e.type==='wallet.spend').length,1);
@@ -120,7 +120,7 @@ test('current field distinguishes full watering from missing receipts and an emp
   const watered=fixture('heavy-rain');
   watered.finishFarm(watered.get(),'old-plant',[]);
   const chat=watered.chat({async *stream(){throw Error('模型请求已取消或超时');}});
-  assert.match(await chat.turn(input('rain-status','稻田的水够了吗？'),watered.gate.signal),/雨水已补 2 次，今天的水够了。今天还差 2 次农活，现在可以施肥/);
+  assert.match(await chat.turn(input('rain-status','稻田的水够了吗？'),watered.gate.signal),/雨水已补 2 次，今天的水够了。人工照料 0 次。今天的照料已达标/);
 
   const empty=fixture();
   const failed=empty.chat({async *stream(o){
@@ -135,11 +135,11 @@ test('current field distinguishes full watering from missing receipts and an emp
 });
 
 test('chat can request fertilizer and only reports completion from a confirmed action',async()=>{
-  const f=fixture('heavy-rain');
+  const f=fixture('light-rain');
   f.finishFarm(f.get(),'old-plant',[]);
   const invented=f.chat({async *stream(){yield {type:'text',text:'本鱼已经施了一次肥，农活达标了。'};}});
   const status=await invented.turn(input('invented-fertilizer','稻田农活做了几次？'),f.gate.signal);
-  assert.match(status,/还差 2 次农活，现在可以施肥/);
+  assert.match(status,/还差 1 次照料，现在可以施肥/);
   assert.doesNotMatch(status,/施了一次肥|农活已达标/);
 
   const chat=f.chat({...f.speech.wrap({async *stream(){
@@ -149,6 +149,6 @@ test('chat can request fertilizer and only reports completion from a confirmed a
   }}),embodiedTools:true});
   const reply=await chat.turn(input('fertilizer-request','去给水稻施肥吧'),f.gate.signal);
   assert.match(reply,/给水稻施了一次肥/);
-  assert.match(reply,/还差 1 次农活/);
+  assert.match(reply,/今天的照料已达标/);
   assert.equal(farmFacts(f.get()).careCompleted,1);
 });

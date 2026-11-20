@@ -91,9 +91,10 @@ app.whenReady().then(async()=>{
   assert.equal(farmFacts(state).stage,'seedling');
   assert.equal(state.legacy.wallet.balance,76);
   assert.equal(await render('document.getElementById("seed-stock").textContent'),'0 / 72 束');
-  assert.equal(await render('document.getElementById("care-progress").textContent'),'0 / 2 次');
+  assert.equal(await render('document.getElementById("care-progress").textContent'),'1 / 2 次');
   assert.equal(await render('document.getElementById("care-detail").textContent'),'现在可以施肥');
-  assert.equal(await render('document.getElementById("rain-detail").textContent'),'雨水补给 1 次');
+  assert.equal(await render('document.getElementById("rain-detail").textContent'),'人工 0 次 · 雨水 1 次');
+  assert.match(await render('document.querySelector(".care-status").textContent'),/截至23:59 · 零点结算/);
   await until(()=>desktop.isVisible());
   if(process.env.SILICON_FARM_SMOKE_IMAGE) {
     await until(()=>render('document.getElementById("visit").textContent === "带她进田" && !document.getElementById("visit").disabled'));
@@ -121,12 +122,16 @@ app.whenReady().then(async()=>{
   assert.equal(await render('window.farmBridge.action("weather").then(()=>false,()=>true)'),true);
 
   await farm.weather('main','heavy-rain');
-  await until(()=>render('document.getElementById("scene").dataset.weather === "heavy-rain" && document.getElementById("rain-detail").textContent === "雨水补给 2 次"'));
+  await until(()=>render('document.getElementById("scene").dataset.weather === "heavy-rain" && document.getElementById("rain-detail").textContent === "人工 0 次 · 雨水 2 次"'));
+  assert.equal(await render('document.getElementById("care-progress").textContent'),'2 / 2 次');
+  assert.equal(await render('document.getElementById("care-detail").textContent'),'今日已达标');
   if(process.env.SILICON_FARM_SMOKE_NARROW_IMAGE) {
     await render('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
     const image=await win.webContents.capturePage();
     fs.writeFileSync(process.env.SILICON_FARM_SMOKE_NARROW_IMAGE,image.toPNG());
   }
+  clockOffset=24*60*60_000;
+  await farm.weather('main','light-rain');
   const fertilizer={id:'electron-fertilizer',type:'farm.tend',payload:{parameters:{operation:'fertilize'}}};
   const fertilizing=farm.execute('main',fertilizer,gate.signal);
   await until(()=>render('document.getElementById("farmer").dataset.pose === "fertilize"'));
@@ -135,10 +140,11 @@ app.whenReady().then(async()=>{
   const fertilized=checkFarmReceipt(state,fertilizer,await fertilizing,farmNow());
   assert.equal(fertilized.status,'completed');
   projectOutcome(state,fertilizer,fertilized,new Date(farmNow()).toISOString(),'action-result:electron-fertilizer');
-  await until(()=>render('document.getElementById("care-progress").textContent === "1 / 2 次"'));
-  assert.equal(farmFacts(state,farmNow()).watered,2);
+  await until(()=>render('document.getElementById("care-progress").textContent === "2 / 2 次"'));
+  assert.equal(farmFacts(state,farmNow()).careCompleted,1);
+  assert.equal(farmFacts(state,farmNow()).careProgress,2);
 
-  clockOffset=4*60*60_000;
+  clockOffset=48*60*60_000;
   await farm.weather('main','light-rain');
   const interrupted={id:'electron-fertilizer-interrupt',type:'farm.tend',payload:{parameters:{operation:'fertilize'}}};
   const interrupting=farm.execute('main',interrupted,gate.signal);

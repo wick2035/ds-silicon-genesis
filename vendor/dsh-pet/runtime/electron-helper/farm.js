@@ -65,18 +65,19 @@ function showFeedback(text='') {
 
 function renderCare(field) {
   const growing = field.stage==='seedling'||field.stage==='heading';
-  get('care-progress').textContent=growing?`${field.careCompleted} / ${field.careTarget} 次`:'—';
-  let detail='每日零点结算';
-  if (field.weatherBlocked) detail='天气恶劣 · 暂停进田';
-  else if (growing && field.careCompleted>=field.careTarget) detail='今日已达标';
+  get('care-progress').textContent=growing?`${field.careProgress} / ${field.careTarget} 次`:'—';
+  let detail='等待播种';
+  if (growing && field.careProgress>=field.careTarget) detail='今日已达标';
+  else if (field.weatherBlocked) detail='天气恶劣 · 暂停进田';
+  else if (field.stage==='ripe') detail='三个达标日已完成';
   else if (growing && careLabels[field.operation]) detail=`现在可以${careLabels[field.operation]}`;
   else if (growing && field.nextCareAt>Date.now()) {
     const tomorrow=field.nextCareAt>=Date.parse(`${field.date}T00:00:00+08:00`)+86400000;
     detail=`${tomorrow?'明天 ':''}${clock.format(field.nextCareAt)} 后可继续`;
   } else if (growing) detail='等待田况同步';
   if (careDetail.textContent!==detail) careDetail.textContent=detail;
-  rainDetail.hidden=!growing||!field.rain;
-  if (!rainDetail.hidden) rainDetail.textContent=`雨水补给 ${field.rain} 次`;
+  rainDetail.hidden=!growing;
+  if (!rainDetail.hidden) rainDetail.textContent=`人工 ${field.careCompleted} 次 · 雨水 ${field.rain} 次`;
 }
 
 function render(state) {
