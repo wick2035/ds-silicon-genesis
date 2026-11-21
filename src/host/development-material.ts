@@ -28,9 +28,33 @@ export function developmentMaterial(state:CanonicalEnvelope,date:string,used=new
   // Keep the triggering words alongside a recorded feeling, even in a busy day.
   for(const e of [...selected.values()])if(e.type==='self.thought')for(const id of (e.payload as any)?.sourceIds??[]){const source=byId.get(id);if(source&&valid(source)&&developmentDay(source.occurredAt)===date&&selected.size<72)selected.set(id,source);}
   const ordered=[...selected.values()].sort((a,b)=>Date.parse(a.occurredAt)-Date.parse(b.occurredAt));
-  for(const limit of [900,500,250,120]){
-    const material=ordered.map(e=>({id:e.eventId,type:e.type,at:e.occurredAt,...speechIdentity(e),...((e.payload as any)?.groupBatch===true||e.type==='self.thought'?{speakers:speechSources([e.eventId],state.life).map(s=>({...s,text:s.text.slice(0,limit)}))}:{}),subjective:['self.thought','conversation.assistant'].includes(e.type),text:promptData(e.payload,e.type==='self.thought'?Math.max(500,limit):limit)}));
+  // Attribution has a cost too: shrinking only the payload left repeated group
+  // sources larger than the entire budget. Resolve each source graph once.
+  const speakers=new Map(ordered.filter(e=>(e.payload as any)?.groupBatch===true||e.type==='self.thought')
+    .map(e=>[e.eventId,speechSources([e.eventId],state.life).filter(s=>developmentDay(s.at)===date)]));
+  const project=(limit:number,speakerLimit:number)=>ordered.map(e=>({
+    id:e.eventId,type:e.type,at:e.occurredAt,...speechIdentity(e),
+    ...(speakers.has(e.eventId)?{speakers:speakers.get(e.eventId)!.slice(0,speakerLimit).map(s=>({...s,text:s.text.slice(0,limit)}))}:{}),
+    subjective:['self.thought','conversation.assistant'].includes(e.type),
+    text:promptData(e.payload,e.type==='self.thought'?Math.max(500,limit):limit),
+  }));
+  for(const [limit,speakerLimit] of [[900,16],[500,8],[250,4],[120,3]]){
+    const material=project(limit,speakerLimit);
     if(JSON.stringify(material).length<=24000)return material;
   }
-  throw Error('当天整理材料过长，请减少记录后重试');
+  // Fit complete entries, never truncate serialized JSON or event IDs. Alternate
+  // feelings, conversations and experiences so a busy group cannot crowd out a day.
+  const compact=project(120,2),buckets=[
+    compact.filter(e=>e.type==='self.thought'),
+    compact.filter(e=>/^conversation\.|^social\.message$/.test(e.type)),
+    compact.filter(e=>e.type!=='self.thought'&&!/^conversation\.|^social\.message$/.test(e.type)),
+  ];
+  const result:typeof compact=[];
+  let size=2;
+  for(let i=0;buckets.some(bucket=>i<bucket.length);i++)for(const bucket of buckets){
+    const entry=bucket[i];if(!entry)continue;
+    const cost=JSON.stringify(entry).length+(result.length?1:0);
+    if(size+cost<=24000){result.push(entry);size+=cost;}
+  }
+  return result.sort((a,b)=>Date.parse(a.at)-Date.parse(b.at));
 }

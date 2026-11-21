@@ -4,6 +4,20 @@ import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 import {developmentMaterial,developmentDay} from '../dist/host/development-material.js';
 
+test('大量群聊与念头的身份资料也计入预算，材料再多仍可生成且不改原档',()=>{
+  const date='2026-11-20',events=[];
+  for(let i=0;i<400;i++)events.push({eventId:'group-message:'+String(i).padStart(64,'a'),type:'social.message',source:'qq-group',actorId:i%3?'qq-member:'+String(i).padStart(32,'b'):'dad',occurredAt:date+'T'+String(Math.floor(i/20)%16).padStart(2,'0')+':00:00Z',evidenceLevel:'observed',payload:{text:'我今天想聊聊白饭与开心的事。'.repeat(80),groupId:'group'}});
+  for(let i=0;i<48;i++){
+    const sources=events.slice(i,i+16).map(e=>e.eventId),at=date+'T'+String(i%16).padStart(2,'0')+':10:00Z';
+    events.push({eventId:'batch:'+i,type:'conversation.user',source:'qq-group',occurredAt:at,evidenceLevel:'observed',payload:{groupBatch:true,sourceIds:sources,text:'群聊'.repeat(600)}});
+    events.push({eventId:'thought:'+i,type:'self.thought',source:'model',occurredAt:at,evidenceLevel:'inferred',payload:{text:'我有点委屈，也很想吃饭。'.repeat(60),sourceIds:['batch:'+i]}});
+  }
+  const state={life:{events,invalidSources:{}}},before=structuredClone(state),material=developmentMaterial(state,date);
+  assert.ok(material.length>0);assert.ok(JSON.stringify(material).length<=24000);assert.ok(material.some(e=>e.type==='self.thought'));assert.ok(material.some(e=>e.type==='social.message'||e.type==='conversation.user'));
+  for(const entry of material){assert.ok(events.some(e=>e.eventId===entry.id));for(const speaker of entry.speakers??[])assert.equal(speaker.actorId,events.find(e=>e.eventId===speaker.id).actorId);}
+  assert.deepEqual(state,before);assert.deepEqual(developmentMaterial(state,date),material);
+});
+
 test('日记只读取香港当天记录，念头及其原话不会被账本采样挤掉',()=>{
   const event=(id,type,at,payload={})=>({eventId:id,type,occurredAt:at,payload,evidenceLevel:type==='self.thought'?'inferred':'observed'});
   const events=[event('yesterday','conversation.user','2026-11-14T15:59:59Z'),event('dad','conversation.user','2026-11-14T16:00:00Z',{text:'哼'}),event('thought','self.thought','2026-11-14T16:01:00Z',{text:'摸不准爸爸是不是不高兴',feeling:'心虚又馋',sourceIds:['dad']})];

@@ -74,6 +74,7 @@ import {prepareFreshQQ,prepareQQTakeover,verifyQQCutoverProof} from './qq-takeov
 import {verifyOldQQAbsent} from './qq-process-inventory.js';
 import type {CanonicalQQGateway} from './qq-gateway.js';
 import {createDevelopment} from './development.js';
+import {prepareStartupRepairs} from './startup-repairs.js';
 import {createAttachmentStore} from './attachment-store.js';
 import {DesktopIdle} from './desktop-idle.js';
 import {createImageObserver} from './image-observer.js';
@@ -259,6 +260,8 @@ export async function main():Promise<void> {
     const api=async(request:Request)=>{const url=new URL(request.url);if(url.pathname==='/dsh-pet-7340/attachment'){const raw=url.searchParams.get('id')||'',id=raw.startsWith('sha256:')?'image:'+raw.slice(7):raw;try{const image=await attachments.resolve({petId,id},request.signal);return new Response(image.data as BodyInit,{headers:{'content-type':image.mediaType,'cache-control':'no-store','x-content-type-options':'nosniff'}});}catch{return new Response('附件不存在',{status:404});}}return await chatApi(request) ?? await lifeApi(request);};
     const coordinator=new CognitiveResultCoordinator(store,unitOfWork,lease,projectBody,actions,dispatcher);
     const development=createDevelopment(store,lease,unitOfWork,budget,model);
+    const startupRepairs=await prepareStartupRepairs(root,petId,store,lease,unitOfWork,lease,id=>dispatcher.reconcile(id));
+    await development.recoverInterrupted(petId);
     const responses=createLegacyResponses(store,lease,unitOfWork,budget,model,persona,grounding,rememberMeme);
     semanticResponse=async(id,requestId,detail)=>{const d=detail as any;const descriptions:Record<string,string>={'drag-start':'爸爸开始拖动我','drag-end':'爸爸松开了我','flight-start':'我开始飞行，尚不知道是否发生碰撞','flight-end':'飞行结束','prop-take':'爸爸拿起我的饭碗','prop-release':'爸爸放下我的饭碗','menu-anim':'爸爸选择了一个动画','go-home':'爸爸选择回家','open-chat':'爸爸打开聊天','open-care':'爸爸打开照料面板','open-todo':'爸爸打开待办','show-balance':'爸爸查看余额'};const description=descriptions[d?.action];if(!description)throw Error('互动类型无效');const event:any=await domain.record(id,requestId,'interaction',description,requestId,{},observerAuthority);if(!event?.id)throw Error('互动来源未保存');const result=await runReaction(signal=>responses(id,'physical',signal,{eventId:`legacy:event:${encodeURIComponent(event.id)}`,description}),'physical',lease.signal);if(!result)throw Error('互动已取消');return {ok:true,reaction:{text:result.text}};};
     let waitCareResponse:((eventId:string)=>Promise<string|undefined>)|undefined;
@@ -413,6 +416,7 @@ export async function main():Promise<void> {
     requestShutdown=()=>{void close();};
     app.setShutdown(()=>{void close();});
     process.once('SIGINT',()=>{void close();});process.once('SIGTERM',()=>{void close();});
+    void startupRepairs.finishDiaries(date=>development.task(petId,'diary',lease.signal,true,date)).catch(error=>console.error('授权日记补写失败：',error.message));
     console.log('生命空间已准备好。');
     console.log('生命空间链接（关闭网页后可用此链接重新打开）：'+app.lifeUrl);
     if(process.platform==='win32'&&process.env.SILICON_NO_OPEN_BROWSER!=='1') {

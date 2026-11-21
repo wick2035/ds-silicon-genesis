@@ -50,5 +50,19 @@ export function createDevelopment(store:Reader,gate:PetGate,uow:UnitOfWork,budge
           record.status='completed';record.finishedAt=Date.now();record.sourceIds=sources;return {};});});return true;
     }catch(error){await gate.run(id,async()=>{const state=await store.loadEnvelope(id);if(!state||gate.signal.aborted)return;await uow.apply(id,state.version,draft=>{const record=(draft.legacy as any).developmentClaims?.[claim.key];if(record?.status==='running')record.status='failed';return {};});}).catch(()=>{});throw error;}
   }
-  return {task,async run(id:string,signal:AbortSignal){const hour=Number(new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Hong_Kong',hour:'2-digit',hourCycle:'h23'}).format(new Date()));if(hour<20)return;await task(id,'diary',signal).catch(()=>false);if(!signal.aborted)await task(id,'reflection',signal).catch(()=>false);}};
+  return {task,
+    /** Startup only, under the exclusive writer lease: the old caller is gone. */
+    async recoverInterrupted(id:string){
+      return gate.run(id,async()=>{
+        const state=await store.loadEnvelope(id);
+        if(!state||!Object.values((state.legacy as any).developmentClaims??{}).some((claim:any)=>claim.status==='running'))return;
+        await uow.apply(id,state.version,draft=>{
+          for(const claim of Object.values((draft.legacy as any).developmentClaims??{}) as any[])if(claim.status==='running'){
+            claim.status='failed';claim.finishedAt=Date.now();claim.reason='进程重启，上次整理未确认完成，可手动重试';
+          }
+          return {};
+        });
+      });
+    },
+    async run(id:string,signal:AbortSignal){const hour=Number(new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Hong_Kong',hour:'2-digit',hourCycle:'h23'}).format(new Date()));if(hour<20)return;await task(id,'diary',signal).catch(()=>false);if(!signal.aborted)await task(id,'reflection',signal).catch(()=>false);}};
 }

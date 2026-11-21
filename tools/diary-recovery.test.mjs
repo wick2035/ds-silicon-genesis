@@ -17,6 +17,14 @@ test('失败的日记可手动重试，成功后只结算一次',async()=>{
   assert.equal(await dev.task('main','diary',gate.signal,true,date),false);assert.equal(attempts,2);
 });
 
+test('独占宿主启动恢复中断的整理领取，仍须手动重试且不扣费',async()=>{
+  let state={petId:'main',version:0,legacy:{wallet:{balance:100},developmentClaims:{'diary:2026-11-20':{status:'running'},'reflection:2026-11-19':{status:'completed'}}},life:{}};
+  const gate={signal:new AbortController().signal,run:async(_id,fn)=>fn()},store={loadEnvelope:async()=>structuredClone(state)},uow={apply:async(_id,version,edit)=>{assert.equal(version,state.version);const draft=structuredClone(state);edit(draft);draft.version++;state=draft;}};
+  const dev=createDevelopment(store,gate,uow,{},{});await dev.recoverInterrupted('main');
+  assert.equal(state.legacy.developmentClaims['diary:2026-11-20'].status,'failed');assert.equal(state.legacy.developmentClaims['reflection:2026-11-19'].status,'completed');assert.equal(state.legacy.wallet.balance,100);
+  await dev.recoverInterrupted('main');assert.equal(state.version,1);
+});
+
 test('百炼 DeepSeek 低延迟模式同时关闭隐式思考',async()=>{
   const original=globalThis.fetch;let body;
   try{
