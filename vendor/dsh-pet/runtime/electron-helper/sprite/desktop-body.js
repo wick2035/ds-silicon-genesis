@@ -78,7 +78,8 @@
     if(gentleCare){this.bodyProtected=false;this.painStage?.classList.remove('is-crying');this.paintSoft?.();}
     this.stopMove();
     if(step.action==='beg')this.showRiceProp?.('bowl');
-    const from={...this.pos};let cancelled=false,played=false,videoEnded=false,video,frame,timer,inputTimer,inputCheck=false,inputActive=true;
+    const from={...this.pos};let cancelled=false,played=false,videoEnded=false,terminal,video,frame,timer,inputTimer,inputCheck=false,inputActive=true;
+    const deliver=async(status,extra={})=>{terminal={status,extra};for(let attempt=0;attempt<3;attempt++){try{await post(status,extra);return;}catch(error){if(attempt===2){console.warn('[进食回执]',error.message);return;}await new Promise(resolve=>setTimeout(resolve,250*(attempt+1)));}}};
     try{
       const done=new Promise((resolve,reject)=>{
         this.cancelBody=()=>{cancelled=true;this.stopMove();reject(Error('爸爸的互动或新动作打断了这次尝试'));};
@@ -95,7 +96,7 @@
           if(this.ac.signal.aborted||this.sleeping||this.bodyProtected||this.dragState.active||this.frozen){this.cancelBody();return;}
           const front=this.front===0?this.videoA:this.videoB;
           if(this.anim===asset && !this.pending && front.readyState>=2 && !front.paused){
-            if(!played){played=true;video=front;front.playbackRate=Math.max(.55,Math.min(1.12,c.affect?.pace||1));void post('playing');
+            if(!played){played=true;video=front;front.playbackRate=Math.max(.55,Math.min(1.12,c.affect?.pace||1));void post('playing').catch(()=>{});
               if(['walk','run','approach'].includes(step.action)){
                 const screen=S.screenOfBox(this.throwSpaceOf(),this.pos.x,this.pos.y),area=AREAS[screen]||AREAS[0];
                 let x=step.target==='left'?area.x+area.width*.22:step.target==='right'||step.target==='edge'?area.x+area.width*.78:area.x+area.width*.5;
@@ -112,8 +113,8 @@
         };frame=requestAnimationFrame(watch);
       });
       await done;
-      await post('completed',{played,distance:Math.hypot(this.pos.x-from.x,this.pos.y-from.y)});
-    }catch(e){await post(cancelled?'interrupted':'failed',{reason:e.message});}
+      await deliver('completed',{played,distance:Math.hypot(this.pos.x-from.x,this.pos.y-from.y)});
+    }catch(e){if(!terminal)await deliver(cancelled?'interrupted':'failed',{reason:e.message});}
     finally{inputActive=false;clearTimeout(timer);clearInterval(inputTimer);cancelAnimationFrame(frame);if(video)video.playbackRate=1;this.bodyExecuting=false;this.cancelBody=null;this.careVisual=false;if(gentleCare&&this.humanity)this.syncPainState(this.humanity);this.paintSoft?.();if(!this.ac.signal.aborted&&!this.bodyProtected&&!this.sleeping)this.playIdle();}
   };
   proto.dispose=function(...args){this.cancelBody?.();return old.dispose.apply(this,args);};

@@ -11,6 +11,7 @@ export function riceAvailability(state:CanonicalEnvelope) {
     purchase:{allowed:reason===null,reason},
     uncertaintyScope:'unconfirmed 只限制对应旧碗，不能重复吃该碗；不阻止购买和吃另一碗 available 的饭。购买仍须检查饭钱、库存容量和购买回执。'};
 }
+export const activeRiceBowl=(item:{status:string})=>!['eaten','discarded'].includes(item.status);
 export type RiceBowl = {id:string; name:string; status:string; eatenAt?:number};
 
 export function cookerBowlStorage(state:CanonicalEnvelope):RiceBowl[] {
@@ -36,8 +37,8 @@ export function riceHold(state:CanonicalEnvelope,itemId:string) {
 export function riceInventory(state:CanonicalEnvelope) {
   const project=(item:RiceBowl,source:'cooker'|'fridge')=>({id:item.id,name:item.name,source,status:riceHold(state,item.id)?'unconfirmed':item.status});
   return [
-    ...cookerBowlStorage(state).filter(item=>item.status!=='eaten').map(item=>project(item,'cooker')),
-    ...fridgeBowls(state).filter(item=>item.status!=='eaten').slice(0,12).map(item=>project(item,'fridge')),
+    ...cookerBowlStorage(state).filter(activeRiceBowl).map(item=>project(item,'cooker')),
+    ...fridgeBowls(state).filter(activeRiceBowl).slice(0,12).map(item=>project(item,'fridge')),
   ];
 }
 export function availableRice(state:CanonicalEnvelope){return riceInventory(state).filter(item=>item.status==='available');}

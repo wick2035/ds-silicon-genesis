@@ -5,6 +5,11 @@ const costLabels={feed:'大白饭',riceSeed:'水稻种子（每束）',chat:'聊
 const stateLabels={offered:'旧任务待处理',queued:'待开始',working:'工作中',paused:'已暂停',unpaid:'等待结薪',paid:'已结清',declined:'未接下',cancelled:'已取消'};
 let current=null,pending=null,busy=false;
 
+function foodSection(food=[]){
+  const labels={available:'可食用',eating:'正在吃',unconfirmed:'结果待核对'};
+  return `<section class="card full food-stock" aria-labelledby="food-stock-title"><h2 id="food-stock-title">冰箱与熟饭</h2><p class="finance-note">吃完才结算；旧碗作废不再扣钱，也不补加饱腹。</p>${food.length?`<ul class="food-stock-list">${food.map((item,index)=>`<li><div><strong>${esc(item.name||'大白饭')}</strong><span>${item.source==='cooker'?'电饭锅':'冰箱'} · ${esc(labels[item.status]||item.status)}</span>${item.status==='unconfirmed'?'<small>这次进食缺少确认回执，可以核对或作废。</small>':''}</div>${item.status==='unconfirmed'?`<div class="food-stock-actions"><button type="button" class="secondary" data-rice-action="reconcile" data-food-index="${index}">核对结果</button><button type="button" class="secondary" data-rice-action="discard" data-food-index="${index}">作废这碗</button></div>`:''}</li>`).join('')}</ul>`:'<p class="finance-note">暂时没有现成饭。</p>'}<p class="food-feedback finance-feedback" role="status" aria-live="polite"></p></section>`;
+}
+
 export function renderFinance(data){
   current=data;
   const w=data?.wallet,c=data?.labor?.current,history=data?.labor?.history||[],queue=data?.labor?.queue||[],events=data?.events||[];
@@ -20,7 +25,7 @@ export function renderFinance(data){
   const queued=queue.length?`<div class="finance-list labor-queue">${queue.map((x,i)=>`<div><strong>等待 ${i+1} · ${esc(x.trips)} 趟 · ${fmt(x.wage)} token</strong><span>已完成 ${esc(x.done||0)} 趟</span><button type="button" class="secondary" data-finance-action="cancel" data-id="${esc(x.id)}">取消此任务</button></div>`).join('')}</div>`:'<p class="finance-note">暂无排队任务。</p>';
   return `<div class="grid finance-grid">
     <section class="card full finance-balance"><div><h2>模拟饭钱余额</h2><div class="balance-number">${fmt(w.balance)} <span>token</span></div><p class="finance-note">用于她的生活和互动，与模型服务商的真实余额无关。</p></div><div class="freeze-control"><strong>${w.frozen?'日常消耗已冻结':'日常消耗进行中'}</strong><p>冻结后日常消费不扣饭钱，抖落的钱仍会扣除。</p><button type="button" class="secondary" data-finance-action="freeze">${w.frozen?'恢复日常消耗':'冻结日常消耗'}</button></div></section>
-    <section class="card two-thirds"><h2>调整余额</h2><p class="finance-note">增加、减少或直接设置余额；最多保留两位小数。</p><form id="wallet-form" class="finance-form"><label>操作<select name="action"><option value="add">增加</option><option value="subtract">减少</option><option value="set">设为</option></select></label><label>金额<span class="price-input"><input name="amount" type="number" min="0" max="1000000000" step="0.01" required placeholder="输入金额"><span>token</span></span></label><button class="primary">更新余额</button></form><p class="finance-feedback" role="status"></p></section>
+    ${foodSection(data.food)}<section class="card two-thirds"><h2>调整余额</h2><p class="finance-note">增加、减少或直接设置余额；最多保留两位小数。</p><form id="wallet-form" class="finance-form"><label>操作<select name="action"><option value="add">增加</option><option value="subtract">减少</option><option value="set">设为</option></select></label><label>金额<span class="price-input"><input name="amount" type="number" min="0" max="1000000000" step="0.01" required placeholder="输入金额"><span>token</span></span></label><button class="primary">更新余额</button></form><p class="finance-feedback" role="status"></p></section>
     <section class="card third"><h2>搬砖任务</h2>${contract}<form id="labor-offer-form" class="offer-form"><h3>新增任务</h3><div class="offer-fields"><label>趟数<input name="trips" type="number" min="1" max="500" step="1" value="1" required></label><label>总工钱<input name="wage" type="number" min="1" max="1000000" step="1" value="100" required></label></div><button class="primary">新增任务</button></form><h3>排队任务</h3>${queued}<p class="finance-feedback" role="status"></p></section>
     <section class="card two-thirds"><h2>日常消费价格</h2><p class="finance-note">模拟饭钱价格，可设为 0。</p><form id="cost-form"><div class="cost-fields">${Object.entries(costLabels).map(([k,v])=>field(k,v)).join('')}</div><button class="primary">保存价格</button></form><p class="finance-feedback" role="status"></p>${seedShop}</section>
     <section class="card third"><h2>工作历史</h2><p class="finance-note">工钱可以稍后逐笔支付；取消保留实际进度，不自动付款。</p>${history.length?`<div class="finance-list">${history.map(x=>`<div><strong>${esc(x.done||0)} / ${esc(x.trips)} 趟 · 已付 ${fmt(x.paid)} token</strong><span>${esc(stateLabels[x.status]||x.status)} · 约定 ${fmt(x.wage)}</span>${['cancelled','unpaid'].includes(x.status)?`<form data-history-payment="true" data-id="${esc(x.id)}" class="finance-form"><label>本次给多少<input name="amount" type="number" min="0" max="1000000" step="1" value="0" required></label><button class="secondary">记录付款</button></form>`:''}</div>`).join('')}</div>`:'<p class="finance-note">还没有完成或取消的约定。</p>'}<p class="finance-feedback" role="status"></p></section>
@@ -34,7 +39,7 @@ export function installFinance(view,reload,isActive){
     const signature=JSON.stringify(input);if(!pending||pending.signature!==signature)pending={signature,id:crypto.randomUUID()};
     const controls=view.querySelectorAll('button,input,select');controls.forEach(el=>el.disabled=true);
     feedback.textContent='正在保存…';
-    try{await window.lifeApi.updateFinance({...input,requestId:pending.id});pending=null;if(isActive()){await reload();const target=view.querySelector(input.kind==='farm-seeds'?'.seed-feedback':input.kind==='costs'?'#cost-form + .finance-feedback':'.finance-feedback');if(target)target.textContent=input.kind==='farm-seeds'?`已买入 ${input.count} 束。`:'已保存。';}}
+    try{const result=await window.lifeApi.updateFinance({...input,requestId:pending.id});pending=null;if(isActive()){await reload();const target=view.querySelector(input.kind==='rice-resolution'?'.food-feedback':input.kind==='farm-seeds'?'.seed-feedback':input.kind==='costs'?'#cost-form + .finance-feedback':'.finance-feedback');if(target)target.textContent=input.kind==='rice-resolution'?result?.message||'核对已完成。':input.kind==='farm-seeds'?`已买入 ${input.count} 束。`:'已保存。';}}
     catch(error){feedback.textContent=(error?.message||'保存失败')+'；可检查后重试。';}
     finally{busy=false;controls.forEach(el=>el.disabled=false);}
   }
@@ -54,6 +59,8 @@ export function installFinance(view,reload,isActive){
     void send(input,feedback);
   });
   view.addEventListener('click',event=>{
+    const riceButton=event.target.closest('[data-rice-action]');
+    if(riceButton&&current&&!busy){const item=current.food?.[Number(riceButton.dataset.foodIndex)];if(item?.status==='unconfirmed')void send({kind:'rice-resolution',action:riceButton.dataset.riceAction,actionId:item.actionId,itemId:item.id},riceButton.closest('.food-stock').querySelector('.food-feedback'));return;}
     const button=event.target.closest('[data-finance-action]');if(!button||!current||busy)return;
     const action=button.dataset.financeAction,input=action==='freeze'?{kind:'wallet',action,frozen:!current.wallet.frozen,expectedBalance:current.wallet.balance,expectedFrozen:current.wallet.frozen}:{kind:'labor',action,id:button.dataset.id};
     const feedback=button.closest('.card').querySelector('.finance-feedback')||view.querySelector('.finance-feedback');void send(input,feedback);

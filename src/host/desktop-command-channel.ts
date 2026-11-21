@@ -1,5 +1,6 @@
 import {EventEmitter} from 'node:events';
 import type {CanonicalEnvelope} from '../storage/postgres.js';
+import {findRiceBowl} from './rice-inventory.js';
 import {TrustedDesktopBridge} from './domain-executors.js';
 import type {DesktopActionKind} from './domain-executors.js';
 
@@ -11,7 +12,7 @@ const sceneX=(x:unknown):x is number=>typeof x==='number'&&Number.isFinite(x)&&x
 
 /** Matches completed animation observations from the helper main process to the
  * one dispatched action. It never makes a client-provided receipt authoritative. */
-export function createDesktopCommandChannel(store:Reader,sourceCapability:object) {
+export function createDesktopCommandChannel(store:Reader,sourceCapability:object,recoverMeal?:(value:any)=>Promise<boolean>) {
   const pending=new Map<string,Pending>();
   const worksiteEvents=new EventEmitter(), revisions=new Map<string,number>();
   const revision=(id:string)=>revisions.get(id)??0;
@@ -30,7 +31,8 @@ export function createDesktopCommandChannel(store:Reader,sourceCapability:object
     if(signal.aborted || pending.has(command.petId))throw Error('桌宠正在执行其他行动');
     const labor=command.kind==='labor.step';
     const world=labor?await loadWorksiteCommand(command.petId):undefined;
-    const legacy=labor?undefined:(await store.loadEnvelope(command.petId))?.legacy as Record<string,any>|undefined;
+    const envelope=labor?undefined:await store.loadEnvelope(command.petId);
+    const legacy=envelope?.legacy as Record<string,any>|undefined;
     if(signal.aborted || pending.has(command.petId))throw Error('桌宠正在执行其他行动');
     if(!labor&&!legacy)throw Error('桌宠状态不可用');
     if(labor) {
@@ -40,8 +42,8 @@ export function createDesktopCommandChannel(store:Reader,sourceCapability:object
       const coin=legacy?.tokens?.coins?.find((c:any)=>c.id===command.parameters.coinId && c.status==='floor' && c.surface==='desktop');
       if(!coin || !Number.isFinite(coin.x) || !Number.isFinite(coin.y))throw Error('桌面碎片不可用');
     } else if(command.kind==='service.eat-rice') {
-      const id=command.parameters.itemId, items=legacy?.services?.inventory;
-      if(typeof id!=='string' || !Array.isArray(items) || !items.some((item:any)=>item.id===id && ['available','reserved'].includes(item.status)))throw Error('食物不在可食用库存中');
+      const id=command.parameters.itemId,bowl=envelope&&findRiceBowl(envelope,id);
+      if(typeof id!=='string' || !bowl || !['available','reserved'].includes(bowl.status))throw Error('食物不在可食用库存中');
     }
     const timer=setTimeout(()=>pending.delete(command.petId),70000);
     const coin=command.kind==='token.pickup'?legacy?.tokens.coins.find((c:any)=>c.id===command.parameters.coinId):undefined;
@@ -78,6 +80,7 @@ export function createDesktopCommandChannel(store:Reader,sourceCapability:object
     },
     async receipt(value:any) {
       const item=pending.get(value?.petId), c=item?.command;
+      if((!c||c.actionId!==value.actionId)&&recoverMeal&&await recoverMeal(value))return {ok:true};
       if(c?.kind==='body.activity') {
         if(value.id!==c.actionId || value.actionId!==c.actionId || value.index!==0 || value.surface!=='desktop' || !['playing','completed','interrupted'].includes(value.status))throw Error('走动回执不匹配');
         if(value.status==='playing'){item!.startedAt ??= Date.now();return {ok:true};}

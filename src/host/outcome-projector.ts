@@ -93,7 +93,7 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
   if (intent.type === 'service.buy-rice') {
     const services = pet.services; const wallet = pet.wallet; const price = pet.config?.costs?.feed;
     assert(services && Array.isArray(services.inventory) && wallet && finite(wallet.balance) && finite(price) && price >= 0, '饭钱或库存状态无效');
-    assert(services.inventory.filter((item: Obj) => item.status !== 'eaten').length < 12, '库存已满');
+    assert(services.inventory.filter((item: Obj) => !['eaten','discarded'].includes(item.status)).length < 12, '库存已满');
     const charge = wallet.frozen === true ? 0 : price;
     assert(wallet.balance >= charge, '饭钱不足');
     const id = `rice:${intent.id}`;
@@ -116,11 +116,11 @@ export function projectOutcome(draft: CanonicalEnvelope, intent: OutboxIntent, r
     const item = findRiceBowl(draft,itemId);
     assert(item && ['available','reserved'].includes(item.status), '食物不在可食用库存中');
     assert(human && human.stats && human.emotions, '身体状态无效');
-    const result = actHumanity(human, 'feed', at);
-    assert(result.ok, '身体状态变化，不能结算这次进食');
-    const next = result.state; next.serviceActions = {...human.serviceActions,[intent.id]:{ok:true,at,action:'feed'}};
+    // Recovered old completions close stock without adding an old meal to today's body.
+    const result = e.recovered===true?null:actHumanity(human, 'feed', at);
+    const next = result?.ok ? result.state : human; next.serviceActions = {...human.serviceActions,[intent.id]:{ok:true,at,action:'feed'}};
     draft.humanity = next; item.status = 'eaten'; item.eatenAt = at; pet.lastInteraction = at;
-    draft.life.events.push({eventId:'meal:'+intent.id,petId:draft.petId,type:'body.meal',source:'executor',occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'observed',payload:{action:'feed'}});
+    draft.life.events.push({eventId:'meal:'+intent.id,petId:draft.petId,type:'body.meal',source:'executor',occurredAt,receivedAt:occurredAt,causationId:sourceEventId,evidenceLevel:'observed',payload:{action:'feed',...(e.recovered===true||!result?.ok?{bodyEffectSkipped:true}:{})}});
     if (services?.eating?.itemId === itemId) services.eating = null;
     const cooked=cookerBowlStorage(draft), index=cooked.indexOf(item);
     if(index>=0)cooked.splice(index,1);

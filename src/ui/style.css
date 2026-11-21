@@ -163,3 +163,5 @@ dialog{border:0;border-radius:20px;padding:28px;width:min(520px,calc(100vw - 40p
 .goal-step-label span { color: #647f91; font-size: .8125rem; }
 .growth-evidence { margin-bottom: 18px; }
 .growth-evidence .row p { margin-block: .25rem; }
+
+.food-stock-list{list-style:none;padding:0;margin:20px 0 0}.food-stock-list li{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:18px 0;border-top:1px solid #e4eef5}.food-stock-list li>div:first-child{display:grid;gap:5px;min-width:0}.food-stock-list span,.food-stock-list small{color:#516b7f;overflow-wrap:anywhere}.food-stock-actions{display:flex;flex-wrap:wrap;gap:10px;flex-shrink:0}.food-stock .food-feedback{min-height:1.5em}@media(max-width:600px){.food-stock-list li{align-items:flex-start;flex-direction:column;gap:14px}.food-stock-actions{width:100%}.food-stock-actions button{flex:1}}

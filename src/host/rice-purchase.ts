@@ -6,7 +6,7 @@ export function validateRicePurchase(state:CanonicalEnvelope):void {
  const pet=state.legacy as any,price=pet.config?.costs?.feed,wallet=pet.wallet,inventory=pet.services?.inventory;
  if(!Number.isFinite(price)||price<0||!Number.isFinite(wallet?.balance)||!Array.isArray(inventory))throw Error('饭钱或库存状态无效');
  if(wallet.frozen!==true&&wallet.balance<price)throw Error(`饭钱不足：还剩 ${wallet.balance}，一碗需要 ${price}`);
- if(inventory.filter((i:any)=>i.status!=='eaten').length>=12)throw Error('库存已满');
+ if(inventory.filter((i:any)=>!['eaten','discarded'].includes(i.status)).length>=12)throw Error('库存已满');
 }
 
 /** Buying rice and starting a batch have no external effect. Their canonical

@@ -66,6 +66,7 @@ import {createDeterministicLife} from './deterministic-life.js';
 import {autonomousWorkTypes,createAutonomousWorkExecutors} from './autonomous-work.js';
 import {createFoodRequests} from './food-request.js';
 import {localRiceReconciler} from './rice-purchase.js';
+import {mealJournal,mealReconciler,createMealManagement} from './meal-recovery.js';
 import {createHelperTokens} from './helper-tokens.js';
 import {isPresentationRoute} from './visual-routes.js';
 import {CanonicalQQ} from './qq-canonical.js';
@@ -139,7 +140,9 @@ export async function main():Promise<void> {
     const humanity=new CanonicalHumanityAdapter(store,unitOfWork,lease,authority,observerAuthority);
     const domain=new LegacyDomain(store,unitOfWork,lease,observerAuthority);
     const tokens=createHelperTokens(store,domain,observerAuthority);
-    const commandChannel=createDesktopCommandChannel(store,helperAuthority);
+    const receiptJournal=mealJournal(root);
+    let recoverMeal:(value:any)=>Promise<boolean>=async()=>false;
+    const commandChannel=createDesktopCommandChannel(store,helperAuthority,value=>recoverMeal(value));
     let worksiteWake:(id:string)=>void=()=>{};
     let wakeCognition:(id:string)=>void=()=>{};
     const worksite=createWorksite(store,lease,unitOfWork,id=>commandChannel.view(id),id=>commandChannel.cancelPet(id),id=>worksiteWake(id));
@@ -167,10 +170,20 @@ export async function main():Promise<void> {
     executors.set('learning.observe',createExplorationExecutor(createPublicWeb(),bili));
     const reconcileRice=localRiceReconciler(store);
     const localRiceActions=['service.buy-rice','service.cook-rice'];
-    const dispatcher=new OutboxDispatcher(lease,executors,lease,new CanonicalActionLifecycle(projectBody),new Map(localRiceActions.map(kind=>[kind,reconcileRice])));
+    const reconcileMeal=mealReconciler(store,receiptJournal);
+    const dispatcher=new OutboxDispatcher(lease,executors,lease,new CanonicalActionLifecycle(projectBody),new Map([...localRiceActions.map(kind=>[kind,reconcileRice] as const),['service.eat-rice',reconcileMeal]]));
+    recoverMeal=async value=>{
+      const entry=typeof value?.petId==='string'&&typeof value?.actionId==='string'?receiptJournal.read(value.petId,value.actionId):null;
+      if(!entry||entry.receipt.itemId!==value.itemId||entry.receipt.status!==value.status)return false;
+      const state=await store.loadEnvelope(value.petId),action=state?.life.actions.find(a=>a.id===value.actionId);
+      if(action?.actionType!=='service.eat-rice'||action.parameters.itemId!==value.itemId)return false;
+      if(action.status==='UNKNOWN')await dispatcher.reconcile(action.id);
+      return ['COMPLETED','FAILED','CANCELLED','UNKNOWN'].includes(action.status);
+    };
+    dispatcher.onCommit(state=>{for(const action of state.life.actions)if(action.actionType==='service.eat-rice'&&action.status==='UNKNOWN'&&receiptJournal.read(state.petId,action.id))lease.detach(()=>{void dispatcher.reconcile(action.id).catch(()=>{});});});
     await dispatcher.recoverInterrupted();
     const recovered=await store.loadEnvelope(petId);
-    for(const action of recovered?.life.actions??[])if(localRiceActions.includes(action.actionType)&&action.status==='UNKNOWN')await dispatcher.reconcile(action.id);
+    for(const action of recovered?.life.actions??[])if([...localRiceActions,'service.eat-rice'].includes(action.actionType)&&action.status==='UNKNOWN')await dispatcher.reconcile(action.id);
     const kernel=new LifeKernel(store,authority), budget=new DurableCognitiveBudget(store,unitOfWork,lease);
     const attachments=createAttachmentStore(store,lease,unitOfWork);
     model=createModelFacade(modelConfig,{leaseSignal:lease.signal,budget,resolveImage:attachments.resolve,persist:async value=>{const file=join(root,'data','model-config.json'),temporary=file+'.tmp';await writeFile(temporary,JSON.stringify(value,null,2),{mode:0o600});await rename(temporary,file);}});
@@ -230,7 +243,7 @@ export async function main():Promise<void> {
       const diaryDates=Object.fromEntries(Object.entries(diaries).filter(([,entry])=>entry&&!entry.deleted)
         .map(([day,entry])=>[entry.canonicalMemoryId||'legacy:diary:'+day,day]));
       return {...state,diaryDates};
-    },getLifeSettings:id=>store.loadLifeSettings(id),shutdown:()=>requestShutdown(),openWorksite:id=>helper.requestWorksiteOpen(id),farm,attachments,finance:createFinanceManagement({loadEnvelope:loadCommitted},lease,domain),
+    },getLifeSettings:id=>store.loadLifeSettings(id),shutdown:()=>requestShutdown(),openWorksite:id=>helper.requestWorksiteOpen(id),farm,attachments,finance:createFinanceManagement({loadEnvelope:loadCommitted},lease,domain,createMealManagement(store,lease,unitOfWork,id=>dispatcher.reconcile(id))),
       companion:{read:(id,signal)=>companionManagement.read(id,signal),write:(id,input,signal)=>companionManagement.write(id,input,signal)},
       model:{read:async()=>model!.getSettings(),write:async(id,input)=>{
         if(input.operation==='save'){const {operation,...settings}=input;return model!.saveSettings(settings);}

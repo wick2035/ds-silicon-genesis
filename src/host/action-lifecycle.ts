@@ -7,7 +7,7 @@ import {hasForcedWork} from './forced-labor.js';
 import {hasActiveConversation} from './active-conversation.js';
 import {settleGroupOpener} from './qq-group-proactive-policy.js';
 import {validateRicePurchase} from './rice-purchase.js';
-import {validateRiceMeal} from './rice-inventory.js';
+import {findRiceBowl,validateRiceMeal} from './rice-inventory.js';
 import {forcedLaborState} from './forced-labor.js';
 import {sweetPrice} from './spirit-activity.js';
 import {selfActionState} from './self-action-state.js';
@@ -246,6 +246,13 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
     const eventId = `action-reconciled:${action.id}`;
     assert(!draft.life.events.some(e => e.eventId === eventId), '对账事件冲突');
     const receivedAt = this.now();
+    if(confirmed.details.resolution==='discarded'){
+      assert(intent.type==='service.eat-rice'&&confirmed.status==='CANCELLED'&&confirmed.source==='user-meal-discard','作废结清来源无效');
+      const services=(draft.legacy as any).services,authorization=services?.mealDiscards?.[action.id],item=findRiceBowl(draft,action.parameters.itemId);
+      assert(item&&['available','reserved'].includes(item.status)&&authorization?.itemId===item.id&&authorization.requestId===confirmed.details.requestId,'旧碗作废授权已变化');
+      item.status='discarded';Object.assign(item,{discardedAt:confirmed.occurredAt,discardedBy:confirmed.details.requestId});
+      if(services.eating?.itemId===item.id)services.eating=null;
+    }
     projectOutcome(draft, intent, {status:confirmed.status.toLowerCase() as ExecutionReceipt['status'],evidence:confirmed.details}, confirmed.occurredAt, eventId);
     updateQQ(draft, intent, confirmed.status, confirmed.details);
     settleExploration(draft, intent, confirmed.status);
@@ -256,7 +263,7 @@ export class CanonicalActionLifecycle implements ActionLifecycle {
       occurredAt:confirmed.occurredAt, receivedAt, causationId:confirmed.receiptId,
       payload:{actionId:action.id, actionType:action.actionType, status:confirmed.status, previousReceiptId:unknownId,...(feedback?{feedback}:{})},
       evidenceLevel:confirmed.evidenceLevel});
-    learnOutcome(draft,action,confirmed.status,eventId);
+    if(confirmed.details.resolution!=='discarded')learnOutcome(draft,action,confirmed.status,eventId);
     rebuildOutcomeDevelopment(draft.life as LifeState);
     if(confirmed.status==='COMPLETED')completeReceiptGoals({...draft.life,petId:draft.petId,version:draft.version} as LifeState,action.id,eventId,receivedAt);
     action.status = confirmed.status; action.receiptId = confirmed.receiptId; action.updatedAt = receivedAt;

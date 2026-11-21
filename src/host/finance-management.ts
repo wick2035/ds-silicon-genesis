@@ -1,6 +1,7 @@
 import type {CanonicalEnvelope} from '../storage/postgres.js';
 import type {PetGate} from '../storage/uow.js';
 import type {LegacyDomain} from './legacy-domain.js';
+import {mealSnapshot} from './meal-recovery.js';
 import {farmSeedShop} from './farm.js';
 
 type Reader={loadEnvelope(id:string):Promise<CanonicalEnvelope|null>};
@@ -8,7 +9,7 @@ const money=(value:unknown,max:number):value is number=>typeof value==='number' 
 const costNames=['chat','whisper','feed','diary','explore'] as const;
 
 /** All writes go through the existing per-pet transaction and operation receipt. */
-export function createFinanceManagement(store:Reader,gate:PetGate,domain:LegacyDomain) {
+export function createFinanceManagement(store:Reader,gate:PetGate,domain:LegacyDomain,resolveMeal?:(id:string,input:Record<string,unknown>)=>Promise<unknown>) {
   return {
     read:async(id:string)=>{
       gate.signal.throwIfAborted();
@@ -16,12 +17,13 @@ export function createFinanceManagement(store:Reader,gate:PetGate,domain:LegacyD
       const p=envelope.legacy as Record<string,any>, labor=p.labor||{},contracts=Array.isArray(labor.contracts)?labor.contracts:[];
       const pending=contracts.filter((c:any)=>['offered','working','paused','queued'].includes(c.status) && c.done<c.trips);
       const seedShop=farmSeedShop(envelope.legacy);
-      return {wallet:p.wallet,costs:{...p.config?.costs,riceSeed:seedShop.price},seedShop,labor:{current:pending[0]||null,queue:pending.slice(1),history:contracts.filter((c:any)=>['paid','declined','cancelled','unpaid'].includes(c.status)).slice().reverse(),execution:labor.execution||null},
+      return {food:mealSnapshot(envelope),wallet:p.wallet,costs:{...p.config?.costs,riceSeed:seedShop.price},seedShop,labor:{current:pending[0]||null,queue:pending.slice(1),history:contracts.filter((c:any)=>['paid','declined','cancelled','unpaid'].includes(c.status)).slice().reverse(),execution:labor.execution||null},
         events:(Array.isArray(p.events)?p.events:[]).filter((e:any)=>['wallet','wallet-spend','labor'].includes(e.kind)).slice(-30).reverse().map((e:any)=>({id:e.id,text:e.text,ts:e.ts}))};
     },
     write:async(id:string,input:Record<string,unknown>)=>{
       const requestId=input.requestId;
       if(typeof requestId!=='string'||!/^[a-zA-Z0-9:-]{8,140}$/.test(requestId))throw Error('操作编号无效');
+      if(input.kind==='rice-resolution'){if(!resolveMeal)throw Error('进食核对服务不可用');return resolveMeal(id,input);}
       if(input.kind==='wallet') {
         if(!['add','subtract','set','freeze'].includes(String(input.action)))throw Error('饭钱操作无效');
         if(!money(input.expectedBalance,1_000_000_000)||typeof input.expectedFrozen!=='boolean')throw Error('余额状态无效，请刷新后重试');

@@ -20,6 +20,7 @@ const { decideWindowIgnore } = require('../pointer-target.js');
 function registerIpc({ ipcMain, petWindows, shell, openTarget, petRoute, hostRequest, dpi }) {
   require('./worksite.js').register({ipcMain,petWindows,hostRequest,BrowserWindow,screen,app});
   const epoch = process.env.SILICON_HELPER_EPOCH || '';
+  const mealJournal=process.env.SILICON_GENESIS_DATA?require('./meal-receipts.js').createMealReceiptJournal(require('node:path').join(process.env.SILICON_GENESIS_DATA,'meal-receipts')):null;
   if (epoch) {
     require('./rice-cooker.js').register({ ipcMain, BrowserWindow, screen, petWindows, hostRequest, dpi });
     require('./token-space.js').registerTokenSpace({ app, ipcMain, petWindows });
@@ -58,6 +59,7 @@ function registerIpc({ ipcMain, petWindows, shell, openTarget, petRoute, hostReq
        !['playing','completed','interrupted'].includes(receipt.status) || typeof receipt.id!=='string' ||
        !Number.isSafeInteger(receipt.index) || receipt.index<0 || receipt.surface!=='desktop' ||
        (receipt.actionId!==undefined && (typeof receipt.actionId!=='string' || receipt.actionId!==receipt.id || (typeof receipt.itemId!=='string' && typeof receipt.coinId!=='string' && receipt.motion!=='walk' && !['sleep','wake'].includes(receipt.restKind)) || (receipt.coinId===undefined && receipt.index!==0) || receipt.index>1))) throw Error('桌宠回执无效');
+    if(mealJournal&&typeof receipt.itemId==='string'&&!['parent','water','pet','play','soothe','accompany'].includes(receipt.itemId)&&['completed','interrupted'].includes(receipt.status))mealJournal.save(petId,receipt,epoch);
     const response=await hostRequest('POST','/__silicon/action-receipt',JSON.stringify({...receipt,petId,processEpoch:epoch}));
     if(response.status!==200)throw Error('桌宠回执未保存');
     return JSON.parse(response.body || '{}');
